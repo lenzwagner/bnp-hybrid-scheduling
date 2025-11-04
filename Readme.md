@@ -1,0 +1,365 @@
+# Branch-and-Price for Hybrid Scheduling with Learning Effects
+
+A sophisticated implementation of a Branch-and-Price algorithm for solving hybrid scheduling problems with learning curve effects in healthcare therapy scheduling.
+
+## Overview
+
+This project implements a Branch-and-Price framework that combines Column Generation with tree search to solve a complex scheduling problem where:
+- Patients require multiple therapy sessions over time
+- Therapists have limited capacity
+- Learning effects improve therapy effectiveness over time
+- Both human therapists and AI-assisted sessions are available
+- Length of stay (LOS) optimization is critical
+
+The implementation supports both classical Column Generation (root node only) and full Branch-and-Price tree search with multiple branching strategies.
+
+## Key Features
+
+### Core Algorithms
+- **Column Generation**: Iterative solving of master and subproblems with pricing filters
+- **Branch-and-Price**: Full tree exploration with DFS or BFS search strategies
+- **Dual Stagnation Detection**: Early termination when LP bound stops improving
+- **IP Heuristics**: Periodic integer program solving to find better incumbents
+
+### Branching Strategies
+1. **MP Variable Branching**: Branch on master problem variables (Lambda_{na})
+   - Left branch: Upper bound on column usage
+   - Right branch: Lower bound on column usage
+   - No-good cuts prevent column regeneration
+
+2. **SP Variable Branching**: Branch on subproblem variables (x_{njt})
+   - Left branch: Fix assignment to 0
+   - Right branch: Fix assignment to 1
+   - Master constraints regulate column usage
+
+### Learning Models
+- **Exponential Learning**: Classic exponential learning curves
+- **Sigmoid Learning**: S-shaped learning with inflection points
+- **Linear Learning**: Linear improvement over sessions
+- **Piecewise Linear (PWL)**: Tangent approximations for nonlinear curves
+
+### Search Strategies
+- **Depth-First Search (DFS)**: Memory efficient, explores deep branches first
+- **Best-First Search (BFS)**: Best bound selection, faster convergence
+
+## Project Structure
+
+```
+branch-and-price-hybrid-scheduling/
+├── main.py                      # Entry point with configuration
+├── branch_and_price.py          # Branch-and-Price algorithm (2620 lines)
+├── CG.py                        # Column Generation solver (652 lines)
+├── masterproblem.py             # Restricted Master Problem (RMP)
+├── subproblem.py                # Pricing subproblems
+├── bnp_node.py                  # Node representation for B&P tree
+├── branching_constraints.py     # Branching constraint implementations
+├── tree_visualization.py        # Tree visualization utilities
+├── logging_config.py            # Logging setup
+│
+├── Utils/
+│   ├── Generell/
+│   │   ├── instance_setup.py   # Data generation
+│   │   ├── plots.py             # Visualization
+│   │   └── utils.py             # Helper functions
+│   ├── Pre_Patients/
+│   │   └── pre_patients_heuristic.py  # Pre-patient scheduling
+│   ├── compactmodel.py          # Compact MIP formulation (baseline)
+│   ├── initial_cg_sol.py        # Initial CG solution
+│   └── feasability_checker.py   # Solution validation
+│
+├── LPs/                         # LP/solution files
+│   ├── MP/                      # Master problem files
+│   └── SPs/                     # Subproblem files
+│
+├── logs/                        # Log files
+├── results/                     # Output files
+└── requirements.txt             # Python dependencies
+```
+
+## Installation
+
+### Prerequisites
+- Python 3.8+
+- Gurobi Optimizer (license required)
+- 4+ CPU cores recommended for parallel subproblem solving
+
+### Setup
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd branch-and-price-hybrid-scheduling
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Configure Gurobi license:
+```bash
+# Follow Gurobi installation instructions
+# https://www.gurobi.com/documentation/
+```
+
+## Usage
+
+### Basic Execution
+
+Run the main script with default parameters:
+```bash
+python main.py
+```
+
+### Configuration
+
+Edit `main.py` to customize parameters:
+
+#### Instance Parameters
+```python
+seed = 18                    # Random seed
+T = 3                        # Number of therapists
+D_focus = 5                  # Focus days
+pttr = 'medium'             # Patient-to-therapist ratio: 'low', 'medium', 'high'
+```
+
+#### Learning Parameters
+```python
+app_data = {
+    'learn_type': ['lin'],      # Learning type: 'exp', 'sigmoid', 'lin', or numeric
+    'theta_base': [0.02],       # Base effectiveness
+    'lin_increase': [0.01],     # Linear increase rate
+    'k_learn': [0.01],          # Learning rate (exp/sigmoid)
+    'infl_point': [2],          # Inflection point (sigmoid)
+    'MS': [5],                  # Maximum session window
+    'MS_min': [2],              # Minimum sessions in window
+    'W_on': [6],                # Work days per week
+    'W_off': [1],               # Days off per week
+    'daily': [4]                # Daily capacity per therapist
+}
+```
+
+#### Algorithm Parameters
+```python
+# Column Generation
+max_itr = 100                           # Maximum CG iterations
+threshold = 1e-5                        # Convergence threshold
+dual_improvement_iter = 20              # Max iterations without improvement
+dual_stagnation_threshold = 1e-5        # Minimum relative improvement
+pricing_filtering = True                # Enable pricing filter
+learn_method = 'pwl'                    # Learning method: 'pwl', 'tangent', 'bilinear'
+
+# Branch-and-Price
+use_branch_and_price = True             # Enable B&P (vs. pure CG)
+branching_strategy = 'mp'               # 'mp' or 'sp' branching
+search_strategy = 'dfs'                 # 'dfs' or 'bfs'
+ip_heuristic_frequency = 10             # IP heuristic every N nodes
+early_incumbent_iteration = 0           # Compute incumbent at iteration N (0 = after CG)
+```
+
+#### Tree Visualization
+```python
+visualize_tree = True                   # Enable tree visualization
+tree_layout = 'hierarchical'            # 'hierarchical' or 'radial'
+detailed_tree = False                   # Show detailed node info
+save_tree_path = 'bnp_tree.png'        # Save path
+```
+
+### Example: Column Generation Only
+
+```python
+use_branch_and_price = False
+max_itr = 100
+```
+
+### Example: Branch-and-Price with BFS
+
+```python
+use_branch_and_price = True
+branching_strategy = 'sp'
+search_strategy = 'bfs'
+ip_heuristic_frequency = 5
+```
+
+## Output
+
+### Console Output
+The algorithm prints detailed progress information:
+- Setup phase with instance details
+- CG iterations with dual values and column generation
+- Branch-and-Price tree exploration
+- Node processing with bounds and status
+- Final results and statistics
+
+### Results Files
+
+1. **LP Files**: `LPs/MP/LPs/master_node_*.lp`
+   - Master problem formulations at each node
+
+2. **Solution Files**: `LPs/MP/SOLs/master_node_*.sol`
+   - LP solutions at each node
+
+3. **Schedule Export**: `results/optimal_schedules.csv`
+   - Detailed patient schedules with therapist assignments
+
+4. **Tree Visualization**: `Pictures/Tree/tree_*.png`
+   - Visual representation of the B&P tree
+
+### Log Files
+- `logs/info/*.log`: INFO level logs
+- `logs/*.log`: DEBUG level logs with detailed algorithm steps
+
+## Algorithm Details
+
+### Column Generation Process
+
+1. **Initialization**: Generate initial columns with heuristic
+2. **Master Problem**: Solve RMP to get dual variables
+3. **Pricing**: Solve subproblems in parallel to find negative reduced cost columns
+4. **Pricing Filter**: Skip subproblems unlikely to produce improving columns
+5. **Column Addition**: Add profitable columns to master
+6. **Convergence Check**: Stop if no improving columns or stagnation detected
+7. **Integrality**: Check if LP solution is integral
+
+### Branch-and-Price Process
+
+1. **Root Node**: Solve with Column Generation
+2. **Initial Incumbent**: Solve RMP as IP (early or after CG)
+3. **Node Selection**: Pick next node (DFS or BFS)
+4. **Node Processing**:
+   - Build master with inherited columns + branching constraints
+   - Solve with CG at node
+   - Check integrality and bounds
+5. **Branching**: Select fractional variable and create child nodes
+6. **Fathoming**: Eliminate nodes by bound, integrality, or infeasibility
+7. **IP Heuristic**: Periodically solve RMP as IP without branching constraints
+8. **Termination**: Stop when all nodes fathomed or time limit reached
+
+### Performance Optimizations
+
+- **Parallel Subproblem Solving**: Uses multiprocessing for pricing
+- **Pricing Filter**: Reduces subproblems solved by ~50-80%
+- **Column Pool Management**: Efficient column inheritance in tree
+- **Dual Stagnation Detection**: Early termination when LP stops improving
+- **Solution Pool**: Generates multiple columns per subproblem (up to 10)
+
+## Results Interpretation
+
+### Branch-and-Price Statistics
+
+```
+Nodes Explored:    45        # Total nodes processed
+Nodes Fathomed:    43        # Nodes eliminated
+Nodes Branched:    2         # Nodes branched on
+LP Bound (LB):     125.45    # Best LP relaxation bound (lower bound)
+Incumbent (UB):    126.12    # Best integer solution (upper bound)
+Gap:               0.53%     # Optimality gap
+```
+
+### Solution Quality
+
+- **Gap < 1%**: High-quality solution, very close to optimal
+- **Gap 1-5%**: Good solution, reasonable optimality guarantee
+- **Gap > 5%**: May need more nodes or better branching strategy
+
+### Performance Metrics
+
+- **CG Iterations**: Fewer is better (indicates fast convergence)
+- **Columns Added**: More columns = larger master problem
+- **Subproblems Skipped**: Higher percentage = better pricing filter
+- **IP Solves**: Frequency of heuristic runs
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Gurobi License Error**
+   - Ensure Gurobi is properly installed and licensed
+   - Check license file location: `grbgetkey <license-key>`
+
+2. **Memory Issues**
+   - Reduce `max_nodes` parameter
+   - Use DFS instead of BFS (less memory)
+   - Reduce `D_focus` or `T` (smaller instances)
+
+3. **Slow Performance**
+   - Enable pricing filter: `pricing_filtering = True`
+   - Reduce `max_itr` (CG iterations)
+   - Increase `dual_stagnation_threshold` for earlier termination
+   - Use fewer `num_tangents` in subproblem (default: 10)
+
+4. **No Improvement in Gap**
+   - Increase `max_nodes` to explore more of tree
+   - Try different `branching_strategy` ('mp' vs 'sp')
+   - Adjust `ip_heuristic_frequency` (more frequent heuristics)
+   - Increase `early_incumbent_iteration` for better initial bound
+
+5. **Fractional Solutions at Root**
+   - Normal for complex instances
+   - Branch-and-Price will explore tree to find integer solution
+   - Check that `use_branch_and_price = True`
+
+## Advanced Features
+
+### Custom Branching Strategy
+
+Modify `select_branching_candidate()` in `branch_and_price.py`:
+```python
+def select_branching_candidate(self, node, node_lambda):
+    # Implement custom selection logic
+    # Return branching_info dict
+    pass
+```
+
+### Custom Learning Curves
+
+Add new learning type in `subproblem.py`:
+```python
+def _add_custom_learning_constraints(self):
+    # Define custom learning curve
+    pass
+```
+
+### External Data Import
+
+Replace `generate_patient_data_log()` in `main.py`:
+```python
+# Load from CSV/database instead of generation
+Req, Entry, Max_t, P, D, ... = load_from_file('data.csv')
+```
+
+## Citation
+
+If you use this code in your research, please cite:
+
+```bibtex
+@article{branch-and-price-hybrid,
+  title={Branch-and-Price for Hybrid Scheduling with Learning Effects},
+  author={Your Name},
+  year={2024}
+}
+```
+
+## License
+
+[Specify your license here]
+
+## Contributing
+
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Submit a pull request
+
+## Contact
+
+For questions or issues:
+- Open an issue on GitHub
+- Contact: [your-email@example.com]
+
+## Acknowledgments
+
+- Gurobi Optimization for the MIP solver
+- Column Generation and Branch-and-Price methodology based on classical OR literature
+- Learning curve models adapted from healthcare scheduling research
