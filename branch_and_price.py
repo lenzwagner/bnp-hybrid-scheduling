@@ -625,6 +625,10 @@ class BranchAndPrice:
             self.logger.info(f"   Solution is optimal!\n")
             self.stats['nodes_fathomed'] = 1
             self.stats['tree_complete'] = True  # Root was fathomed, so tree is complete
+            # When tree is complete (only root node), lower bound equals incumbent
+            if self.incumbent < float('inf'):
+                self.best_lp_bound = self.incumbent
+                self.update_gap()  # Gap should be 0 now
             if self.open_nodes:
                 self.open_nodes.pop()
             self._finalize_and_print_results()
@@ -998,6 +1002,10 @@ class BranchAndPrice:
         if not self.open_nodes:
             self.logger.info(f"✅ All nodes explored - Tree complete!")
             self.stats['tree_complete'] = True
+            # When tree is complete, lower bound equals incumbent (all nodes fathomed)
+            if self.incumbent < float('inf'):
+                self.best_lp_bound = self.incumbent
+                self.update_gap()  # Gap should be 0 now
         elif iteration >= max_nodes:
             self.logger.warning(f"⚠️  Node limit reached: {iteration} >= {max_nodes}")
             self.logger.warning(f"   {len(self.open_nodes)} nodes remain open")
