@@ -219,6 +219,20 @@ def main():
         print(f"  - Integral: {results['is_integral']}")
         print(f"  - CG iterations (root): {results['cg_iterations']}")
         print(f"  - IP solves: {results['ip_solves']}")
+
+        # Convergence and optimal solution status
+        print(f"\nAlgorithm Status:")
+        if results['incumbent'] is not None:
+            gap_threshold = 1e-4  # 0.01% gap threshold
+            if results['gap'] < gap_threshold:
+                print(f"  ✓ Algorithm CONVERGED (Gap < {gap_threshold:.2%})")
+                print(f"  ✓ OPTIMAL SOLUTION FOUND: {results['incumbent']:.5f}")
+            else:
+                print(f"  ! Algorithm terminated with gap: {results['gap']:.5%}")
+                print(f"  ! Best solution found: {results['incumbent']:.5f}")
+                print(f"  ! Lower bound: {results['lp_bound']:.5f}")
+        else:
+            print(f"  ✗ No feasible solution found")
     else:
         print(f"\nColumn Generation Results:")
         print(f"  - Iterations: {results['num_iterations']}")
@@ -227,6 +241,17 @@ def main():
         print(f"  - Compact model: {results['comp_obj']:.5f}")
         print(f"  - Gap: {results['gap']:.5%}")
         print(f"  - Integral?: {results['is_integral']}")
+
+        # Convergence and optimal solution status
+        print(f"\nAlgorithm Status:")
+        gap_threshold = 1e-4  # 0.01% gap threshold
+        if results['gap'] < gap_threshold:
+            print(f"  ✓ Algorithm CONVERGED (Gap < {gap_threshold:.2%})")
+            print(f"  ✓ OPTIMAL SOLUTION FOUND: {results['ip_obj']:.5f}")
+        else:
+            print(f"  ! Algorithm terminated with gap: {results['gap']:.5%}")
+            print(f"  ! Best IP solution: {results['ip_obj']:.5f}")
+            print(f"  ! LP relaxation: {results['lp_obj']:.5f}")
 
     print("=" * 100 + "\n")
     return results
