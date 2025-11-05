@@ -67,6 +67,9 @@ def main():
     branching_strategy = 'sp'  # 'mp' for MP variable branching, 'sp' for SP variable branching
     search_strategy = 'bfs' # 'dfs' for Depth-First, 'bfs' for Best-Fit-Search
 
+    # Output settings
+    save_lps = False  # Set to True to save LP and SOL files
+    verbose_output = True  # Set to False to suppress all non-final output
 
     # Visualization settings
     visualize_tree = False  # Enable tree visualization
@@ -78,24 +81,26 @@ def main():
     # CONFIGURATION SUMMARY
     # ===========================
 
-    print("\n" + "=" * 100)
-    print(" STARTING SETUP ".center(100, "="))
-    print("=" * 100)
-    print(f"\nConfiguration:")
-    print(f"  - Mode: {'Branch-and-Price' if use_branch_and_price else 'Column Generation'}")
-    if use_branch_and_price:
-        print(f"  - Branching Strategy: {branching_strategy.upper()}")
-        print(f"  - Search Strategy: {'Depth-First (DFS)' if search_strategy == 'dfs' else 'Best-Fit (BFS)'}")
-    print(f"  - Seed: {seed}")
-    print(f"  - Learning type: {app_data['learn_type'][0]}")
-    print(f"  - Learning method: {learn_method}")
-    print(f"  - Therapists: {T}")
-    print(f"  - Focus days: {D_focus}")
-    print(f"  - Max CG iterations: {max_itr}")
-    print(f"  - Threshold: {threshold}")
-    print(f"  - PTTR scenario: {pttr}")
-    print(f"  - Pricing filtering: {pricing_filtering}")
-    print()
+    if verbose_output:
+        print("\n" + "=" * 100)
+        print(" STARTING SETUP ".center(100, "="))
+        print("=" * 100)
+        print(f"\nConfiguration:")
+        print(f"  - Mode: {'Branch-and-Price' if use_branch_and_price else 'Column Generation'}")
+        if use_branch_and_price:
+            print(f"  - Branching Strategy: {branching_strategy.upper()}")
+            print(f"  - Search Strategy: {'Depth-First (DFS)' if search_strategy == 'dfs' else 'Best-Fit (BFS)'}")
+        print(f"  - Seed: {seed}")
+        print(f"  - Learning type: {app_data['learn_type'][0]}")
+        print(f"  - Learning method: {learn_method}")
+        print(f"  - Therapists: {T}")
+        print(f"  - Focus days: {D_focus}")
+        print(f"  - Max CG iterations: {max_itr}")
+        print(f"  - Threshold: {threshold}")
+        print(f"  - PTTR scenario: {pttr}")
+        print(f"  - Pricing filtering: {pricing_filtering}")
+        print(f"  - Save LPs: {save_lps}")
+        print()
 
     # ===========================
     # SETUP CG SOLVER
@@ -115,7 +120,8 @@ def main():
         therapist_agg=therapist_agg,
         max_stagnation_itr=dual_improvement_iter,
         stagnation_threshold=dual_stagnation_threshold,
-        learn_method=learn_method
+        learn_method=learn_method,
+        save_lps=save_lps
     )
 
     # Setup
@@ -127,28 +133,31 @@ def main():
 
     if use_branch_and_price:
         # Branch-and-Price
-        print("\n" + "=" * 100)
-        print(" INITIALIZING BRANCH-AND-PRICE ".center(100, "="))
-        print("=" * 100 + "\n")
+        if verbose_output:
+            print("\n" + "=" * 100)
+            print(" INITIALIZING BRANCH-AND-PRICE ".center(100, "="))
+            print("=" * 100 + "\n")
 
         bnp_solver = BranchAndPrice(cg_solver,
                                     branching_strategy=branching_strategy,
                                     search_strategy=search_strategy,
-                                    verbose=True,
+                                    verbose=verbose_output,
                                     ip_heuristic_frequency=6,
-                                    early_incumbent_iteration=1)
+                                    early_incumbent_iteration=1,
+                                    save_lps=save_lps)
         results = bnp_solver.solve(time_limit=3600, max_nodes=30)
 
         # Extract optimal schedules
         if results['incumbent'] is not None:
-            print("\n" + "=" * 100)
-            print(" EXTRACTING OPTIMAL SCHEDULES ".center(100, "="))
-            print("=" * 100)
+            if verbose_output:
+                print("\n" + "=" * 100)
+                print(" EXTRACTING OPTIMAL SCHEDULES ".center(100, "="))
+                print("=" * 100)
 
             optimal_schedules = bnp_solver.extract_optimal_schedules()
 
             # Print example schedules
-            if optimal_schedules:
+            if optimal_schedules and verbose_output:
                 p_focus_patients = {
                     patient_id: info
                     for patient_id, info in optimal_schedules['patient_schedules'].items()
@@ -164,23 +173,27 @@ def main():
                     )
 
             # Export to CSV
-            bnp_solver.export_schedules_to_csv('results/optimal_schedules.csv')
+            if verbose_output:
+                bnp_solver.export_schedules_to_csv('results/optimal_schedules.csv')
 
-            print("\n" + "=" * 100)
-            print(" SCHEDULE EXTRACTION COMPLETE ".center(100, "="))
-            print("=" * 100)
+            if verbose_output:
+                print("\n" + "=" * 100)
+                print(" SCHEDULE EXTRACTION COMPLETE ".center(100, "="))
+                print("=" * 100)
 
         # Print CG statistics (from root node)
-        print("\n" + "=" * 100)
-        print(" COLUMN GENERATION STATISTICS (ROOT NODE) ".center(100, "="))
-        print("=" * 100 + "\n")
-        cg_solver.print_statistics()
+        if verbose_output:
+            print("\n" + "=" * 100)
+            print(" COLUMN GENERATION STATISTICS (ROOT NODE) ".center(100, "="))
+            print("=" * 100 + "\n")
+            cg_solver.print_statistics()
 
         # Visualize tree
         if visualize_tree:
-            print("\n" + "=" * 100)
-            print(" GENERATING TREE VISUALIZATION ".center(100, "="))
-            print("=" * 100 + "\n")
+            if verbose_output:
+                print("\n" + "=" * 100)
+                print(" GENERATING TREE VISUALIZATION ".center(100, "="))
+                print("=" * 100 + "\n")
 
             import os
             os.makedirs("Pictures/Tree", exist_ok=True)

@@ -19,7 +19,8 @@ class ColumnGeneration:
 
     def __init__(self, seed, app_data, T, D_focus, max_itr=100, threshold=1e-5,
                  pttr='medium', show_plots=False, pricing_filtering=True, therapist_agg=False,
-                 max_stagnation_itr=5, stagnation_threshold=1e-4, learn_method='pwl', callback_after_iteration=None):
+                 max_stagnation_itr=5, stagnation_threshold=1e-4, learn_method='pwl', callback_after_iteration=None,
+                 save_lps=True):
         """
         Initialize Column Generation solver.
 
@@ -36,6 +37,7 @@ class ColumnGeneration:
             therapist_agg: Enable therapist aggregation
             max_stagnation_itr: Max iterations without dual improvement before termination
             stagnation_threshold: Minimum relative improvement to count as progress
+            save_lps: Whether to save LP and SOL files
         """
         # Store parameters
         self.seed = seed
@@ -52,6 +54,7 @@ class ColumnGeneration:
         self.stagnation_threshold = stagnation_threshold
         self.learn_method = learn_method
         self.callback_after_iteration = callback_after_iteration
+        self.save_lps = save_lps
 
         # Initialize random seed
         random.seed(seed)
@@ -483,7 +486,8 @@ class ColumnGeneration:
         # Solve IP
         print("[Finalize] Solving integer program...")
         self.is_integral, self.lp_obj, self.frac_info = self.master.finSol()
-        self.master.Model.write('Final_root.lp')
+        if self.save_lps:
+            self.master.Model.write('Final_root.lp')
         self.ip_obj = self.master.Model.objVal
 
         # Calculate gap
@@ -555,9 +559,12 @@ class ColumnGeneration:
         """
         Export master and compact models to LP files.
         """
-        self.master.Model.write(master_filename)
-        self.problem.Model.write(compact_filename)
-        print(f"[Export] Models saved to {master_filename} and {compact_filename}")
+        if self.save_lps:
+            self.master.Model.write(master_filename)
+            self.problem.Model.write(compact_filename)
+            print(f"[Export] Models saved to {master_filename} and {compact_filename}")
+        else:
+            print(f"[Export] LP saving disabled, skipping export")
 
     def solve(self):
         """

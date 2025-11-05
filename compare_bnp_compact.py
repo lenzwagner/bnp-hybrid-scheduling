@@ -385,6 +385,18 @@ class SeedComparison:
 
             print(f"\nTotal comparison time: {total_time:.2f}s")
 
+            # Print detailed results table
+            print("\n" + "=" * 100)
+            print(" DETAILED RESULTS TABLE ".center(100, "="))
+            print("=" * 100)
+            print(f"\n{'Seed':<8} {'BnP/CG Obj':<15} {'Compact Obj':<15} {'Abs Diff':<15} {'Rel Diff (%)':<15} {'Match':<8}")
+            print("-" * 100)
+            for _, row in df.iterrows():
+                match_symbol = "✓" if row['match'] else "✗"
+                print(f"{row['seed']:<8} {row['bnp_objective']:<15.6f} {row['compact_objective']:<15.6f} "
+                      f"{row['absolute_difference']:<15.6e} {row['relative_difference']*100:<15.6f} {match_symbol:<8}")
+            print("=" * 100)
+
             # Save results to CSV
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             results_dir = 'results/comparison'

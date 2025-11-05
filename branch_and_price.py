@@ -21,7 +21,7 @@ class BranchAndPrice:
     """
 
     def __init__(self, cg_solver, branching_strategy='mp', search_strategy='dfs', verbose=True,
-                 ip_heuristic_frequency=10, early_incumbent_iteration=0):
+                 ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -35,6 +35,7 @@ class BranchAndPrice:
                                       - If 0 or None: solve final RMP as IP (after CG converges)
                                       - If > 0: solve RMP as IP after this iteration,
                                                then continue CG without further IP solves
+            save_lps: If True, save LP and SOL files during solving
         """
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class BranchAndPrice:
 
         # Output control
         self.verbose = verbose
+        self.save_lps = save_lps
 
         # Global bounds
         self.incumbent = float('inf')  # Best IP solution (upper bound)
@@ -349,8 +351,9 @@ class BranchAndPrice:
         self.update_gap()
 
         # Save initial Root-LP/SOL
-        self.cg_solver.master.Model.write('LPs/MP/LPs/master_node_root.lp')
-        self.cg_solver.master.Model.write('LPs/MP/SOLs/master_node_root.sol')
+        if self.save_lps:
+            self.cg_solver.master.Model.write('LPs/MP/LPs/master_node_root.lp')
+            self.cg_solver.master.Model.write('LPs/MP/SOLs/master_node_root.sol')
 
         self.logger.info(f"\n{'=' * 100}")
         self.logger.info(" ROOT NODE SOLVED ".center(100, "="))
@@ -817,8 +820,9 @@ class BranchAndPrice:
                 print(f"\n  🔧 Rebuilding master for Node {current_node_id, current_node.node_id} to extract lambda values...")
                 master = self._build_master_for_node(current_node)
                 master.solRelModel()
-                master.Model.write(f"LPs/MP/SOLs/new_node_{current_node.node_id}.sol")
-                master.Model.write(f"LPs/MP/LPs/new_node_{current_node.node_id}.lp")
+                if self.save_lps:
+                    master.Model.write(f"LPs/MP/SOLs/new_node_{current_node.node_id}.sol")
+                    master.Model.write(f"LPs/MP/LPs/new_node_{current_node.node_id}.lp")
 
 
                 if master.Model.status != 2:  # Not optimal
@@ -1604,7 +1608,7 @@ class BranchAndPrice:
                     profile, node, duals_pi, duals_gamma, branching_duals
                 )
                 # SAVE FIRST SP FOR BRANCHING PROFILE
-                if profile == branching_profile:
+                if profile == branching_profile and self.save_lps:
                     sp_filename = f"LPs/SPs/pricing/sp_node_{node.node_id}_profile_{profile}_iter{cg_iteration}.lp"
                     sp.Model.write(sp_filename)
                     self.logger.info(f"    ✅ [SP Saved] First pricing SP for branching profile {profile}: {sp_filename}")
@@ -1632,7 +1636,8 @@ class BranchAndPrice:
         # 4. Final LP solve and integrality check
         self.logger.info(f"\n    [Node {node.node_id}] Final LP solve...")
 
-        master.Model.write(f"LPs/MP/LPs/mp_final_{node.node_id}.lp")
+        if self.save_lps:
+            master.Model.write(f"LPs/MP/LPs/mp_final_{node.node_id}.lp")
         master.solRelModel()
         if master.Model.status != 2:  # GRB.OPTIMAL
             self.logger.warning(f"    ⚠️  Final Master infeasible or unbounded at node {node.node_id}")
