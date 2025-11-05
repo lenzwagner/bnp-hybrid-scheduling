@@ -356,7 +356,7 @@ Contributions are welcome! Please:
 
 For questions or issues:
 - Open an issue on GitHub
-- Contact: [lorenz.wagner@uni-a.de]
+- Contact: [lorenz.wagner@uni-a.de](mailto:lorenz.wagner@uni-a.de)
 
 ## Acknowledgments
 
