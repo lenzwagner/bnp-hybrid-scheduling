@@ -26,7 +26,7 @@ def main():
     # ===========================
 
     # Random seed
-    seed = 92
+    seed = 14
 
     # Learning parameters
     app_data = {
@@ -137,7 +137,7 @@ def main():
                                     verbose=True,
                                     ip_heuristic_frequency=6,
                                     early_incumbent_iteration=1)
-        results = bnp_solver.solve(time_limit=3600, max_nodes=3)
+        results = bnp_solver.solve(time_limit=3600, max_nodes=30)
 
         # Extract optimal schedules
         if results['incumbent'] is not None:
