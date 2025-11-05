@@ -2,7 +2,7 @@ import gurobipy as gu
 from Utils.Generell.utils import *
 
 class MasterProblem_d:
-    def __init__(self, df, T_Max, Nr_agg, Req, pre_x, E_dict):
+    def __init__(self, df, T_Max, Nr_agg, Req, pre_x, E_dict, verbose=True):
         self.P_Full = df['P_Full'].dropna().astype(int).unique().tolist()
         self.P_Pre = df['P_Pre'].dropna().astype(int).unique().tolist()
         self.P_Join = df['P_Join'].dropna().astype(int).unique().tolist()
@@ -30,6 +30,7 @@ class MasterProblem_d:
         self.column_pool = {}
         self.branching_bounds = {}
         self.aggregated = defaultdict(int)
+        self.verbose = verbose
         for (p, t, d), value in self.pre_x.items():
             self.aggregated[(t, d)] += value
 
@@ -80,24 +81,25 @@ class MasterProblem_d:
 
     def finSol(self):
         all_integer, obj, most_frac_info = self.check_fractionality()
-        self.Model.Params.OutputFlag = 1
+        self.Model.Params.OutputFlag = 1 if self.verbose else 0
         for var in self.lmbda.values():
             var.VType = gu.GRB.INTEGER
         self.Model.optimize()
 
         if self.Model.status == gu.GRB.INFEASIBLE:
-            boxed_print('\nThe following constraints and variables are in the IIS:')
-            self.Model.computeIIS()
-            for c in self.Model.getConstrs():
-                if c.IISConstr: boxed_print(f'\t{c.constrName}: {self.Model.getRow(c)} {c.Sense} {c.RHS}')
-            for v in self.Model.getVars():
-                if v.IISLB: boxed_print(f'\t{v.varName} ≥ {v.LB}')
-                if v.IISUB: boxed_print(f'\t{v.varName} ≤ {v.UB}')
+            if self.verbose:
+                print('\nThe following constraints and variables are in the IIS:')
+                self.Model.computeIIS()
+                for c in self.Model.getConstrs():
+                    if c.IISConstr: print(f'\t{c.constrName}: {self.Model.getRow(c)} {c.Sense} {c.RHS}')
+                for v in self.Model.getVars():
+                    if v.IISLB: print(f'\t{v.varName} ≥ {v.LB}')
+                    if v.IISUB: print(f'\t{v.varName} ≤ {v.UB}')
 
         return all_integer, obj, most_frac_info
 
     def solRelModel(self):
-        self.Model.Params.OutputFlag = 1
+        self.Model.Params.OutputFlag = 1 if self.verbose else 0
         self.Model.Params.Method = 2
         self._solve_counter += 1
 
@@ -109,7 +111,7 @@ class MasterProblem_d:
             if var_name in self.branching_bounds:
                 var.LB = self.branching_bounds[var_name]['lb']
                 var.UB = self.branching_bounds[var_name]['ub']
-                if self._solve_counter == 2:
+                if self._solve_counter == 2 and self.verbose:
                     print(f"    [Branching Bound] Restored {var_name}: "
                           f"LB={var.LB}, UB={var.UB}")
             else:
@@ -120,13 +122,14 @@ class MasterProblem_d:
 
         self.Model.optimize()
         if self.Model.status != gu.GRB.OPTIMAL:
-            boxed_print('\nThe following constraints and variables are in the IIS:')
-            self.Model.computeIIS()
-            for c in self.Model.getConstrs():
-                if c.IISConstr: boxed_print(f'\t{c.constrName}: {self.Model.getRow(c)} {c.Sense} {c.RHS}')
-            for v in self.Model.getVars():
-                if v.IISLB: boxed_print(f'\t{v.varName} ≥ {v.LB}')
-                if v.IISUB: boxed_print(f'\t{v.varName} ≤ {v.UB}')
+            if self.verbose:
+                print('\nThe following constraints and variables are in the IIS:')
+                self.Model.computeIIS()
+                for c in self.Model.getConstrs():
+                    if c.IISConstr: print(f'\t{c.constrName}: {self.Model.getRow(c)} {c.Sense} {c.RHS}')
+                for v in self.Model.getVars():
+                    if v.IISLB: print(f'\t{v.varName} ≥ {v.LB}')
+                    if v.IISUB: print(f'\t{v.varName} ≤ {v.UB}')
 
     def check_fractionality(self):
         """
@@ -146,7 +149,8 @@ class MasterProblem_d:
         most_frac_info = None
 
         # Check all lambda variables
-        print(f'Lambda items: {len(self.lmbda.items())} variables')
+        if self.verbose:
+            print(f'Lambda items: {len(self.lmbda.items())} variables')
         for (n, a), var in self.lmbda.items():
             x_val = var.X
 
@@ -190,10 +194,11 @@ class MasterProblem_d:
                     }
 
         # Print results
-        if all_integer:
-            boxed_print("All lambda variables are integer.")
-        else:
-            boxed_print(f"Fractional solution detected!")
+        if self.verbose:
+            if all_integer:
+                print("All lambda variables are integer.")
+            else:
+                print(f"Fractional solution detected!")
             if most_frac_info:
                 print(f"\nMost fractional variable (tie-break: smallest n, then smallest a):")
                 print(f"  Variable: lmbda[n={most_frac_info['n']}, a={most_frac_info['a']}]")

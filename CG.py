@@ -20,7 +20,7 @@ class ColumnGeneration:
     def __init__(self, seed, app_data, T, D_focus, max_itr=100, threshold=1e-5,
                  pttr='medium', show_plots=False, pricing_filtering=True, therapist_agg=False,
                  max_stagnation_itr=5, stagnation_threshold=1e-4, learn_method='pwl', callback_after_iteration=None,
-                 save_lps=True):
+                 save_lps=True, verbose=True):
         """
         Initialize Column Generation solver.
 
@@ -38,6 +38,7 @@ class ColumnGeneration:
             max_stagnation_itr: Max iterations without dual improvement before termination
             stagnation_threshold: Minimum relative improvement to count as progress
             save_lps: Whether to save LP and SOL files
+            verbose: Whether to print detailed output
         """
         # Store parameters
         self.seed = seed
@@ -55,6 +56,7 @@ class ColumnGeneration:
         self.learn_method = learn_method
         self.callback_after_iteration = callback_after_iteration
         self.save_lps = save_lps
+        self.verbose = verbose
 
         # Initialize random seed
         random.seed(seed)
@@ -87,9 +89,10 @@ class ColumnGeneration:
         """
         Setup instance: generate data, create initial solution, build models.
         """
-        print("=" * 100)
-        print(" SETUP PHASE ".center(100, "="))
-        print("=" * 100)
+        if self.verbose:
+            print("=" * 100)
+            print(" SETUP PHASE ".center(100, "="))
+            print("=" * 100)
 
         self.start_time = time.time()
 
@@ -103,7 +106,8 @@ class ColumnGeneration:
         }
 
         # Generate patient and therapist data
-        print("\n[Setup] Generating patient and therapist data...")
+        if self.verbose:
+            print("\n[Setup] Generating patient and therapist data...")
         self.Req, self.Entry, self.Max_t, self.P, self.D, self.D_Ext, self.D_Full, self.T, self.M_p, self.W_coeff = \
             generate_patient_data_log(
                 T=self.T_param,
@@ -117,7 +121,8 @@ class ColumnGeneration:
             )
 
         # Create mappings
-        print("[Setup] Creating patient and therapist mappings...")
+        if self.verbose:
+            print("[Setup] Creating patient and therapist mappings...")
         self.Nr, self.Req_agg, self.Entry_agg, self.Nr_agg, self.agg_to_patient = \
             get_unique_combinations_and_list_with_dicts(self.Req, self.Entry, self.P)
 
@@ -133,7 +138,8 @@ class ColumnGeneration:
                 min((self.Req[p_idx] / self.W_coeff) + 2, max(self.D_Ext) - self.Entry[p_idx]) * (self.app_data["MS"][0] - self.app_data["MS_min"][0]) / self.app_data["MS"][0]))
 
         # Create DataFrame
-        print("[Setup] Creating data frame...")
+        if self.verbose:
+            print("[Setup] Creating data frame...")
         max_len = max(len(self.P), len(self.P_Pre), len(self.P_Post), len(self.P_F),
                       len(self.P_Join), len(self.T), len(self.D), len(self.D_Full), len(self.D_Ext))
 
@@ -152,24 +158,28 @@ class ColumnGeneration:
         })
 
         # Preprocessing
-        print("[Setup] Running preprocessing for pre-patients...")
+        if self.verbose:
+            print("[Setup] Running preprocessing for pre-patients...")
         self.pre_x, self.pre_y, self.pre_los, self.pre_x_filtered, self.pre_x_filt = \
             pre_processing_schedule(
                 self.P_Pre, self.P_F, self.T, self.D_Ext, self.Entry_agg, self.Req_agg,
                 self.app_data['learn_type'][0], self.learning_params,
                 self.app_data['MS'][0], self.app_data['MS_min'][0],
-                self.Max_t, self.Nr_agg, self.therapist_to_type
+                self.Max_t, self.Nr_agg, self.therapist_to_type,
+                verbose=self.verbose
             )
 
-        print('Focus-Patients', self.P_F)
-        print('Nr-Agg', self.Nr_agg)
-        print('len(Focus-Patients)', len(self.P_F))
-        print('Total Join-Patients', sum(self.Nr_agg[k] for k in sorted(self.P_F + self.P_Post)))
-        print('Join-Patients', sorted(self.P_F + self.P_Post))
-        print('len(Join-Patients)', len(sorted(self.P_F + self.P_Post)))
+        if self.verbose:
+            print('Focus-Patients', self.P_F)
+            print('Nr-Agg', self.Nr_agg)
+            print('len(Focus-Patients)', len(self.P_F))
+            print('Total Join-Patients', sum(self.Nr_agg[k] for k in sorted(self.P_F + self.P_Post)))
+            print('Join-Patients', sorted(self.P_F + self.P_Post))
+            print('len(Join-Patients)', len(sorted(self.P_F + self.P_Post)))
 
         # Build compact model
-        print("[Setup] Building compact model...")
+        if self.verbose:
+            print("[Setup] Building compact model...")
         self.problem = Problem_d(
             self.data, self.Req, self.Entry, self.Max_t, self.app_data,
             self.pre_x_filt, self.W_coeff, 10, self.learn_method
@@ -194,7 +204,8 @@ class ColumnGeneration:
             therapist_set = self.T
 
         # Generate initial solution
-        print("[Setup] Generating initial CG solution...")
+        if self.verbose:
+            print("[Setup] Generating initial CG solution...")
         self.start_x, self.start_los, start_y, start_z, start_App, start_S, start_l, _, _ = \
             initial_cg_starting_sol(
                 self.Max_t_cg, patients_for_initial, self.D_Ext, therapist_set,
@@ -208,24 +219,28 @@ class ColumnGeneration:
         )
 
         # Build master problem
-        print("[Setup] Building master problem...")
+        if self.verbose:
+            print("[Setup] Building master problem...")
         self.master = MasterProblem_d(
-            self.data, self.Max_t_cg, self.Nr_agg, self.Req_agg, self.pre_x, self.E_dict
+            self.data, self.Max_t_cg, self.Nr_agg, self.Req_agg, self.pre_x, self.E_dict,
+            verbose=self.verbose
         )
         self.master.buildModel()
         self.master.startSol(self.start_x, self.start_los)
 
-        print(f"[Setup] Complete! Time: {time.time() - self.start_time:.2f}s")
-        print(f"[Setup] Problem size: {len(self.P_Join)} patients, {len(self.T)} therapists, {len(self.D)} days")
-        print("=" * 100 + "\n")
+        if self.verbose:
+            print(f"[Setup] Complete! Time: {time.time() - self.start_time:.2f}s")
+            print(f"[Setup] Problem size: {len(self.P_Join)} patients, {len(self.T)} therapists, {len(self.D)} days")
+            print("=" * 100 + "\n")
 
     def solve_cg(self):
         """
         Main Column Generation loop with stagnation detection.
         """
-        print("=" * 100)
-        print(" COLUMN GENERATION ".center(100, "="))
-        print("=" * 100 + "\n")
+        if self.verbose:
+            print("=" * 100)
+            print(" COLUMN GENERATION ".center(100, "="))
+            print("=" * 100 + "\n")
 
         # Initialize CG loop variables
         next_base_col_idx = 2
@@ -474,17 +489,20 @@ class ColumnGeneration:
         """
         Finalize the solution: solve LP relaxation, check integrality, solve IP.
         """
-        print("\n" + "=" * 100)
-        print(" FINALIZATION ".center(100, "="))
-        print("=" * 100)
+        if self.verbose:
+            print("\n" + "=" * 100)
+            print(" FINALIZATION ".center(100, "="))
+            print("=" * 100)
 
         # Solve LP relaxation and check integrality
-        print("\n[Finalize] Solving LP relaxation and checking integrality...")
+        if self.verbose:
+            print("\n[Finalize] Solving LP relaxation and checking integrality...")
         self.master.solRelModel()
         self.is_integral, self.lp_obj, self.frac_info = self.master.check_fractionality()
 
         # Solve IP
-        print("[Finalize] Solving integer program...")
+        if self.verbose:
+            print("[Finalize] Solving integer program...")
         self.is_integral, self.lp_obj, self.frac_info = self.master.finSol()
         if self.save_lps:
             self.master.Model.write('Final_root.lp')
@@ -497,7 +515,8 @@ class ColumnGeneration:
             self.gap = 0.0
 
         # Solve compact model for comparison
-        print("[Finalize] Solving compact model...")
+        if self.verbose:
+            print("[Finalize] Solving compact model...")
         self.problem.solveModel()
         self.comp_obj = self.problem.Model.objVal
 

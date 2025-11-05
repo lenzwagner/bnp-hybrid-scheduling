@@ -121,7 +121,8 @@ def main():
         max_stagnation_itr=dual_improvement_iter,
         stagnation_threshold=dual_stagnation_threshold,
         learn_method=learn_method,
-        save_lps=save_lps
+        save_lps=save_lps,
+        verbose=verbose_output
     )
 
     # Setup
