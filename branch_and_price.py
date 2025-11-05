@@ -84,7 +84,8 @@ class BranchAndPrice:
             'incumbent_updates': 0,
             'ip_solves': 0,
             'node_processing_order': [],
-            'bfs_decision_log': []
+            'bfs_decision_log': [],
+            'tree_complete': False  # True if all nodes were processed (no open nodes remain)
         }
 
         # Timing
@@ -623,6 +624,7 @@ class BranchAndPrice:
             self.logger.info(f"✅ Root node fathomed: {root_node.fathom_reason}")
             self.logger.info(f"   Solution is optimal!\n")
             self.stats['nodes_fathomed'] = 1
+            self.stats['tree_complete'] = True  # Root was fathomed, so tree is complete
             if self.open_nodes:
                 self.open_nodes.pop()
             self._finalize_and_print_results()
@@ -995,6 +997,7 @@ class BranchAndPrice:
         # Determine termination reason
         if not self.open_nodes:
             self.logger.info(f"✅ All nodes explored - Tree complete!")
+            self.stats['tree_complete'] = True
         elif iteration >= max_nodes:
             self.logger.warning(f"⚠️  Node limit reached: {iteration} >= {max_nodes}")
             self.logger.warning(f"   {len(self.open_nodes)} nodes remain open")
@@ -1052,7 +1055,8 @@ class BranchAndPrice:
             'ip_solves': self.stats['ip_solves'],
             'incumbent_updates': self.stats['incumbent_updates'],
             'total_time': self.stats['total_time'],
-            'root_node': self.nodes[0]
+            'root_node': self.nodes[0],
+            'tree_complete': self.stats['tree_complete']
         }
 
     # ============================================================================

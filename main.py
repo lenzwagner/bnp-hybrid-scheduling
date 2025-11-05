@@ -236,14 +236,21 @@ def main():
         # Convergence and optimal solution status
         print(f"\nAlgorithm Status:")
         if results['incumbent'] is not None:
-            gap_threshold = 1e-4  # 0.01% gap threshold
-            if results['gap'] < gap_threshold:
-                print(f"  ✓ Algorithm CONVERGED (Gap < {gap_threshold:.2%})")
+            # Check if tree is complete (all nodes fathomed)
+            if results.get('tree_complete', False):
+                print(f"  ✓ TREE COMPLETE - All nodes explored")
                 print(f"  ✓ OPTIMAL SOLUTION FOUND: {results['incumbent']:.5f}")
+                if results['gap'] > 0:
+                    print(f"  (Numerical gap: {results['gap']:.5%}, due to floating-point precision)")
             else:
-                print(f"  ! Algorithm terminated with gap: {results['gap']:.5%}")
-                print(f"  ! Best solution found: {results['incumbent']:.5f}")
-                print(f"  ! Lower bound: {results['lp_bound']:.5f}")
+                gap_threshold = 1e-4  # 0.01% gap threshold
+                if results['gap'] < gap_threshold:
+                    print(f"  ✓ Algorithm CONVERGED (Gap < {gap_threshold:.2%})")
+                    print(f"  ✓ OPTIMAL SOLUTION FOUND: {results['incumbent']:.5f}")
+                else:
+                    print(f"  ! Algorithm terminated with gap: {results['gap']:.5%}")
+                    print(f"  ! Best solution found: {results['incumbent']:.5f}")
+                    print(f"  ! Lower bound: {results['lp_bound']:.5f}")
         else:
             print(f"  ✗ No feasible solution found")
     else:
