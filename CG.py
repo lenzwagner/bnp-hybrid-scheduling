@@ -621,7 +621,8 @@ def solve_subproblem_for_patient(args):
     # Create and solve subproblem
     subproblem = Subproblem(
         data, duals_gamma, duals_pi, duals_delta, index, 0, Req_agg, Entry_agg,
-        app_data, W_coeff, E_dict, S_Bound, num_tangents=10, reduction=True, learn_method=learn_meth,  node_path=''
+        app_data, W_coeff, E_dict, S_Bound, num_tangents=10, reduction=True, learn_method=learn_meth,  node_path='',
+        verbose=False  # Disable verbose in multiprocessing workers to avoid mixed output
     )
     subproblem.buildModel()
 

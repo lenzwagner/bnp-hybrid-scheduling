@@ -21,10 +21,10 @@ def compute_app_effectiveness(app_count, theta_type, params):
     else:
         return params['const']
 
-def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learning_params, TS, FS, Max_t_input, nr_c, T_mapping):
-    from Utils.Generell.utils import boxed_print
+def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learning_params, TS, FS, Max_t_input, nr_c, T_mapping, verbose=True):
 
-    boxed_print("PRE-PATIENT SCHEDULING: FEASIBILITY PRE-CHECK", width=100, center=True)
+    if verbose:
+        print("PRE-PATIENT SCHEDULING: FEASIBILITY PRE-CHECK")
 
     # Check if entry day demands exceed capacity
     from collections import defaultdict
@@ -45,34 +45,34 @@ def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learn
 
         if demand > capacity:
             deficit = demand - capacity
-            boxed_print(
-                f"❌ INFEASIBLE: Period {d} requires {demand} slots, only {capacity} available (deficit: {deficit})",
-                width=100, center=False
-            )
-            boxed_print(f"   Affected patients: {entry_patients[d]}", width=100, center=False)
+            if verbose:
+                print(f"❌ INFEASIBLE: Period {d} requires {demand} slots, only {capacity} available (deficit: {deficit})")
+                print(f"   Affected patients: {entry_patients[d]}")
             feasible = False
             bottlenecks.append(d)
         else:
             slack = capacity - demand
-            status = "✅" if slack >= 2 else "⚠️ "
-            boxed_print(f"{status} Period {d}: {demand} demand, {capacity} capacity (slack: {slack})",
-                        width=100, center=False)
+            if verbose:
+                status = "✅" if slack >= 2 else "⚠️ "
+                print(f"{status} Period {d}: {demand} demand, {capacity} capacity (slack: {slack})")
 
     if not feasible:
-        boxed_print("\n" + "=" * 100, width=100, center=False, border="")
-        boxed_print("❌ PRE-PATIENT SCHEDULING IS STRUCTURALLY INFEASIBLE!", width=100, center=True)
-        boxed_print("=" * 100, width=100, center=False, border="")
-        boxed_print("\nBottleneck periods: " + str(bottlenecks), width=100, center=False)
-        boxed_print("\nPossible solutions:", width=100, center=False)
-        boxed_print("  1. Increase therapist capacity Q_{jt} at bottleneck periods", width=100, center=False)
-        boxed_print("  2. Adjust patient entry days (shift some patients)", width=100, center=False)
-        boxed_print("  3. Reduce profile counts nr_c (if using aggregated profiles)", width=100, center=False)
-        boxed_print("  4. Re-generate instance with different parameters", width=100, center=False)
-        boxed_print("=" * 100, width=100, center=False, border="")
+        if verbose:
+            print("\n" + "=" * 100)
+            print("❌ PRE-PATIENT SCHEDULING IS STRUCTURALLY INFEASIBLE!")
+            print("=" * 100)
+            print("\nBottleneck periods: " + str(bottlenecks))
+            print("\nPossible solutions:")
+            print("  1. Increase therapist capacity Q_{jt} at bottleneck periods")
+            print("  2. Adjust patient entry days (shift some patients)")
+            print("  3. Reduce profile counts nr_c (if using aggregated profiles)")
+            print("  4. Re-generate instance with different parameters")
+            print("=" * 100)
         return 'Infeasible'
 
-    boxed_print("✅ PRE-CHECK PASSED - PROCEEDING WITH SCHEDULING", width=100, center=True)
-    boxed_print("=" * 100 + "\n", width=100, center=False, border="")
+    if verbose:
+        print("✅ PRE-CHECK PASSED - PROCEEDING WITH SCHEDULING")
+        print("=" * 100 + "\n")
 
     Max_t = copy.deepcopy(Max_t_input)
     x, y, LOS = {}, {}, {}

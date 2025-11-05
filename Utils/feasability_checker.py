@@ -1,6 +1,5 @@
 from collections import defaultdict
 import numpy as np
-from Utils.Generell.utils import boxed_print
 
 
 def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_coeff, verbose=True):
@@ -30,7 +29,7 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
     """
 
     if verbose:
-        boxed_print("INSTANCE FEASIBILITY PRE-CHECK", width=100, center=True)
+        print("INSTANCE FEASIBILITY PRE-CHECK", width=100, center=True)
 
     results = {
         "is_feasible": True,
@@ -48,7 +47,7 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
     # CRITICAL CHECK 1: Entry Day Capacity vs. Demand
     # ========================================================================
     if verbose:
-        boxed_print("CHECK 1: Entry Day Capacity vs. Demand", width=100, center=False)
+        print("CHECK 1: Entry Day Capacity vs. Demand", width=100, center=False)
 
     entry_day_demand = defaultdict(int)
     entry_day_patients = defaultdict(list)
@@ -80,23 +79,23 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
             results["bottleneck_periods"].append(d)
 
             if verbose:
-                boxed_print(f"❌ {issue}", width=100, center=False)
+                print(f"❌ {issue}", width=100, center=False)
                 affected_str = f"   Affected patients: {entry_day_patients[d][:15]}"
                 if len(entry_day_patients[d]) > 15:
                     affected_str += f"... (+{len(entry_day_patients[d]) - 15} more)"
-                boxed_print(affected_str, width=100, center=False)
+                print(affected_str, width=100, center=False)
         else:
             slack = total_capacity - demand
             if verbose:
                 status = "✅" if slack >= 2 else "⚠️ " if slack >= 1 else "🔥"
-                boxed_print(f"{status} Period {d}: {demand} patients, {total_capacity} slots (slack: {slack})",
+                print(f"{status} Period {d}: {demand} patients, {total_capacity} slots (slack: {slack})",
                             width=100, center=False)
 
     # ========================================================================
     # CHECK 2: Total Capacity vs. Total Demand
     # ========================================================================
     if verbose:
-        boxed_print("\nCHECK 2: Total Capacity vs. Total Demand", width=100, center=False)
+        print("\nCHECK 2: Total Capacity vs. Total Demand", width=100, center=False)
 
     total_capacity = sum(Max_t.get((t, d), 0) for t in T for d in D_Full)
     # Pre and Focus patients need full requirements, Post patients need only entry treatment
@@ -114,18 +113,18 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
         issue = f"Total demand ({total_demand}) exceeds total capacity ({total_capacity})"
         results["issues"].append(issue)
         if verbose:
-            boxed_print(f"❌ {issue}", width=100, center=False)
+            print(f"❌ {issue}", width=100, center=False)
     else:
         utilization_pct = (total_demand / total_capacity * 100) if total_capacity > 0 else 0
         if verbose:
-            boxed_print(f"✅ Total capacity: {total_capacity}, Total demand: {total_demand} "
+            print(f"✅ Total capacity: {total_capacity}, Total demand: {total_demand} "
                         f"(Utilization: {utilization_pct:.1f}%)", width=100, center=False)
 
     # ========================================================================
     # CHECK 3: Individual Patient Schedulability (Focus patients only)
     # ========================================================================
     if verbose:
-        boxed_print("\nCHECK 3: Patient Schedulability", width=100, center=False)
+        print("\nCHECK 3: Patient Schedulability", width=100, center=False)
 
     unschedulable_patients = []
     for p in P_F:  # Only check Focus patients (Pre are already treated, Post don't need discharge)
@@ -151,28 +150,28 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
             unschedulable_patients.append(p)
 
             if verbose:
-                boxed_print(f"❌ {issue}", width=100, center=False)
+                print(f"❌ {issue}", width=100, center=False)
 
     if unschedulable_patients and verbose:
-        boxed_print(f"⚠️  {len(unschedulable_patients)} Focus patients cannot be scheduled",
+        print(f"⚠️  {len(unschedulable_patients)} Focus patients cannot be scheduled",
                     width=100, center=False)
     elif verbose:
-        boxed_print(f"✅ All {len(P_F)} Focus patients are potentially schedulable",
+        print(f"✅ All {len(P_F)} Focus patients are potentially schedulable",
                     width=100, center=False)
 
     # ========================================================================
     # FINAL SUMMARY
     # ========================================================================
     if verbose:
-        boxed_print("\n" + "=" * 100, width=100, center=False, border="")
+        print("\n" + "=" * 100, width=100, center=False, border="")
         if results["is_feasible"]:
-            boxed_print("✅ INSTANCE IS FEASIBLE - All checks passed!", width=100, center=True)
+            print("✅ INSTANCE IS FEASIBLE - All checks passed!", width=100, center=True)
         else:
-            boxed_print("❌ INSTANCE IS INFEASIBLE", width=100, center=True)
-            boxed_print(f"\nFound {len(results['issues'])} critical issues:", width=100, center=False)
+            print("❌ INSTANCE IS INFEASIBLE", width=100, center=True)
+            print(f"\nFound {len(results['issues'])} critical issues:", width=100, center=False)
             for idx, issue in enumerate(results["issues"], 1):
-                boxed_print(f"  {idx}. {issue}", width=100, center=False)
-        boxed_print("=" * 100, width=100, center=False, border="")
+                print(f"  {idx}. {issue}", width=100, center=False)
+        print("=" * 100, width=100, center=False, border="")
 
     return results["is_feasible"], results
 
@@ -200,12 +199,12 @@ def repair_infeasible_instance(R_p, Entry_p, Max_t, feas_results, D_Full, T):
     - Max_t_repaired (dict): Potentially modified capacity
     """
 
-    boxed_print("🔧 ATTEMPTING AUTOMATIC INSTANCE REPAIR", width=100, center=True)
+    print("🔧 ATTEMPTING AUTOMATIC INSTANCE REPAIR", width=100, center=True)
 
     bottleneck_periods = feas_results.get("bottleneck_periods", [])
 
     if not bottleneck_periods:
-        boxed_print("No bottlenecks detected - nothing to repair", width=100)
+        print("No bottlenecks detected - nothing to repair", width=100)
         return R_p, Entry_p, Max_t
 
     Max_t_repaired = Max_t.copy()
@@ -219,7 +218,7 @@ def repair_infeasible_instance(R_p, Entry_p, Max_t, feas_results, D_Full, T):
         deficit = analysis["deficit"]
         patients_at_d = analysis["patients"]
 
-        boxed_print(f"\n📍 Repairing period {d} (deficit: {deficit}, patients: {len(patients_at_d)})",
+        print(f"\n📍 Repairing period {d} (deficit: {deficit}, patients: {len(patients_at_d)})",
                     width=100, center=False)
 
         # ====================================================================
@@ -272,11 +271,11 @@ def repair_infeasible_instance(R_p, Entry_p, Max_t, feas_results, D_Full, T):
                     total_capacity_added += extra
 
     # Summary
-    boxed_print("\n" + "=" * 100, width=100, center=False, border="")
-    boxed_print("REPAIR SUMMARY", width=100, center=True)
-    boxed_print(f"Patients shifted: {total_shifts}", width=100, center=False)
-    boxed_print(f"Capacity added: {total_capacity_added} slots", width=100, center=False)
-    boxed_print("=" * 100, width=100, center=False, border="")
+    print("\n" + "=" * 100, width=100, center=False, border="")
+    print("REPAIR SUMMARY", width=100, center=True)
+    print(f"Patients shifted: {total_shifts}", width=100, center=False)
+    print(f"Capacity added: {total_capacity_added} slots", width=100, center=False)
+    print("=" * 100, width=100, center=False, border="")
 
     return R_p, Entry_p_repaired, Max_t_repaired
 

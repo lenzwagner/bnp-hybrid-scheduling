@@ -5,7 +5,7 @@ from Utils.Generell.utils import *
 class Subproblem:
     def __init__(self, df, duals_gamma, duals_pi, duals_delta, p, col_id, Req, Entry, app_data, W_coeff, E_dict, S_Bound,
                  learn_method,
-                 reduction=False, num_tangents=10, node_path=''):
+                 reduction=False, num_tangents=10, node_path='', verbose=True):
         self.reduction = reduction
         self.P = p
         self.W_coeff = W_coeff
@@ -18,6 +18,7 @@ class Subproblem:
         self.Entry = Entry
         self.learn_method = learn_method
         self.num_tangents = num_tangents
+        self.verbose = verbose
         self.P_Full = df['P_Full'].dropna().astype(int).unique().tolist()
         self.D_raw = df['D_Ext'].dropna().astype(int).unique().tolist()
 
@@ -33,7 +34,7 @@ class Subproblem:
         self.M = max(self.D) + 1
         self.S_Bound = S_Bound[self.P]
         self.R = list(range(1, 1 + self.S_Bound))
-        if self.duals_delta != 0:
+        if self.duals_delta != 0 and self.verbose:
             print(f'Duals for {self.P} in itr. {self.itr}: {self.duals_delta, self.duals_gamma}')
 
     def _init_day_horizon(self):
@@ -45,11 +46,12 @@ class Subproblem:
                       self.app_data["MS"][0] + 2
             end_day = min(max(self.D_raw), max_los)
             self.D = [d for d in self.D_p if start_day <= d <= end_day]
-            node_info = f"in Node '{self.node_path}'" if self.node_path else "at root"
-            boxed_print(
-                f"Reduced subproblem for Patient {self.P} {node_info}: "
-                f"Horizon from day {start_day} till day {end_day}"
-            )
+            if self.verbose:
+                node_info = f"in Node '{self.node_path}'" if self.node_path else "at root"
+                print(
+                    f"Reduced subproblem for Patient {self.P} {node_info}: "
+                    f"Horizon from day {start_day} till day {end_day}"
+                )
         else:
             self.D_p = self.D_raw
             self.D = self.D_raw
@@ -297,11 +299,13 @@ class Subproblem:
         # Compute tangents
         if learn_type == 'exp':
             tangents = self.compute_tangent_approximation(k_learn, theta_base)
-            boxed_print(f"Using exponential tangent approximation with {len(tangents)} support points")
+            if self.verbose:
+                print(f"Using exponential tangent approximation with {len(tangents)} support points")
         else:  # sigmoid
             infl_point = self.app_data["infl_point"][0]
             tangents = self.compute_tangent_approximation_sigmoid(k_learn, infl_point, theta_base)
-            boxed_print(f"Using sigmoid tangent approximation with {len(tangents)} support points")
+            if self.verbose:
+                print(f"Using sigmoid tangent approximation with {len(tangents)} support points")
 
         p = self.P
         for d in self.D:
@@ -589,16 +593,17 @@ class Subproblem:
 
         self.Model.optimize()
         if self.Model.status == gu.GRB.INFEASIBLE:
-            boxed_print('\nThe following constraints and variables are in the IIS:')
-            self.Model.computeIIS()
-            for c in self.Model.getConstrs():
-                if c.IISConstr:
-                    boxed_print(f'\t{c.constrName}: {self.Model.getRow(c)} {c.Sense} {c.RHS}')
-            for v in self.Model.getVars():
-                if v.IISLB:
-                    boxed_print(f'\t{v.varName} ≥ {v.LB}')
-                if v.IISUB:
-                    boxed_print(f'\t{v.varName} ≤ {v.UB}')
+            if self.verbose:
+                print('\nThe following constraints and variables are in the IIS:')
+                self.Model.computeIIS()
+                for c in self.Model.getConstrs():
+                    if c.IISConstr:
+                        print(f'\t{c.constrName}: {self.Model.getRow(c)} {c.Sense} {c.RHS}')
+                for v in self.Model.getVars():
+                    if v.IISLB:
+                        print(f'\t{v.varName} ≥ {v.LB}')
+                    if v.IISUB:
+                        print(f'\t{v.varName} ≤ {v.UB}')
 
     def create_lambda_list(self, index):
         """Create lambda list for join patients."""

@@ -1978,7 +1978,8 @@ class BranchAndPrice:
             learn_method=self.cg_solver.learn_method,
             reduction=True,
             num_tangents=10,
-            node_path=node.path
+            node_path=node.path,
+            verbose=self.verbose
         )
 
         sp.buildModel()
