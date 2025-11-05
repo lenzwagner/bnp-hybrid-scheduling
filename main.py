@@ -69,7 +69,7 @@ def main():
 
     # Output settings
     save_lps = False  # Set to True to save LP and SOL files
-    verbose_output = True  # Set to False to suppress all non-final output
+    verbose_output = False # Set to False to suppress all non-final output
 
     # Visualization settings
     visualize_tree = False  # Enable tree visualization
@@ -241,7 +241,8 @@ def main():
             if results.get('tree_complete', False):
                 print(f"  ✓ TREE COMPLETE - All nodes explored")
                 print(f"  ✓ OPTIMAL SOLUTION FOUND: {results['incumbent']:.5f}")
-                print(f"  ✓ Gap: {results['gap']:.5%}")
+                if results['gap'] > 0:
+                    print(f"  (Numerical gap: {results['gap']:.5%}, due to floating-point precision)")
             else:
                 gap_threshold = 1e-4  # 0.01% gap threshold
                 if results['gap'] < gap_threshold:

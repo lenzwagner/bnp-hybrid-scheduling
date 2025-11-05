@@ -29,7 +29,7 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
     """
 
     if verbose:
-        print("INSTANCE FEASIBILITY PRE-CHECK", width=100, center=True)
+        print("INSTANCE FEASIBILITY PRE-CHECK")
 
     results = {
         "is_feasible": True,
@@ -47,7 +47,7 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
     # CRITICAL CHECK 1: Entry Day Capacity vs. Demand
     # ========================================================================
     if verbose:
-        print("CHECK 1: Entry Day Capacity vs. Demand", width=100, center=False)
+        print("CHECK 1: Entry Day Capacity vs. Demand")
 
     entry_day_demand = defaultdict(int)
     entry_day_patients = defaultdict(list)
@@ -79,23 +79,22 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
             results["bottleneck_periods"].append(d)
 
             if verbose:
-                print(f"❌ {issue}", width=100, center=False)
+                print(f"❌ {issue}")
                 affected_str = f"   Affected patients: {entry_day_patients[d][:15]}"
                 if len(entry_day_patients[d]) > 15:
                     affected_str += f"... (+{len(entry_day_patients[d]) - 15} more)"
-                print(affected_str, width=100, center=False)
+                print(affected_str)
         else:
             slack = total_capacity - demand
             if verbose:
                 status = "✅" if slack >= 2 else "⚠️ " if slack >= 1 else "🔥"
-                print(f"{status} Period {d}: {demand} patients, {total_capacity} slots (slack: {slack})",
-                            width=100, center=False)
+                print(f"{status} Period {d}: {demand} patients, {total_capacity} slots (slack: {slack})")
 
     # ========================================================================
     # CHECK 2: Total Capacity vs. Total Demand
     # ========================================================================
     if verbose:
-        print("\nCHECK 2: Total Capacity vs. Total Demand", width=100, center=False)
+        print("\nCHECK 2: Total Capacity vs. Total Demand")
 
     total_capacity = sum(Max_t.get((t, d), 0) for t in T for d in D_Full)
     # Pre and Focus patients need full requirements, Post patients need only entry treatment
@@ -113,18 +112,18 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
         issue = f"Total demand ({total_demand}) exceeds total capacity ({total_capacity})"
         results["issues"].append(issue)
         if verbose:
-            print(f"❌ {issue}", width=100, center=False)
+            print(f"❌ {issue}")
     else:
         utilization_pct = (total_demand / total_capacity * 100) if total_capacity > 0 else 0
         if verbose:
             print(f"✅ Total capacity: {total_capacity}, Total demand: {total_demand} "
-                        f"(Utilization: {utilization_pct:.1f}%)", width=100, center=False)
+                        f"(Utilization: {utilization_pct:.1f}%)")
 
     # ========================================================================
     # CHECK 3: Individual Patient Schedulability (Focus patients only)
     # ========================================================================
     if verbose:
-        print("\nCHECK 3: Patient Schedulability", width=100, center=False)
+        print("\nCHECK 3: Patient Schedulability")
 
     unschedulable_patients = []
     for p in P_F:  # Only check Focus patients (Pre are already treated, Post don't need discharge)
@@ -150,28 +149,26 @@ def check_instance_feasibility_extended(R_p, Entry_p, Max_t, P, D, D_Full, T, W_
             unschedulable_patients.append(p)
 
             if verbose:
-                print(f"❌ {issue}", width=100, center=False)
+                print(f"❌ {issue}")
 
     if unschedulable_patients and verbose:
-        print(f"⚠️  {len(unschedulable_patients)} Focus patients cannot be scheduled",
-                    width=100, center=False)
+        print(f"⚠️  {len(unschedulable_patients)} Focus patients cannot be scheduled")
     elif verbose:
-        print(f"✅ All {len(P_F)} Focus patients are potentially schedulable",
-                    width=100, center=False)
+        print(f"✅ All {len(P_F)} Focus patients are potentially schedulable")
 
     # ========================================================================
     # FINAL SUMMARY
     # ========================================================================
     if verbose:
-        print("\n" + "=" * 100, width=100, center=False, border="")
+        print("\n" + "=" * 100)
         if results["is_feasible"]:
-            print("✅ INSTANCE IS FEASIBLE - All checks passed!", width=100, center=True)
+            print("✅ INSTANCE IS FEASIBLE - All checks passed!")
         else:
-            print("❌ INSTANCE IS INFEASIBLE", width=100, center=True)
-            print(f"\nFound {len(results['issues'])} critical issues:", width=100, center=False)
+            print("❌ INSTANCE IS INFEASIBLE")
+            print(f"\nFound {len(results['issues'])} critical issues:")
             for idx, issue in enumerate(results["issues"], 1):
-                print(f"  {idx}. {issue}", width=100, center=False)
-        print("=" * 100, width=100, center=False, border="")
+                print(f"  {idx}. {issue}")
+        print("=" * 100)
 
     return results["is_feasible"], results
 
@@ -199,7 +196,7 @@ def repair_infeasible_instance(R_p, Entry_p, Max_t, feas_results, D_Full, T):
     - Max_t_repaired (dict): Potentially modified capacity
     """
 
-    print("🔧 ATTEMPTING AUTOMATIC INSTANCE REPAIR", width=100, center=True)
+    print("🔧 ATTEMPTING AUTOMATIC INSTANCE REPAIR")
 
     bottleneck_periods = feas_results.get("bottleneck_periods", [])
 
@@ -218,8 +215,7 @@ def repair_infeasible_instance(R_p, Entry_p, Max_t, feas_results, D_Full, T):
         deficit = analysis["deficit"]
         patients_at_d = analysis["patients"]
 
-        print(f"\n📍 Repairing period {d} (deficit: {deficit}, patients: {len(patients_at_d)})",
-                    width=100, center=False)
+        print(f"\n📍 Repairing period {d} (deficit: {deficit}, patients: {len(patients_at_d)})")
 
         # ====================================================================
         # STRATEGY 1: Try to shift patients to adjacent periods
@@ -271,11 +267,11 @@ def repair_infeasible_instance(R_p, Entry_p, Max_t, feas_results, D_Full, T):
                     total_capacity_added += extra
 
     # Summary
-    print("\n" + "=" * 100, width=100, center=False, border="")
-    print("REPAIR SUMMARY", width=100, center=True)
-    print(f"Patients shifted: {total_shifts}", width=100, center=False)
-    print(f"Capacity added: {total_capacity_added} slots", width=100, center=False)
-    print("=" * 100, width=100, center=False, border="")
+    print("\n" + "=" * 100)
+    print("REPAIR SUMMARY")
+    print(f"Patients shifted: {total_shifts}")
+    print(f"Capacity added: {total_capacity_added} slots")
+    print("=" * 100)
 
     return R_p, Entry_p_repaired, Max_t_repaired
 
