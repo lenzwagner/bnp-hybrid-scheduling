@@ -43,8 +43,8 @@ def main():
     }
 
     # Instance parameters
-    T = 6  # Number of therapists
-    D_focus = 20  # Number of focus days
+    T = 3  # Number of therapists
+    D_focus = 6  # Number of focus days
 
     # Algorithm parameters
     dual_improvement_iter = 20  # Max Iterations without dual improvement
@@ -148,7 +148,7 @@ def main():
                                     search_strategy=search_strategy,
                                     verbose=verbose_output,
                                     ip_heuristic_frequency=10,
-                                    early_incumbent_iteration=2,
+                                    early_incumbent_iteration=1,
                                     save_lps=save_lps)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)
 

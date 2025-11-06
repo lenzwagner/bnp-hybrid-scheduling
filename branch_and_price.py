@@ -620,7 +620,7 @@ class BranchAndPrice:
             self.open_nodes.append((lp_bound, 0))
 
         # Check if root can be fathomed
-        if self.should_fathom(root_node, None):
+        if self.should_fathom(root_node, root_lambdas):
             self.logger.info(f"✅ Root node fathomed: {root_node.fathom_reason}")
             self.logger.info(f"   Solution is optimal!\n")
             self.stats['nodes_fathomed'] = 1
