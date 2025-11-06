@@ -129,7 +129,7 @@ class SPVariableBranching(BranchingConstraint):
         if (n, 1) in master.lmbda:
             if 1 in relevant_columns:
                 master.Model.chgCoeff(self.master_constraint, master.lmbda[n, 1], 1)
-                print(f"    [SP Branch] Set coefficient for Lambda[{n},1] in constraint")
+                #print(f"    [SP Branch] Set coefficient for Lambda[{n},1] in constraint")
 
 
     def apply_to_subproblem(self, subproblem):

@@ -26,7 +26,7 @@ def main():
     # ===========================
 
     # Random seed
-    seed = 14
+    seed = 11
 
     # Learning parameters
     app_data = {
@@ -44,7 +44,7 @@ def main():
 
     # Instance parameters
     T = 3  # Number of therapists
-    D_focus = 6  # Number of focus days
+    D_focus = 5  # Number of focus days
 
     # Algorithm parameters
     dual_improvement_iter = 20  # Max Iterations without dual improvement
@@ -75,7 +75,7 @@ def main():
     deterministic = False  # Set to True for deterministic solver behavior (single-threaded, barrier method)
 
     # Visualization settings
-    visualize_tree = False  # Enable tree visualization
+    visualize_tree = True  # Enable tree visualization
     tree_layout = 'hierarchical'  # 'hierarchical' or 'radial'
     detailed_tree = False  # Show detailed info on nodes
     save_tree_path = 'bnp_tree.png'  # Path to save (None to not save)
@@ -147,7 +147,7 @@ def main():
                                     branching_strategy=branching_strategy,
                                     search_strategy=search_strategy,
                                     verbose=verbose_output,
-                                    ip_heuristic_frequency=10,
+                                    ip_heuristic_frequency=5,
                                     early_incumbent_iteration=1,
                                     save_lps=save_lps)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)
@@ -202,9 +202,22 @@ def main():
 
             import os
             os.makedirs("Pictures/Tree", exist_ok=True)
-            bnp_solver.visualize_tree(layout='hierarchical', save_path='Pictures/Tree/tree_hierarchical.png')
-            bnp_solver.visualize_tree(layout='radial', save_path='Pictures/Tree/tree_radial.png')
-            bnp_solver.visualize_tree(detailed=True, save_path='Pictures/Tree/tree_detailed.png')
+
+            # Academic/Thesis style visualization (publication-ready)
+            bnp_solver.visualize_tree(
+                academic=True,
+                save_path='Pictures/Tree/tree_academic.png',
+                dpi=600  # High resolution for papers
+            )
+
+            # Other options:
+            # Standard hierarchical: layout='hierarchical', save_path='Pictures/Tree/tree_hierarchical.png'
+            # Radial layout: layout='radial', save_path='Pictures/Tree/tree_radial.png'
+            # Detailed view: detailed=True, save_path='Pictures/Tree/tree_detailed.png'
+            # Custom colors: academic=True, node_color='#ADD8E6', fathomed_color='#FFB6C1'
+
+            # Export for LaTeX:
+            # bnp_solver.export_tree_tikz('Pictures/Tree/bnp_tree.tex')
 
     else:
         # Standard Column Generation

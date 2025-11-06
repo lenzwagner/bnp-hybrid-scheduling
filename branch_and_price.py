@@ -2487,23 +2487,31 @@ class BranchAndPrice:
         # If not found in nodes, might be from heuristic
         return 0
 
-    def visualize_tree(self, layout='hierarchical', detailed=False, save_path=None):
+    def visualize_tree(self, layout='hierarchical', detailed=False, academic=False,
+                      save_path=None, dpi=300, **kwargs):
         """
         Visualize the Branch-and-Price search tree.
 
         Args:
-            layout: 'hierarchical' or 'radial'
+            layout: 'hierarchical' or 'radial' (used for standard plot)
             detailed: If True, show detailed information
+            academic: If True, use academic/thesis style (publication-ready)
             save_path: Path to save visualization (optional)
+            dpi: Resolution for saved figure (default: 300)
+            **kwargs: Additional arguments passed to plot function
+                     For academic style: node_color, fathomed_color, integral_color, show_best_bound
+                     For standard plot: figsize, show_bounds, show_edge_labels
         """
         from tree_visualization import BnPTreeVisualizer
 
         visualizer = BnPTreeVisualizer(self)
 
-        if detailed:
-            visualizer.plot_detailed(save_path=save_path)
+        if academic:
+            visualizer.plot_academic_style(save_path=save_path, dpi=dpi, **kwargs)
+        elif detailed:
+            visualizer.plot_detailed(save_path=save_path, **kwargs)
         else:
-            visualizer.plot(layout=layout, save_path=save_path)
+            visualizer.plot(layout=layout, save_path=save_path, dpi=dpi, **kwargs)
 
         visualizer.print_tree_statistics()
 
@@ -2513,6 +2521,20 @@ class BranchAndPrice:
 
         visualizer = BnPTreeVisualizer(self)
         visualizer.export_to_graphviz(filename)
+
+    def export_tree_tikz(self, filename='bnp_tree.tex'):
+        """
+        Export tree as TikZ code for LaTeX integration.
+
+        Perfect for including in thesis or papers.
+
+        Args:
+            filename: Output filename for TikZ code (default: 'bnp_tree.tex')
+        """
+        from tree_visualization import BnPTreeVisualizer
+
+        visualizer = BnPTreeVisualizer(self)
+        visualizer.export_tikz(filename)
 
     def _run_ip_heuristic(self, current_node_count):
         """

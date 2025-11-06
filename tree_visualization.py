@@ -86,7 +86,8 @@ class BnPTreeVisualizer:
             return f"λ[{last_constraint.profile},{last_constraint.column}] {direction_symbol} {last_constraint.bound}"
 
         elif isinstance(last_constraint, SPVariableBranching):
-            return f"x[{last_constraint.profile},{last_constraint.agent},{last_constraint.period}] = {last_constraint.value}"
+            value = last_constraint.floor if last_constraint.dir == 'left' else last_constraint.ceil
+            return f"x[{last_constraint.profile},{last_constraint.agent},{last_constraint.period}] = {value}"
 
         return "Unknown"
 
@@ -106,7 +107,8 @@ class BnPTreeVisualizer:
                 return f"λ ≥ {last_constraint.bound}"
 
         elif isinstance(last_constraint, SPVariableBranching):
-            return f"x = {last_constraint.value}"
+            value = last_constraint.floor if last_constraint.dir == 'left' else last_constraint.ceil
+            return f"x = {value}"
 
         return ""
 
@@ -565,3 +567,309 @@ class BnPTreeVisualizer:
             f"  Branch Factor (avg): {sum(self.G.out_degree(n) for n in self.G.nodes()) / max(1, len(self.G.nodes()) - sum(1 for n in self.G.nodes() if self.G.out_degree(n) == 0)):.2f}")
 
         print("=" * 80 + "\n")
+
+    def _get_academic_node_label(self, node_id, node_data) -> str:
+        """Generate academic-style node label (S, S₁, S₂, S₂,₁, etc.)"""
+        if node_id == 0:
+            return "S"
+
+        # Build path-based label using subscripts
+        path = node_data.get('path', [])
+        if not path:
+            return f"S_{node_id}"
+
+        # Convert path to subscript notation
+        subscript_map = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
+        subscripts = []
+        for p in path:
+            subscripts.append(str(p).translate(subscript_map))
+
+        return "S" + ",".join(subscripts)
+
+    def _get_latex_edge_label(self, parent, child) -> str:
+        """Create LaTeX-formatted edge label for branching decision (Master Problem constraints)."""
+        if not child.branching_constraints:
+            return ""
+
+        last_constraint = child.branching_constraints[-1]
+
+        from branching_constraints import MPVariableBranching, SPVariableBranching
+
+        if isinstance(last_constraint, MPVariableBranching):
+            # Master Problem Variable Branching: λ_{n,a} ≤ b or λ_{n,a} ≥ b
+            symbol = r"\leq" if last_constraint.direction == 'left' else r"\geq"
+            # Use proper LaTeX subscript formatting
+            return f"$\\lambda_{{{last_constraint.profile},{last_constraint.column}}} {symbol} {last_constraint.bound:.0f}$"
+
+        elif isinstance(last_constraint, SPVariableBranching):
+            # Subproblem Variable Branching - Show Master Problem Impact:
+            # Left:  ∑_{a: χ^a_{njt}=1} λ_{n,a} ≤ floor(β)
+            # Right: ∑_{a: χ^a_{njt}=1} λ_{n,a} ≥ ceil(β)
+            if last_constraint.dir == 'left':
+                symbol = r"\leq"
+                bound = last_constraint.floor
+            else:
+                symbol = r"\geq"
+                bound = last_constraint.ceil
+
+            # Show aggregated lambda constraint with subscript for x_{njt}
+            n, j, t = last_constraint.profile, last_constraint.agent, last_constraint.period
+            return f"$\\sum_{{a}} \\lambda_{{{n},a}}^{{x_{{{j},{t}}}}} {symbol} {bound:.0f}$"
+
+        return ""
+
+    def plot_academic_style(self, figsize=(24, 16), save_path=None, dpi=300,
+                           show_best_bound=True, node_color='#ADD8E6',
+                           fathomed_color='#FFB6C1', integral_color='#90EE90'):
+        """
+        Create academic-style tree visualization for thesis/papers.
+
+        Features:
+        - Clean circular nodes with light blue background
+        - Academic node labels (S, S₁, S₂, S₂,₁, etc.)
+        - LP value displayed above nodes
+        - Best bound displayed to the right of nodes
+        - LaTeX-formatted branching conditions on edges
+        - Horizontal line below fathomed nodes
+
+        Args:
+            figsize: Figure size (width, height) in inches
+            save_path: Path to save the figure
+            dpi: Resolution for saved figure
+            show_best_bound: Show best bound values next to nodes
+            node_color: Color for active nodes (default: light blue)
+            fathomed_color: Color for fathomed nodes (default: light red)
+            integral_color: Color for integral nodes (default: light green)
+        """
+        # Enable mathtext for LaTeX-like rendering
+        plt.rcParams['text.usetex'] = False
+        plt.rcParams['mathtext.fontset'] = 'cm'
+        plt.rcParams['font.family'] = 'serif'
+
+        fig, ax = plt.subplots(figsize=figsize, facecolor='white')
+
+        # Use hierarchical layout
+        pos = self._hierarchical_layout()
+
+        # Enhance layout spacing (reduced for more compact tree)
+        pos_enhanced = {}
+        for node_id, (x, y) in pos.items():
+            # Moderate vertical spacing for compact appearance
+            pos_enhanced[node_id] = (x, y * 1.2)
+
+        pos = pos_enhanced
+
+        # Prepare node colors and labels
+        node_colors = []
+        node_labels = {}
+
+        for node_id in self.G.nodes():
+            node_data = self.G.nodes[node_id]
+
+            # Determine color based on status
+            if node_data['status'] == 'fathomed':
+                if node_data.get('fathom_reason') == 'integral':
+                    node_colors.append(integral_color)
+                else:
+                    node_colors.append(fathomed_color)
+            else:
+                node_colors.append(node_color)
+
+            # Academic label (S, S₁, etc.)
+            node_labels[node_id] = self._get_academic_node_label(node_id, node_data)
+
+        # Draw edges first (so they're behind nodes) - thinner lines
+        nx.draw_networkx_edges(
+            self.G, pos, ax=ax,
+            edge_color='#2C3E50',
+            width=1.5,
+            alpha=0.7,
+            arrows=True,
+            arrowsize=15,
+            arrowstyle='-|>',
+            connectionstyle='arc3,rad=0.0'
+        )
+
+        # Draw edge labels with LaTeX formatting
+        edge_labels = {}
+        for parent, child in self.G.edges():
+            child_node = self.bnp_solver.nodes[child]
+            edge_labels[(parent, child)] = self._get_latex_edge_label(
+                self.bnp_solver.nodes[parent], child_node
+            )
+
+        nx.draw_networkx_edge_labels(
+            self.G, pos,
+            edge_labels=edge_labels,
+            font_size=12,
+            font_color='#C0392B',
+            font_weight='bold',
+            ax=ax,
+            bbox=dict(boxstyle='round,pad=0.4', facecolor='white',
+                     edgecolor='#E74C3C', alpha=0.95, linewidth=1.5)
+        )
+
+        # Draw nodes (much larger for better visibility)
+        nx.draw_networkx_nodes(
+            self.G, pos, ax=ax,
+            node_color=node_colors,
+            node_size=6000,
+            node_shape='o',
+            edgecolors='#2C3E50',
+            linewidths=3.0,
+            alpha=0.95
+        )
+
+        # Draw node labels (S, S₁, etc.) - larger font for bigger nodes
+        nx.draw_networkx_labels(
+            self.G, pos,
+            labels=node_labels,
+            font_size=16,
+            font_weight='bold',
+            font_color='#2C3E50',
+            ax=ax
+        )
+
+        # Add LP values above nodes and bounds to the right
+        for node_id in self.G.nodes():
+            node_data = self.G.nodes[node_id]
+            x, y = pos[node_id]
+
+            # LP value above node (adjusted for much larger nodes)
+            lp_value = node_data['lp_bound']
+            if lp_value < float('inf'):
+                ax.text(x, y + 0.5, f"{lp_value:.2f}",
+                       ha='center', va='bottom',
+                       fontsize=12, fontweight='bold',
+                       color='#2874A6',
+                       bbox=dict(boxstyle='round,pad=0.5', facecolor='white',
+                                edgecolor='#2874A6', alpha=0.9, linewidth=1.5))
+
+            # Best bound to the right (if available)
+            if show_best_bound and hasattr(self.bnp_solver, 'best_lp_bound'):
+                bound = self.bnp_solver.best_lp_bound
+                ax.text(x + 1.0, y, f"{bound:.2f}",
+                       ha='left', va='center',
+                       fontsize=11,
+                       color='#27AE60',
+                       bbox=dict(boxstyle='round,pad=0.4', facecolor='#E8F8F5',
+                                edgecolor='#27AE60', alpha=0.8, linewidth=1))
+
+            # Horizontal line below fathomed nodes (adjusted for much larger nodes)
+            if node_data['status'] == 'fathomed':
+                ax.plot([x - 0.6, x + 0.6], [y - 0.65, y - 0.65],
+                       'k-', linewidth=2.5, alpha=0.7)
+
+        # Title with key statistics
+        title = f"Branch-and-Price Search Tree\n"
+        title += f"Strategy: {self.bnp_solver.branching_strategy.upper()} | "
+        title += f"Nodes: {len(self.G.nodes())} | "
+
+        if self.bnp_solver.incumbent < float('inf'):
+            title += f"Best Solution: {self.bnp_solver.incumbent:.2f} | "
+            title += f"Best Bound: {self.bnp_solver.best_lp_bound:.2f} | "
+            title += f"Gap: {self.bnp_solver.gap:.2%}"
+        else:
+            title += f"Best Bound: {self.bnp_solver.best_lp_bound:.2f}"
+
+        ax.set_title(title, fontsize=16, fontweight='bold', pad=30,
+                    color='#2C3E50', family='serif')
+
+        # Create legend
+        legend_elements = [
+            mpatches.Patch(color=node_color, label='Active Node', edgecolor='#2C3E50', linewidth=2),
+            mpatches.Patch(color=integral_color, label='Integral Solution', edgecolor='#2C3E50', linewidth=2),
+            mpatches.Patch(color=fathomed_color, label='Fathomed (Pruned)', edgecolor='#2C3E50', linewidth=2),
+        ]
+
+        ax.legend(
+            handles=legend_elements,
+            loc='upper left',
+            bbox_to_anchor=(1.02, 1),
+            fontsize=12,
+            frameon=True,
+            fancybox=True,
+            shadow=True,
+            title='Node Status',
+            title_fontsize=13
+        )
+
+        ax.axis('off')
+        ax.margins(0.15)
+
+        plt.tight_layout()
+
+        # Save if path provided
+        if save_path:
+            plt.savefig(save_path, dpi=dpi, bbox_inches='tight',
+                       facecolor='white', edgecolor='none')
+            print(f"\n✅ Academic-style tree visualization saved to: {save_path}")
+
+        plt.show()
+
+    def export_tikz(self, filename='bnp_tree.tex'):
+        """
+        Export tree as TikZ code for LaTeX integration.
+
+        Generates publication-ready LaTeX code that can be included
+        directly in thesis or papers.
+
+        Args:
+            filename: Output filename for TikZ code
+        """
+        pos = self._hierarchical_layout()
+
+        with open(filename, 'w') as f:
+            f.write("% Branch-and-Price Tree - TikZ Code\n")
+            f.write("% Include in LaTeX with: \\usepackage{tikz}\n")
+            f.write("% \\usetikzlibrary{arrows.meta,positioning,shapes}\n\n")
+            f.write("\\begin{tikzpicture}[\n")
+            f.write("  node distance=2cm,\n")
+            f.write("  every node/.style={circle, draw, minimum size=1.2cm, font=\\small},\n")
+            f.write("  active/.style={fill=blue!20},\n")
+            f.write("  fathomed/.style={fill=red!20},\n")
+            f.write("  integral/.style={fill=green!20},\n")
+            f.write("  edge from parent/.style={draw, -Latex, thick}\n")
+            f.write("]\n\n")
+
+            # Write nodes
+            for node_id in sorted(self.G.nodes()):
+                node_data = self.G.nodes[node_id]
+                x, y = pos[node_id]
+
+                # Determine style
+                if node_data['status'] == 'fathomed':
+                    if node_data.get('fathom_reason') == 'integral':
+                        style = "integral"
+                    else:
+                        style = "fathomed"
+                else:
+                    style = "active"
+
+                # Node label
+                label = self._get_academic_node_label(node_id, node_data)
+
+                # LP value
+                lp_val = f"{node_data['lp_bound']:.2f}" if node_data['lp_bound'] < float('inf') else "inf"
+
+                f.write(f"\\node[{style}] (n{node_id}) at ({x*3:.2f},{y*3:.2f}) {{{label}}};\n")
+                f.write(f"\\node[above=0.3cm of n{node_id}, draw=none] {{\\small {lp_val}}};\n")
+
+            f.write("\n% Edges\n")
+
+            # Write edges
+            for parent, child in self.G.edges():
+                child_node = self.bnp_solver.nodes[child]
+                edge_label = self._get_latex_edge_label(self.bnp_solver.nodes[parent], child_node)
+
+                # Clean up LaTeX for TikZ
+                edge_label_clean = edge_label.replace('$', '')
+
+                f.write(f"\\draw (n{parent}) -- node[midway, fill=white, draw=none, font=\\scriptsize] {{{edge_label_clean}}} (n{child});\n")
+
+            f.write("\n\\end{tikzpicture}\n")
+
+        print(f"\n✅ TikZ code exported to: {filename}")
+        print(f"   Include in LaTeX with: \\input{{{filename}}}")
+        print(f"   Required packages: \\usepackage{{tikz}}")
+        print(f"   Required libraries: \\usetikzlibrary{{arrows.meta,positioning,shapes}}")
