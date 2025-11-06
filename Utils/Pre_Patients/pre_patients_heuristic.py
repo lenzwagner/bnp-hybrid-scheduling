@@ -89,14 +89,17 @@ def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learn
         if available_t:
             t_res = available_t[0]
             Max_t[(t_res, entry_day)] -= nr_c[pf]
-            print(f"Reserved therapist {t_res} on day {entry_day} for PF patient {pf} (count: {nr_c[pf]})")
+            if verbose:
+                print(f"Reserved therapist {t_res} on day {entry_day} for PF patient {pf} (count: {nr_c[pf]})")
         else:
-            print(f"Infeasible: No therapist available for PF patient {pf} (count: {nr_c[pf]}) on entry day {entry_day}")
+            if verbose:
+                print(f"Infeasible: No therapist available for PF patient {pf} (count: {nr_c[pf]}) on entry day {entry_day}")
             return 'Infeasible'
 
     # === Step 1: Schedule each patient ===
     for p in P:
-        print(f"\nScheduling patient {p} with Req: {CReq_p[p]} (count: {nr_c[p]})")
+        if verbose:
+            print(f"\nScheduling patient {p} with Req: {CReq_p[p]} (count: {nr_c[p]})")
         d_current = Entry_p[p]
         cum_effective = 0
 
@@ -105,20 +108,24 @@ def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learn
             _, assigned = min(available_therapists)
             Max_t[(assigned, d_current)] -= nr_c[p]
             therapist_load[assigned] += nr_c[p]
-            print('Counter', nr_c[p])
+            if verbose:
+                print('Counter', nr_c[p])
             x[(p, assigned, d_current)] = nr_c[p]
             cum_effective += 1
             therapist_assignments[p] = assigned
-            print(f"Day {d_current}: Therapy with therapist {assigned} (first session, count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
+            if verbose:
+                print(f"Day {d_current}: Therapy with therapist {assigned} (first session, count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
         else:
-            print(f"No therapist available for first session of patient {p} (count: {nr_c[p]}) on day {d_current}")
+            if verbose:
+                print(f"No therapist available for first session of patient {p} (count: {nr_c[p]}) on day {d_current}")
             continue
 
         d_current += 1
 
         while cum_effective < CReq_p[p]:
             if d_current > max(D):
-                print(f"Patient {p} could not be fully treated within planning horizon.")
+                if verbose:
+                    print(f"Patient {p} could not be fully treated within planning horizon.")
                 break
 
             t = therapist_assignments[p]
@@ -135,24 +142,28 @@ def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learn
                     Max_t[(t, d_current)] -= nr_c[p]
                     therapist_load[t] += nr_c[p]
                     cum_effective += 1
-                    print(f"Day {d_current}: Therapy (FS rule, count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
+                    if verbose:
+                        print(f"Day {d_current}: Therapy (FS rule, count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
                 else:
                     y[(p, d_current)] = 1
                     app_count[p] += 1
                     cum_effective += theta_app_eff
-                    print(f"Day {d_current}: App (FS satisfied). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: {theta_app_eff:.2f}")
+                    if verbose:
+                        print(f"Day {d_current}: App (FS satisfied). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: {theta_app_eff:.2f}")
             else:
                 if (CReq_p[p] - cum_effective) >= 1 and Max_t[(t, d_current)] >= nr_c[p]:
                     x[(p, t, d_current)] = nr_c[p]
                     Max_t[(t, d_current)] -= nr_c[p]
                     therapist_load[t] += nr_c[p]
                     cum_effective += 1
-                    print(f"Day {d_current}: Therapy (accelerating discharge, count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
+                    if verbose:
+                        print(f"Day {d_current}: Therapy (accelerating discharge, count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
                 else:
                     y[(p, d_current)] = 1
                     app_count[p] += 1
                     cum_effective += theta_app_eff
-                    print(f"Day {d_current}: App. CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: {theta_app_eff:.2f}")
+                    if verbose:
+                        print(f"Day {d_current}: App. CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: {theta_app_eff:.2f}")
 
             d_current += 1
 
@@ -162,7 +173,8 @@ def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learn
             last_day = max(last_days) if last_days else Entry_p[p]
 
             if not any((p, tt, last_day) in x for tt in T):
-                print(f"Last session not therapy. Trying to switch or extend...")
+                if verbose:
+                    print(f"Last session not therapy. Trying to switch or extend...")
                 switched = False
                 if Max_t[(t, last_day)] >= nr_c[p]:
                     x[(p, t, last_day)] = nr_c[p]
@@ -172,19 +184,22 @@ def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learn
                         del y[(p, last_day)]
                         app_count[p] -= 1
                     cum_effective = cum_effective - theta_app_eff + 1
-                    print(f"Day {last_day}: Last switched to therapy (count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
+                    if verbose:
+                        print(f"Day {last_day}: Last switched to therapy (count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
                     switched = True
                 else:
                     while not switched:
                         last_day += 1
                         if last_day > max(D):
-                            print(f"Patient {p} could not be assigned final therapy within planning horizon.")
+                            if verbose:
+                                print(f"Patient {p} could not be assigned final therapy within planning horizon.")
                             break
                         theta_app_eff = compute_app_effectiveness(app_count[p], theta_app_type, learning_params)
                         y[(p, last_day)] = 1
                         app_count[p] += 1
                         cum_effective += theta_app_eff
-                        print(f"Day {last_day}: App added. CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: {theta_app_eff:.2f}")
+                        if verbose:
+                            print(f"Day {last_day}: App added. CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: {theta_app_eff:.2f}")
 
                         if Max_t[(t, last_day)] >= nr_c[p]:
                             x[(p, t, last_day)] = nr_c[p]
@@ -194,15 +209,18 @@ def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learn
                                 del y[(p, last_day)]
                                 app_count[p] -= 1
                             cum_effective = cum_effective - theta_app_eff + 1
-                            print(f"Day {last_day}: Therapy assigned after app extension (count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
+                            if verbose:
+                                print(f"Day {last_day}: Therapy assigned after app extension (count: {nr_c[p]}). CumEff: {cum_effective:.2f}, AppCount: {app_count[p]}, AppEff: -")
                             switched = True
 
             LOS[p] = last_day - Entry_p[p] + 1
             cumEff_dict[p] = cum_effective
-            print(f"Patient {p} LOS: {LOS[p]}, final CumEff: {cum_effective:.2f}")
+            if verbose:
+                print(f"Patient {p} LOS: {LOS[p]}, final CumEff: {cum_effective:.2f}")
             LOS_total += LOS[p]
 
-    print(f"\nGlobal total LOS: {LOS_total}")
+    if verbose:
+        print(f"\nGlobal total LOS: {LOS_total}")
 
     filtered_x = {(p, t, d): v for (p, t, d), v in x.items() if d > 0}
 

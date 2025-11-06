@@ -117,21 +117,22 @@ class ColumnGeneration:
                 daily=self.app_data["daily"][0],
                 pttr_scenario=self.pttr,
                 seed=self.seed,
-                plot_show=self.show_plots
+                plot_show=self.show_plots,
+                verbose=self.verbose
             )
 
         # Create mappings
         if self.verbose:
             print("[Setup] Creating patient and therapist mappings...")
         self.Nr, self.Req_agg, self.Entry_agg, self.Nr_agg, self.agg_to_patient = \
-            get_unique_combinations_and_list_with_dicts(self.Req, self.Entry, self.P)
+            get_unique_combinations_and_list_with_dicts(self.Req, self.Entry, self.P, verbose=self.verbose)
 
         self.P_Pre, self.P_F, self.P_Post, self.P_Join, self.E_dict = \
             categorize_patients_full(self.Entry_agg, self.D)
 
         self.G_C, self.g_j_C, self.Q_jd_Agg, self.therapist_to_type = \
             aggregate_therapists(self.T, self.Max_t, self.app_data["W_on"][0],
-                                 self.app_data["W_off"][0], self.D_Ext)
+                                 self.app_data["W_off"][0], self.D_Ext, verbose=self.verbose)
         self.S_Bound = {}
         for p_idx in self.P_Join:
             self.S_Bound[p_idx] = max(10, math.ceil(
@@ -182,7 +183,7 @@ class ColumnGeneration:
             print("[Setup] Building compact model...")
         self.problem = Problem_d(
             self.data, self.Req, self.Entry, self.Max_t, self.app_data,
-            self.pre_x_filt, self.W_coeff, 10, self.learn_method
+            self.pre_x_filt, self.W_coeff, 10, self.learn_method, verbose=self.verbose
         )
         self.problem.buildModel()
 
@@ -316,6 +317,9 @@ class ColumnGeneration:
 
             # Solve subproblems in parallel
             print(f"Starting subproblem solving for {len(patients_to_solve)} of {len(self.P_Join)} patients on {multiprocessing.cpu_count()} cores.")
+            filtered_out_patients = set(self.P_Join) - set(patients_to_solve)
+            if filtered_out_patients:
+                print(f"Filtered out patients: {sorted(filtered_out_patients)}")
             subproblem_start_time = time.time()
             results_from_workers_with_time = self._solve_subproblems_parallel(
                 patients_to_solve, duals_gamma, duals_pi
@@ -627,9 +631,9 @@ def solve_subproblem_for_patient(args):
     subproblem.buildModel()
 
     # Gurobi parameters for solution pool
+    subproblem.Model.Params.OutputFlag = 0  # Set first to suppress parameter setting messages
     subproblem.Model.Params.PoolSearchMode = 2
     subproblem.Model.Params.PoolSolutions = 50
-    subproblem.Model.Params.OutputFlag = 0
     subproblem.solModel()
 
     newly_generated_columns = []

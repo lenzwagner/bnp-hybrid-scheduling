@@ -2,7 +2,7 @@ import gurobipy as gu
 from Utils.Generell.utils import *
 
 class MasterProblem_d:
-    def __init__(self, df, T_Max, Nr_agg, Req, pre_x, E_dict, verbose=True):
+    def __init__(self, df, T_Max, Nr_agg, Req, pre_x, E_dict, verbose=False):
         self.P_Full = df['P_Full'].dropna().astype(int).unique().tolist()
         self.P_Pre = df['P_Pre'].dropna().astype(int).unique().tolist()
         self.P_Join = df['P_Join'].dropna().astype(int).unique().tolist()
@@ -13,8 +13,13 @@ class MasterProblem_d:
         self.G = df['G'].dropna().astype(int).unique().tolist()
         self.A = [1]
         self._solve_counter = 0
-        self.Model = gu.Model("MasterProblem")
-        self.Model.Params.Seed = 0  # Fixed seed for reproducibility across different PCs
+
+        # Create Gurobi environment with suppressed output
+        env = gu.Env(empty=True)
+        env.setParam('OutputFlag', 0)
+        env.start()
+        self.Model = gu.Model("MasterProblem", env=env)
+        self.Model.Params.Seed = 0  #
         self.cons_p_max = {}
         self.cons_los = {}
         self.E = E_dict
@@ -99,7 +104,7 @@ class MasterProblem_d:
         return all_integer, obj, most_frac_info
 
     def solRelModel(self):
-        self.Model.Params.OutputFlag = 1 if self.verbose else 0
+        self.Model.Params.OutputFlag = 0 if self.verbose else 0
         self.Model.Params.Method = 2
         self._solve_counter += 1
 
@@ -149,8 +154,8 @@ class MasterProblem_d:
         most_frac_info = None
 
         # Check all lambda variables
-        if self.verbose:
-            print(f'Lambda items: {len(self.lmbda.items())} variables')
+        #if self.verbose:
+            #print(f'Lambda items: {len(self.lmbda.items())} variables')
         for (n, a), var in self.lmbda.items():
             x_val = var.X
 
@@ -230,8 +235,8 @@ class MasterProblem_d:
                         if p in self.P_Join:
                             solution_key = (p, s)
                             active_keys.append(solution_key)
-                            if v.Obj > 1e-2:
-                                print(f'{v.VarName} = {v.X}, Obj-Coefficient: {round(v.Obj, 2)}')
+                            #if v.Obj > 1e-2:
+                                #print(f'{v.VarName} = {v.X}, Obj-Coefficient: {round(v.Obj, 2)}')
 
         else:
             active_keys = [k for k, v in lambda_list_cg.items() if v > 0]

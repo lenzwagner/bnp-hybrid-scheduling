@@ -29,7 +29,11 @@ class Subproblem:
         self.duals_gamma = duals_gamma
         self.duals_pi = duals_pi
         self.duals_delta = duals_delta
-        self.Model = gu.Model("Subproblem")
+        # Create Gurobi environment with suppressed output
+        env = gu.Env(empty=True)
+        env.setParam('OutputFlag', 0)
+        env.start()
+        self.Model = gu.Model("Subproblem", env=env)
         self.Model.Params.Seed = 0  # Fixed seed for reproducibility across different PCs
         self.M = max(self.D) + 1
         self.S_Bound = S_Bound[self.P]
@@ -112,6 +116,7 @@ class Subproblem:
         return [i * Y_bound / (self.num_tangents - 1) for i in range(self.num_tangents)]
 
     def buildModel(self):
+        self.Model.Params.OutputFlag = 0  # Set first to suppress parameter setting messages
         self.Model.Params.MIPGap = 0.05
         self.Model.Params.MIPFocus = 1
         self.Model.Params.Heuristics = 0.5
@@ -121,7 +126,6 @@ class Subproblem:
         self.Model.Params.IntFeasTol = 1e-5
         self.Model.Params.FeasibilityTol = 1e-6
         self.Model.Params.IntegralityFocus = 0
-        self.Model.Params.OutputFlag = 0
         self.genVars()
         self.genCons()
         self.genLearnCons()

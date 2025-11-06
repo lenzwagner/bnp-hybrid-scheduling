@@ -409,8 +409,8 @@ class BranchAndPrice:
                 var.VType = gu.GRB.INTEGER
 
             # Solve as IP
-            master.Model.Params.OutputFlag = 1
-            master.Model.Params.TimeLimit = 300  # 5 minute time limit
+            master.Model.Params.OutputFlag = 0
+            master.Model.Params.TimeLimit = 300
             master.Model.update()
 
             self.logger.info(f"[{context}] Starting optimization...")
@@ -1172,8 +1172,8 @@ class BranchAndPrice:
                     key = (n, j, t)
                     beta_values[key] = beta_values.get(key, 0.0) + lambda_val
 
-        print(f"  Found {len(beta_values)} non-zero beta values")
-        print('With beta values:', beta_values, sep='\n')
+        #print(f"  Found {len(beta_values)} non-zero beta values")
+        #print('With beta values:', beta_values, sep='\n')
 
         # Find most fractional beta
         best_candidate = None
@@ -1215,7 +1215,7 @@ class BranchAndPrice:
                         'assignment': (n, j, t)
                     }
 
-        print('Best Beta', best_candidate)
+        #print('Best Beta', best_candidate)
 
         if best_candidate is None:
             self.logger.error(f"  ❌ No fractional beta found!")
@@ -2439,9 +2439,6 @@ class BranchAndPrice:
 
         # Detailed Processing Log
         if self.stats['node_processing_order']:
-            self._print_always("-" * 100)
-            self._print_always(" NODE PROCESSING LOG ".center(100, "-"))
-            self._print_always("-" * 100)
 
             order_str = " -> ".join(map(str, self.stats['node_processing_order']))
             self._print_always(f"Processing Order: {order_str}\n")
@@ -2841,9 +2838,10 @@ class BranchAndPrice:
             self.logger.error("No incumbent solution available!")
             return None
 
-        print("\n" + "=" * 100)
-        print(" EXTRACTING OPTIMAL SCHEDULES ".center(100, "="))
-        print("=" * 100)
+        if self.verbose:
+            print("\n" + "=" * 100)
+            print(" EXTRACTING OPTIMAL SCHEDULES ".center(100, "="))
+            print("=" * 100)
 
         # Find the node with the incumbent solution
         incumbent_node = self._find_incumbent_node()
@@ -2853,17 +2851,19 @@ class BranchAndPrice:
         node = self.nodes[incumbent_node]
         lambda_assignments = self.incumbent_lambdas
 
-        print(f"\nExtracting from Node {incumbent_node}")
-        print(f"  Objective Value: {self.incumbent:.6f}")
-        print(f"  Status: {node.status}")
-        print(f"  Assignments: {lambda_assignments}")
+        if self.verbose:
+            print(f"\nExtracting from Node {incumbent_node}")
+            print(f"  Objective Value: {self.incumbent:.6f}")
+            print(f"  Status: {node.status}")
+            print(f"  Assignments: {lambda_assignments}")
 
         # Disaggregate to individual patients
         patient_schedules = {}
         profile_counters = {}
 
         for (profile, col_id), count in sorted(lambda_assignments.items()):
-            print(f"\n  Profile {profile}, Column {col_id}: {count} patients")
+            if self.verbose:
+                print(f"\n  Profile {profile}, Column {col_id}: {count} patients")
 
             # Get schedule from column pool
             if (profile, col_id) not in node.column_pool:
@@ -2973,13 +2973,14 @@ class BranchAndPrice:
 
         self.logger.info("=" * 100)
 
-        print(f"\nActive columns: {len(lambda_assignments)}")
+        if self.verbose:
+            print(f"\nActive columns: {len(lambda_assignments)}")
 
-        print(f"Total expected patients (Nr_agg): {sum(self.cg_solver.Nr_agg[k] for k in sorted(self.cg_solver.P_F + self.cg_solver.P_Post))}")
-        print(f"Profiles in lambda_assignments: {set(p for p, _ in lambda_assignments.keys())}")
-        print(f"P_Focus: {self.cg_solver.P_F}")
-        print(f"P_Post: {self.cg_solver.P_Post}")
-        print(f"P_Join: {self.cg_solver.P_Join}")
+            print(f"Total expected patients (Nr_agg): {sum(self.cg_solver.Nr_agg[k] for k in sorted(self.cg_solver.P_F + self.cg_solver.P_Post))}")
+            print(f"Profiles in lambda_assignments: {set(p for p, _ in lambda_assignments.keys())}")
+            print(f"P_Focus: {self.cg_solver.P_F}")
+            print(f"P_Post: {self.cg_solver.P_Post}")
+            print(f"P_Join: {self.cg_solver.P_Join}")
 
         return {
             'patient_schedules': patient_schedules,

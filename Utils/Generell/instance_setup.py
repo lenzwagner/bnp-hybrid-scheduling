@@ -72,7 +72,7 @@ def print_comparison_results(results):
         print(f"  LOS: {details['LOS']}")
 
 
-def get_unique_combinations_and_list_with_dicts(R_p, Entry_p, P, filter_entry_ge_1=False):
+def get_unique_combinations_and_list_with_dicts(R_p, Entry_p, P, filter_entry_ge_1=False, verbose=False):
     """
     Identifies unique patient combinations based on stay duration and entry date.
 
@@ -85,6 +85,7 @@ def get_unique_combinations_and_list_with_dicts(R_p, Entry_p, P, filter_entry_ge
         Entry_p (dict): Patient entry date dictionary
         P (list): List of patient IDs to consider
         filter_entry_ge_1 (bool): If True, only consider patients with entry date >= 1
+        verbose (bool): If True, print detailed output
 
     Returns:
         Tuple containing:
@@ -135,13 +136,14 @@ def get_unique_combinations_and_list_with_dicts(R_p, Entry_p, P, filter_entry_ge
             patient_to_profile_mapping[patient] = idx
 
     # Output: which patients were combined
-    print("\nUnique patient groupings:")
-    for idx, (combo, patients) in enumerate(unique_combinations.items(), start=1):
-        print(f"Group {idx}: Stay Duration = {combo[0]}, Entry Date = {combo[1]}, Patients = {patients}")
+    if verbose:
+        print("\nUnique patient groupings:")
+        for idx, (combo, patients) in enumerate(unique_combinations.items(), start=1):
+            print(f"Group {idx}: Stay Duration = {combo[0]}, Entry Date = {combo[1]}, Patients = {patients}")
 
-    print(f"\nPatient to Profile Mapping:")
-    for patient, profile in patient_to_profile_mapping.items():
-        print(f"Patient {patient} -> Profile {profile}")
+        print(f"\nPatient to Profile Mapping:")
+        for patient, profile in patient_to_profile_mapping.items():
+            print(f"Patient {patient} -> Profile {profile}")
 
     return N_c, R_p_c, Entry_p_c, Profile_patient_count, patient_to_profile_mapping
 
@@ -221,7 +223,6 @@ def generate_patient_data(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scena
     working_days = math.ceil(total_days * W_coeff)
     daily_capacity = daily
     total_capacity = working_days * daily_capacity * T
-    print('FFFF', total_days, working_days, daily_capacity, total_capacity)
 
     # Define PTTR scenarios
     utilization_rates = {
@@ -253,14 +254,14 @@ def generate_patient_data(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scena
 
     for t in range(1, T + 1):
         therapist_start_days[t] = start_days[(t - 1) % len(start_days)]
-        print(f'Start_day t{t}: {therapist_start_days[t]}')
+        #print(f'Start_day t{t}: {therapist_start_days[t]}')
         start_offset = therapist_start_days[t]  # e.g. d=1
 
         for d in D_full:
 
             day_of_week = (d - start_offset) % 7
 
-            print(f'Day_of_week t{t} at d={d}: {day_of_week}')
+            #print(f'Day_of_week t{t} at d={d}: {day_of_week}')
 
             if 0 <= day_of_week < W_on:
                 Max_t[(t, d)] = daily_capacity
@@ -272,10 +273,10 @@ def generate_patient_data(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scena
     for d in D_full:
         therapists_working = sum(1 for t in range(1, T + 1) if Max_t[(t, d)] > 0)
         day_counts[(d - 1) % 7] += therapists_working
-    print("\n=== Therapist Availability by Day of Week ===")
+    #print("\n=== Therapist Availability by Day of Week ===")
     for dow in day_counts:
         avg_therapists = day_counts[dow] / (total_days // 7)
-        print(f"Day {dow} (0=Monday, 5=Saturday, 6=Sunday): Avg therapists = {avg_therapists:.2f}")
+        #print(f"Day {dow} (0=Monday, 5=Saturday, 6=Sunday): Avg therapists = {avg_therapists:.2f}")
 
     # Generate patient distribution based on DRG proportions
     patients_per_group = {}
@@ -426,7 +427,7 @@ def generate_patient_data(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scena
 
     return requirements_dict, entry_day_dict, Max_t, P, D, D_planning, D_full, list(range(1, T + 1)), M_p, W_coeff
 
-def aggregate_therapists(T, Max_t, W_on, W_off, D):
+def aggregate_therapists(T, Max_t, W_on, W_off, D, verbose=False):
     # Create therapist types based on W_on, W_off, and capacity
     therapist_types = {}
     G_C = []
@@ -434,11 +435,13 @@ def aggregate_therapists(T, Max_t, W_on, W_off, D):
     Q_jd_Agg = {}  # Aggregated capacity per type and day
     therapist_to_type = {}  # Mapping of therapist to type
 
-    print("Starting therapist aggregation...")
+    if verbose:
+        print("Starting therapist aggregation...")
     for t in T:
         # Construct key
         key = (W_on, W_off, tuple(Max_t[t, d] for d in D))
-        print(f"Therapist {t}: key = {key}")
+        if verbose:
+            print(f"Therapist {t}: key = {key}")
 
         if key not in therapist_types:
             j = len(G_C) + 1
@@ -446,7 +449,8 @@ def aggregate_therapists(T, Max_t, W_on, W_off, D):
             G_C.append(j)
             g_j_C[j] = 0
             Q_jd_Agg[j] = {d: 0 for d in D}
-            print(f"  --> New type created: Type {j} with key {key}")
+            if verbose:
+                print(f"  --> New type created: Type {j} with key {key}")
 
         j = therapist_types[key]
         therapist_to_type[t] = j
@@ -457,17 +461,18 @@ def aggregate_therapists(T, Max_t, W_on, W_off, D):
 
     Q_flat = {(t,d): Q_jd_Agg[t][d] for t in Q_jd_Agg for d in Q_jd_Agg[t]}
 
-    print("\n=== Aggregation Results ===")
-    print(f"G_C (therapist types): {G_C}")
-    print(f"g_j_C (number per type): {g_j_C}")
-    print(f"Q_flat (aggregated capacities): {Q_flat}")
-    print(f"therapist_to_type mapping: {therapist_to_type}")
-    print("===========================\n")
+    if verbose:
+        print("\n=== Aggregation Results ===")
+        print(f"G_C (therapist types): {G_C}")
+        print(f"g_j_C (number per type): {g_j_C}")
+        print(f"Q_flat (aggregated capacities): {Q_flat}")
+        print(f"therapist_to_type mapping: {therapist_to_type}")
+        print("===========================\n")
 
     return G_C, g_j_C, Q_flat, therapist_to_type
 
 
-def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scenario='medium', seed=42, plot_show=False):
+def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scenario='medium', seed=42, plot_show=False, verbose=False):
     """
     Generate patient data based on computational study specifications.
 
@@ -480,6 +485,7 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     - pttr_scenario: 'light' (50%), 'medium' (70%), or 'heavy' (90%) utilization
     - seed: Random seed for reproducibility
     - plot_show: Whether to show plots
+    - verbose: If True, print detailed output
 
     Returns:
     - requirements_dict: Dictionary with patient requirements
@@ -557,8 +563,6 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     max_req = max(group['los_max'] for group in drg_data.values())
     D_max = int(np.ceil(max_req * 1 / W_coeff) + 2)
 
-    print('DDDDDD', D_max, W_coeff)
-
     # Define horizons according to study
     D = list(range(1, D_focus + 1))  # Focus horizon
     D_planning = list(range(1, D_focus + D_max + 1))  # Planning horizon
@@ -570,8 +574,6 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     working_days = math.ceil(total_days * W_coeff)
     daily_capacity = daily
     total_capacity = working_days * daily_capacity * T
-    print('FFFF', total_days, working_days, daily_capacity, total_capacity)
-
 
     # Define PTTR scenarios
     utilization_rates = {
@@ -603,14 +605,14 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
 
     for t in range(1, T + 1):
         therapist_start_days[t] = start_days[(t - 1) % len(start_days)]
-        print(f'Start_day t{t}: {therapist_start_days[t]}')
+        #print(f'Start_day t{t}: {therapist_start_days[t]}')
         start_offset = therapist_start_days[t]  # e.g. d=1
 
         for d in D_full:
 
             day_of_week = (d - start_offset) % 7
 
-            print(f'Day_of_week t{t} at d={d}: {day_of_week}')
+            #print(f'Day_of_week t{t} at d={d}: {day_of_week}')
 
             if 0 <= day_of_week < W_on:
                 Max_t[(t, d)] = daily_capacity
@@ -622,10 +624,11 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     for d in D_full:
         therapists_working = sum(1 for t in range(1, T + 1) if Max_t[(t, d)] > 0)
         day_counts[(d - 1) % 7] += therapists_working
-    print("\n=== Therapist Availability by Day of Week ===")
-    for dow in day_counts:
-        avg_therapists = day_counts[dow] / (total_days // 7)
-        print(f"Day {dow} (0=Monday, 5=Saturday, 6=Sunday): Avg therapists = {avg_therapists:.2f}")
+    if verbose:
+        print("\n=== Therapist Availability by Day of Week ===")
+        for dow in day_counts:
+            avg_therapists = day_counts[dow] / (total_days // 7)
+            print(f"Day {dow} (0=Monday, 5=Saturday, 6=Sunday): Avg therapists = {avg_therapists:.2f}")
 
     # Generate patient distribution based on DRG proportions
     patients_per_group = {}
@@ -713,44 +716,45 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     df = pd.DataFrame(patients)
 
     # Print summary statistics
-    print(f"\n=== Patient Data Generation Summary ===")
-    print(f"PTTR Scenario: {pttr_scenario.upper()} ({utilization * 100:.0f}% utilization)")
-    print(f"Target Sessions: {target_sessions:,}")
-    print(f"Generated Patients: {len(patients):,}")
-    print(f"Patient-to-Therapist Ratio: {len(patients) / T:.1f}:1")
-    print(f"Total Therapist Capacity: {total_capacity:,} sessions")
-    print(f"Average LOS: {avg_mean_unweighted:.2f} sessions")
+    if verbose:
+        print(f"\n=== Patient Data Generation Summary ===")
+        print(f"PTTR Scenario: {pttr_scenario.upper()} ({utilization * 100:.0f}% utilization)")
+        print(f"Target Sessions: {target_sessions:,}")
+        print(f"Generated Patients: {len(patients):,}")
+        print(f"Patient-to-Therapist Ratio: {len(patients) / T:.1f}:1")
+        print(f"Total Therapist Capacity: {total_capacity:,} sessions")
+        print(f"Average LOS: {avg_mean_unweighted:.2f} sessions")
 
-    print(f"\n=== Horizon Definitions ===")
-    print(f"Focus Horizon (D): {min(D)} to {max(D)} ({len(D)} days)")
-    print(f"Planning Horizon: {min(D_planning)} to {max(D_planning)} ({len(D_planning)} days)")
-    print(f"Extended Horizon (D_ext): {min(D_ext)} to {max(D_ext)} ({len(D_ext)} days)")
+        print(f"\n=== Horizon Definitions ===")
+        print(f"Focus Horizon (D): {min(D)} to {max(D)} ({len(D)} days)")
+        print(f"Planning Horizon: {min(D_planning)} to {max(D_planning)} ({len(D_planning)} days)")
+        print(f"Extended Horizon (D_ext): {min(D_ext)} to {max(D_ext)} ({len(D_ext)} days)")
 
-    print(f"\n=== DRG Group Distribution ===")
-    print(df['drg_group'].value_counts().sort_index())
+        print(f"\n=== DRG Group Distribution ===")
+        print(df['drg_group'].value_counts().sort_index())
 
-    print(f"\n=== Estimated Distribution Parameters ===")
-    for drg in ['E65A', 'E65B', 'E65C']:
-        drg_info = drg_data[drg]
-        print(f"\n{drg} ({drg_info['distribution']} distribution):")
-        print(f"  Input: min={drg_info['los_min']}, max={drg_info['los_max']}, mean={drg_info['los_mean']}")
-
-        if drg_info['distribution'] == 'lognormal':
-            print(f"  Calculated Parameters: μ_L = {drg_info['mu_L']:.3f}, σ_L = {drg_info['sigma_L']:.3f}")
-        elif drg_info['distribution'] == 'gamma':
-            print(f"  Calculated Parameters: k = {drg_info['k']:.2f}, θ = {drg_info['theta']:.2f}")
-            print(f"  Approximated σ = {drg_info['sigma_approx']:.2f}")
-
-    print(f"\n=== Requirements Statistics by DRG Group ===")
-    for drg in ['E65A', 'E65B', 'E65C']:
-        if drg in df['drg_group'].values:
+        print(f"\n=== Estimated Distribution Parameters ===")
+        for drg in ['E65A', 'E65B', 'E65C']:
             drg_info = drg_data[drg]
             print(f"\n{drg} ({drg_info['distribution']} distribution):")
+            print(f"  Input: min={drg_info['los_min']}, max={drg_info['los_max']}, mean={drg_info['los_mean']}")
+
             if drg_info['distribution'] == 'lognormal':
-                print(f"  Parameters: μ_L = {drg_info['mu_L']:.3f}, σ_L = {drg_info['sigma_L']:.3f}")
-            else:
-                print(f"  Parameters: k = {drg_info['k']:.2f}, θ = {drg_info['theta']:.2f}")
-            print(df[df['drg_group'] == drg]['requirements'].describe())
+                print(f"  Calculated Parameters: μ_L = {drg_info['mu_L']:.3f}, σ_L = {drg_info['sigma_L']:.3f}")
+            elif drg_info['distribution'] == 'gamma':
+                print(f"  Calculated Parameters: k = {drg_info['k']:.2f}, θ = {drg_info['theta']:.2f}")
+                print(f"  Approximated σ = {drg_info['sigma_approx']:.2f}")
+
+        print(f"\n=== Requirements Statistics by DRG Group ===")
+        for drg in ['E65A', 'E65B', 'E65C']:
+            if drg in df['drg_group'].values:
+                drg_info = drg_data[drg]
+                print(f"\n{drg} ({drg_info['distribution']} distribution):")
+                if drg_info['distribution'] == 'lognormal':
+                    print(f"  Parameters: μ_L = {drg_info['mu_L']:.3f}, σ_L = {drg_info['sigma_L']:.3f}")
+                else:
+                    print(f"  Parameters: k = {drg_info['k']:.2f}, θ = {drg_info['theta']:.2f}")
+                print(df[df['drg_group'] == drg]['requirements'].describe())
 
     # Generate plots if requested
     if plot_show:
@@ -809,9 +813,10 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     # ============================================================================
     from Utils.feasability_checker import check_instance_feasibility_extended, repair_infeasible_instance
 
-    print("\n" + "=" * 100)
-    print("PERFORMING INSTANCE FEASIBILITY CHECK".center(100))
-    print("=" * 100 + "\n")
+    if verbose:
+        print("\n" + "=" * 100)
+        print("PERFORMING INSTANCE FEASIBILITY CHECK".center(100))
+        print("=" * 100 + "\n")
 
     is_feasible, feas_results = check_instance_feasibility_extended(
         R_p=requirements_dict,
@@ -822,13 +827,14 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
         D_Full=D_full,
         T=list(range(1, T + 1)),
         W_coeff=W_coeff,
-        verbose=True
+        verbose=verbose
     )
 
     if not is_feasible:
-        print("\n" + "=" * 100)
-        print("⚠️  INSTANCE IS INFEASIBLE - ATTEMPTING AUTOMATIC REPAIR".center(100))
-        print("=" * 100 + "\n")
+        if verbose:
+            print("\n" + "=" * 100)
+            print("⚠️  INSTANCE IS INFEASIBLE - ATTEMPTING AUTOMATIC REPAIR".center(100))
+            print("=" * 100 + "\n")
 
         # Attempt automatic repair
         requirements_dict, entry_day_dict, Max_t = repair_infeasible_instance(
@@ -841,13 +847,14 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
         )
 
         # Re-check after repair
-        print("\n" + "=" * 100)
-        print("RE-CHECKING FEASIBILITY AFTER REPAIR".center(100))
-        print("=" * 100 + "\n")
+        if verbose:
+            print("\n" + "=" * 100)
+            print("RE-CHECKING FEASIBILITY AFTER REPAIR".center(100))
+            print("=" * 100 + "\n")
 
         is_feasible_after_repair, _ = check_instance_feasibility_extended(
             requirements_dict, entry_day_dict, Max_t, P, D, D_full,
-            list(range(1, T + 1)), W_coeff, verbose=True
+            list(range(1, T + 1)), W_coeff, verbose=verbose
         )
 
         if not is_feasible_after_repair:
@@ -865,12 +872,14 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
             )
             raise ValueError(error_msg)
         else:
-            print("\n" + "=" * 100)
-            print("✅ INSTANCE SUCCESSFULLY REPAIRED AND IS NOW FEASIBLE!".center(100))
-            print("=" * 100 + "\n")
+            if verbose:
+                print("\n" + "=" * 100)
+                print("✅ INSTANCE SUCCESSFULLY REPAIRED AND IS NOW FEASIBLE!".center(100))
+                print("=" * 100 + "\n")
     else:
-        print("\n" + "=" * 100)
-        print("✅ INSTANCE IS FEASIBLE - PROCEEDING WITH OPTIMIZATION".center(100))
-        print("=" * 100 + "\n")
+        if verbose:
+            print("\n" + "=" * 100)
+            print("✅ INSTANCE IS FEASIBLE - PROCEEDING WITH OPTIMIZATION".center(100))
+            print("=" * 100 + "\n")
 
     return requirements_dict, entry_day_dict, Max_t, P, D, D_planning, D_full, list(range(1, T + 1)), M_p, W_coeff

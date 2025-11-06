@@ -26,7 +26,7 @@ def main():
     # ===========================
 
     # Random seed
-    seed = 14
+    seed = 92
 
     # Learning parameters
     app_data = {
@@ -68,7 +68,7 @@ def main():
     search_strategy = 'bfs' # 'dfs' for Depth-First, 'bfs' for Best-Fit-Search
 
     # Output settings
-    save_lps = False  # Set to True to save LP and SOL files
+    save_lps = True # Set to True to save LP and SOL files
     verbose_output = False # Set to False to suppress all non-final output
 
     # Visualization settings
@@ -143,10 +143,10 @@ def main():
                                     branching_strategy=branching_strategy,
                                     search_strategy=search_strategy,
                                     verbose=verbose_output,
-                                    ip_heuristic_frequency=6,
-                                    early_incumbent_iteration=1,
+                                    ip_heuristic_frequency=10,
+                                    early_incumbent_iteration=2,
                                     save_lps=save_lps)
-        results = bnp_solver.solve(time_limit=3600, max_nodes=30)
+        results = bnp_solver.solve(time_limit=3600, max_nodes=300)
 
         # Extract optimal schedules
         if results['incumbent'] is not None:

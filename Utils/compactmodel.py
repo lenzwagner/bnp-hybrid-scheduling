@@ -4,7 +4,7 @@ import time
 from collections import defaultdict
 
 class Problem_d:
-    def __init__(self, df, Req, Entry, Max_t, app_data, pre_x, W_coeff, num_tangents, learn_method):
+    def __init__(self, df, Req, Entry, Max_t, app_data, pre_x, W_coeff, num_tangents, learn_method, verbose=False):
         self.P = df['P'].dropna().astype(int).unique().tolist()
         self.Entry = Entry
         self.D = df['D_Ext'].dropna().astype(int).unique().tolist()
@@ -13,7 +13,11 @@ class Problem_d:
         self.P_Focus = [p for p, d in self.Entry.items() if min(self.D_F) <= d <= max(self.D_F)]
         self.P_Post = [p for p, d in self.Entry.items() if d > max(self.D_F)]
         self.T = df['T'].dropna().astype(int).unique().tolist()
-        self.Model = gu.Model("Compact")
+        # Create Gurobi environment with suppressed output
+        env = gu.Env(empty=True)
+        env.setParam('OutputFlag', 0)
+        env.start()
+        self.Model = gu.Model("Compact", env=env)
         self.Model.Params.Seed = 0  # Fixed seed for reproducibility across different PCs
         self.Req = Req
         self.P_Join = [p for p, d in self.Entry.items() if d >= min(self.D_F)]
@@ -30,6 +34,7 @@ class Problem_d:
         self.aggregated = defaultdict(int)
         for (p, t, d), value in self.pre_x.items():
             self.aggregated[(t, d)] += value
+        self.verbose = verbose
 
 
     def buildModel(self):
@@ -223,16 +228,20 @@ class Problem_d:
         self.t1 = time.time()
         try:
             self.Model.Params.MIPGap = 0
-            print("Start optimization")
+            if self.verbose:
+                print("Start optimization")
             self.genObj()
             self.Model.update()
             self.Model.optimize()
             if self.Model.status == gu.GRB.OPTIMAL:
-                print(f"Optimal Objective Value: {self.Model.objVal}")
+                if self.verbose:
+                    print(f"Optimal Objective Value: {self.Model.objVal}")
             else:
-                print("No optimal solution found.")
+                if self.verbose:
+                    print("No optimal solution found.")
         except gu.GurobiError as e:
-            print('Error code ' + str(e.errno) + ': ' + str(e))
+            if self.verbose:
+                print('Error code ' + str(e.errno) + ': ' + str(e))
 
     def setStart(self, start_dict):
         for key, value in start_dict.items():

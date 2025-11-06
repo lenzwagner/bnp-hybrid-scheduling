@@ -24,7 +24,7 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
 
     print("\n" + "=" * 100)
     print("INITIAL COLUMN GENERATION: FEASIBILITY PRE-CHECK".center(100))
-    print("=" * 100 + "\n")
+    print("=" * 100)
 
     entry_demand = defaultdict(int)
     entry_patients_dict = defaultdict(list)
@@ -37,22 +37,22 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
     # Calculate available capacity AFTER pre-assignments
     capacity_copy = max_capacity.copy()
 
-    print("Accounting for pre-assignments...")
+    #print("Accounting for pre-assignments...")
     for (p, t, d), value in pre_assignments.items():
         if d > 0:
             if therapist_to_type and t in therapist_to_type:
                 j = therapist_to_type[t]
                 old_cap = capacity_copy.get((j, d), 0)
                 capacity_copy[(j, d)] = old_cap - value
-                if value > 0:
-                    print(f"  Pre-assigned: Patient {p}, T{t}→Type{j}, Day {d}, Value {value}")
+                #if value > 0:
+                    #print(f"  Pre-assigned: Patient {p}, T{t}→Type{j}, Day {d}, Value {value}")
             else:
                 old_cap = capacity_copy.get((t, d), 0)
                 capacity_copy[(t, d)] = old_cap - value
-                if value > 0:
-                    print(f"  Pre-assigned: Patient {p}, T{t}, Day {d}, Value {value}")
+                #if value > 0:
+                    #print(f"  Pre-assigned: Patient {p}, T{t}, Day {d}, Value {value}")
 
-    print("\nChecking entry day feasibility...\n")
+    #print("\nChecking entry day feasibility...\n")
 
     infeasible_periods = []
     for d in sorted(entry_demand.keys()):
@@ -64,27 +64,25 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
 
         if demand > available:
             deficit = demand - available
-            print(f"❌ Period {d}: Demand={demand}, Available={available} (DEFICIT: {deficit})")
-            print(f"   Patients: {entry_patients_dict[d][:10]}"
-                  f"{'...' if len(entry_patients_dict[d]) > 10 else ''}")
+            #print(f"❌ Period {d}: Demand={demand}, Available={available} (DEFICIT: {deficit})")
+            #print(f"   Patients: {entry_patients_dict[d][:10]}" f"{'...' if len(entry_patients_dict[d]) > 10 else ''}")
             infeasible_periods.append(d)
         else:
             slack = available - demand
             status = "✅" if slack >= 2 else "⚠️ " if slack >= 1 else "🔥"
-            print(f"{status} Period {d}: Demand={demand}, Available={available} (slack: {slack})")
+            #print(f"{status} Period {d}: Demand={demand}, Available={available} (slack: {slack})")
 
     if infeasible_periods:
-        print("\n" + "=" * 100)
-        print("❌ CRITICAL: INITIAL COLUMN GENERATION IS INFEASIBLE!".center(100))
-        print("=" * 100)
+        #print("\n" + "=" * 100)
+        #print("❌ CRITICAL: INITIAL COLUMN GENERATION IS INFEASIBLE!".center(100))
+        #print("=" * 100)
         raise ValueError(
             f"Initial column generation impossible: insufficient capacity at periods {infeasible_periods}\n"
             f"Please adjust instance parameters before running optimization."
         )
 
-    print("\n" + "=" * 100)
     print("✅ FEASIBILITY CHECK PASSED - GENERATING INITIAL COLUMNS".center(100))
-    print("=" * 100 + "\n")
+    print("=" * 100)
 
     # ============================================================================
     # INITIALIZATION
@@ -119,9 +117,9 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
     # ============================================================================
     # PASS 1: SMART INITIAL SCHEDULING
     # ============================================================================
-    print("=" * 100)
-    print("PASS 1: Smart Initial Scheduling".center(100))
-    print("=" * 100 + "\n")
+    #print("=" * 100)
+    #print("PASS 1: Smart Initial Scheduling".center(100))
+    #print("=" * 100 + "\n")
 
     # Sort patients: higher priority first (larger multiplier, earlier entry)
     sorted_patients = sorted(patients,
@@ -132,7 +130,7 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
         required_res = required_resources[p]
         capacity_multiplier = capacity_multipliers[p]
 
-        print(f"Patient {p}: Entry={entry_day}, Req={required_res}, Mult={capacity_multiplier}")
+        #print(f"Patient {p}: Entry={entry_day}, Req={required_res}, Mult={capacity_multiplier}")
 
         # === Find best therapist for entry day ===
         candidates = []
@@ -144,7 +142,7 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
                 candidates.append((score, t, available))
 
         if not candidates:
-            print(f"  ⚠️  Cannot schedule on entry day {entry_day}")
+            #print(f"  ⚠️  Cannot schedule on entry day {entry_day}")
             unscheduled_patients.append(p)
             continue
 
@@ -158,7 +156,7 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
         therapist_load[assigned_therapist] += capacity_multiplier
         assigned_resources = 1
 
-        print(f"  ✓ Entry: T{assigned_therapist}, Day {entry_day}")
+        #print(f"  ✓ Entry: T{assigned_therapist}, Day {entry_day}")
 
         # === Assign remaining sessions ===
         current_day_idx = days.index(entry_day)
@@ -174,22 +172,22 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
                 capacity[(assigned_therapist, current_day)] -= capacity_multiplier
                 therapist_load[assigned_therapist] += capacity_multiplier
                 assigned_resources += 1
-                print(f"  ✓ Session {assigned_resources}: T{assigned_therapist}, Day {current_day}")
+                #print(f"  ✓ Session {assigned_resources}: T{assigned_therapist}, Day {current_day}")
 
         if assigned_resources >= required_res:
-            print(f"  ✅ Patient {p} fully scheduled ({assigned_resources}/{required_res})\n")
+            #print(f"  ✅ Patient {p} fully scheduled ({assigned_resources}/{required_res})\n")
             scheduled_patients.append(p)
         else:
-            print(f"  ⚠️  Patient {p} partially scheduled ({assigned_resources}/{required_res})\n")
+            #print(f"  ⚠️  Patient {p} partially scheduled ({assigned_resources}/{required_res})\n")
             unscheduled_patients.append(p)
 
     # ============================================================================
     # PASS 2: CONFLICT RESOLUTION FOR UNSCHEDULED PATIENTS
     # ============================================================================
     if unscheduled_patients:
-        print("\n" + "=" * 100)
-        print(f"PASS 2: Resolving {len(unscheduled_patients)} Unscheduled Patients".center(100))
-        print("=" * 100 + "\n")
+        #print("\n" + "=" * 100)
+        #print(f"PASS 2: Resolving {len(unscheduled_patients)} Unscheduled Patients".center(100))
+        #print("=" * 100 + "\n")
 
         resolved = []
 
@@ -198,7 +196,7 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
             capacity_multiplier = capacity_multipliers[p]
             required_res = required_resources[p]
 
-            print(f"Resolving Patient {p} (Entry: {entry_day}, Mult: {capacity_multiplier})")
+            #print(f"Resolving Patient {p} (Entry: {entry_day}, Mult: {capacity_multiplier})")
 
             # === STRATEGY 1: Find a patient to swap ===
             # Look for scheduled patients on same entry day with >= capacity multiplier
@@ -221,7 +219,7 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
                 candidates_to_swap.sort()
                 _, swap_p, swap_t = candidates_to_swap[0]
 
-                print(f"  ↔️  Swapping with Patient {swap_p} (T{swap_t})")
+                #print(f"  ↔️  Swapping with Patient {swap_p} (T{swap_t})")
 
                 # Remove swap_p from entry day
                 result_dict[(swap_p, swap_t, entry_day, 1)] = 0
@@ -233,7 +231,7 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
                 capacity[(swap_t, entry_day)] -= capacity_multiplier
                 therapist_load[swap_t] += capacity_multiplier
 
-                print(f"  ✓ Patient {p} assigned to entry day")
+                #print(f"  ✓ Patient {p} assigned to entry day")
 
                 # Try to reschedule swap_p to later day
                 current_day_idx = days.index(entry_day) + 1
@@ -245,12 +243,12 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
                         result_dict[(swap_p, swap_t, reschedule_day, 1)] = 1
                         capacity[(swap_t, reschedule_day)] -= capacity_multipliers[swap_p]
                         therapist_load[swap_t] += capacity_multipliers[swap_p]
-                        print(f"  ✓ Patient {swap_p} rescheduled to day {reschedule_day}")
+                        #print(f"  ✓ Patient {swap_p} rescheduled to day {reschedule_day}")
                         rescheduled = True
                         break
 
-                if not rescheduled:
-                    print(f"  ⚠️  Could not reschedule patient {swap_p}")
+                #if not rescheduled:
+                    #print(f"  ⚠️  Could not reschedule patient {swap_p}")
 
                 # Try to complete patient p
                 assigned_resources = 1
@@ -266,30 +264,30 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
                         assigned_resources += 1
 
                 if assigned_resources >= required_res:
-                    print(f"  ✅ Patient {p} fully resolved ({assigned_resources}/{required_res})\n")
+                    #print(f"  ✅ Patient {p} fully resolved ({assigned_resources}/{required_res})\n")
                     resolved.append(p)
-                else:
-                    print(f"  ⚠️  Patient {p} still incomplete ({assigned_resources}/{required_res})\n")
-            else:
-                print(f"  ❌ No suitable swap candidate found for patient {p}\n")
+                #else:
+                    #print(f"  ⚠️  Patient {p} still incomplete ({assigned_resources}/{required_res})\n")
+            #else:
+                #print(f"  ❌ No suitable swap candidate found for patient {p}\n")
 
         # Update unscheduled list
         still_unscheduled = [p for p in unscheduled_patients if p not in resolved]
 
-        if still_unscheduled:
-            print("\n" + "=" * 100)
-            print(f"⚠️  WARNING: {len(still_unscheduled)} patients remain unscheduled".center(100))
-            print("=" * 100)
-            for p in still_unscheduled:
-                print(f"  Patient {p} (Entry: {entry_days[p]}, Mult: {capacity_multipliers[p]})")
-            print("=" * 100 + "\n")
+        #if still_unscheduled:
+            #print("\n" + "=" * 100)
+            #print(f"⚠️  WARNING: {len(still_unscheduled)} patients remain unscheduled".center(100))
+            #print("=" * 100)
+            #for p in still_unscheduled:
+                #print(f"  Patient {p} (Entry: {entry_days[p]}, Mult: {capacity_multipliers[p]})")
+            #print("=" * 100 + "\n")
 
     # ============================================================================
     # COMPUTE AUXILIARY DICTIONARIES
     # ============================================================================
-    print("=" * 100)
-    print("Computing Auxiliary Variables".center(100))
-    print("=" * 100 + "\n")
+    #print("=" * 100)
+    #print("Computing Auxiliary Variables".center(100))
+    #print("=" * 100 + "\n")
 
     # Completion indicators and LOS
     completion_indicators = {}
@@ -322,7 +320,7 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
         else:
             length_of_stay[p] = max_day + 1 - entry_day
 
-        print(f"Patient {p}: Entry={entry_day}, Completion={completion_day}, LOS={length_of_stay[p]}")
+        #print(f"Patient {p}: Entry={entry_day}, Completion={completion_day}, LOS={length_of_stay[p]}")
 
     # y: No therapy session on day d
     y = {}
@@ -381,7 +379,6 @@ def initial_cg_starting_sol(max_capacity, patients, days, therapists, required_r
     remaining_capacity_td = {(t, d): capacity.get((t, d), 0) for t in therapists for d in days if d > 0}
     remaining_capacity_d = {d: sum(capacity.get((t, d), 0) for t in therapists) for d in days if d > 0}
 
-    print("\n" + "=" * 100)
     print("✅ INITIAL COLUMN GENERATION COMPLETE".center(100))
     print("=" * 100 + "\n")
 
