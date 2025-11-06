@@ -26,7 +26,7 @@ def main():
     # ===========================
 
     # Random seed
-    seed = 92
+    seed = 14
 
     # Learning parameters
     app_data = {
@@ -43,8 +43,8 @@ def main():
     }
 
     # Instance parameters
-    T = 3  # Number of therapists
-    D_focus = 5  # Number of focus days
+    T = 6  # Number of therapists
+    D_focus = 20  # Number of focus days
 
     # Algorithm parameters
     dual_improvement_iter = 20  # Max Iterations without dual improvement

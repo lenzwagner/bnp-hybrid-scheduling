@@ -645,7 +645,7 @@ class BranchAndPrice:
 
         # Branch on root
         branching_type, branching_info = self.select_branching_candidate(root_node, root_lambdas)
-        print(branching_info, branching_type)
+        #print(branching_info, branching_type)
 
         if not branching_type:
             self.logger.warning(f"⚠️  Could not find branching candidate despite fractional solution!")
@@ -657,7 +657,7 @@ class BranchAndPrice:
             left_child, right_child = self.branch_on_mp_variable(root_node, branching_info)
         else:  # 'sp'
             left_child, right_child = self.branch_on_sp_variable(root_node, branching_info)
-        print(left_child, right_child)
+        #print(left_child, right_child)
         # Mark root as branched
         root_node.status = 'branched'
         self.stats['nodes_branched'] += 1
@@ -2042,7 +2042,7 @@ class BranchAndPrice:
                                     if hasattr(c, 'master_constraint')
                                     and c.master_constraint is not None]
 
-        print(col_data, profile, col_id, node.branching_constraints, sep="\n")
+        #print(col_data, profile, col_id, node.branching_constraints, sep="\n")
 
         if sp_branching_constraints:
             branching_coefs = self._compute_branching_coefficients_for_column(
@@ -2050,7 +2050,7 @@ class BranchAndPrice:
             )
             col_coefs = col_coefs + branching_coefs
 
-            print(f'New_Coeffs for profile {profile} are: {branching_coefs}')
+            #print(f'New_Coeffs for profile {profile} are: {branching_coefs}')
 
             self.logger.info(f"        [Column] Added {len(branching_coefs)} branching coefficients "
                         f"for new column ({profile}, {col_id})")
@@ -2058,7 +2058,7 @@ class BranchAndPrice:
         # Verify length
         expected_length = len(master.Model.getConstrs())
         actual_length = len(col_coefs)
-        print(expected_length, actual_length, sep="\n")
+        #print(expected_length, actual_length, sep="\n")
 
 
         if actual_length != expected_length:
