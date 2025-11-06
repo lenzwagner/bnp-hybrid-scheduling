@@ -4,7 +4,7 @@ import time
 from collections import defaultdict
 
 class Problem_d:
-    def __init__(self, df, Req, Entry, Max_t, app_data, pre_x, W_coeff, num_tangents, learn_method, verbose=False):
+    def __init__(self, df, Req, Entry, Max_t, app_data, pre_x, W_coeff, num_tangents, learn_method, verbose=False, deterministic=False):
         self.P = df['P'].dropna().astype(int).unique().tolist()
         self.Entry = Entry
         self.D = df['D_Ext'].dropna().astype(int).unique().tolist()
@@ -19,6 +19,13 @@ class Problem_d:
         env.start()
         self.Model = gu.Model("Compact", env=env)
         self.Model.Params.Seed = 0  # Fixed seed for reproducibility across different PCs
+        self.deterministic = deterministic
+
+        # Apply deterministic settings if requested
+        if self.deterministic:
+            self.Model.Params.Threads = 1  # Single thread for determinism
+            self.Model.Params.Method = 2   # Barrier method (more deterministic than dual simplex)
+
         self.Req = Req
         self.P_Join = [p for p, d in self.Entry.items() if d >= min(self.D_F)]
         self.learn_method = learn_method

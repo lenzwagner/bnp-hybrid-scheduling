@@ -71,6 +71,9 @@ def main():
     save_lps = True # Set to True to save LP and SOL files
     verbose_output = False # Set to False to suppress all non-final output
 
+    # Solver settings
+    deterministic = False  # Set to True for deterministic solver behavior (single-threaded, barrier method)
+
     # Visualization settings
     visualize_tree = False  # Enable tree visualization
     tree_layout = 'hierarchical'  # 'hierarchical' or 'radial'
@@ -122,7 +125,8 @@ def main():
         stagnation_threshold=dual_stagnation_threshold,
         learn_method=learn_method,
         save_lps=save_lps,
-        verbose=verbose_output
+        verbose=verbose_output,
+        deterministic=deterministic
     )
 
     # Setup

@@ -20,7 +20,7 @@ class ColumnGeneration:
     def __init__(self, seed, app_data, T, D_focus, max_itr=100, threshold=1e-5,
                  pttr='medium', show_plots=False, pricing_filtering=True, therapist_agg=False,
                  max_stagnation_itr=5, stagnation_threshold=1e-4, learn_method='pwl', callback_after_iteration=None,
-                 save_lps=True, verbose=True):
+                 save_lps=True, verbose=True, deterministic=False):
         """
         Initialize Column Generation solver.
 
@@ -39,6 +39,7 @@ class ColumnGeneration:
             stagnation_threshold: Minimum relative improvement to count as progress
             save_lps: Whether to save LP and SOL files
             verbose: Whether to print detailed output
+            deterministic: Use deterministic solver settings (single-threaded, barrier method)
         """
         # Store parameters
         self.seed = seed
@@ -57,6 +58,7 @@ class ColumnGeneration:
         self.callback_after_iteration = callback_after_iteration
         self.save_lps = save_lps
         self.verbose = verbose
+        self.deterministic = deterministic
 
         # Initialize random seed
         random.seed(seed)
@@ -183,7 +185,8 @@ class ColumnGeneration:
             print("[Setup] Building compact model...")
         self.problem = Problem_d(
             self.data, self.Req, self.Entry, self.Max_t, self.app_data,
-            self.pre_x_filt, self.W_coeff, 10, self.learn_method, verbose=self.verbose
+            self.pre_x_filt, self.W_coeff, 10, self.learn_method, verbose=self.verbose,
+            deterministic=self.deterministic
         )
         self.problem.buildModel()
 
@@ -224,7 +227,7 @@ class ColumnGeneration:
             print("[Setup] Building master problem...")
         self.master = MasterProblem_d(
             self.data, self.Max_t_cg, self.Nr_agg, self.Req_agg, self.pre_x, self.E_dict,
-            verbose=self.verbose
+            verbose=self.verbose, deterministic=self.deterministic
         )
         self.master.buildModel()
         self.master.startSol(self.start_x, self.start_los)
@@ -433,7 +436,7 @@ class ColumnGeneration:
             (index, duals_gamma, duals_pi, duals_delta,
              self.data, self.Req_agg, self.Entry_agg,
              self.app_data, self.W_coeff, self.E_dict, self.therapist_type,
-             self.P_F, self.S_Bound, self.learn_method, node_path)
+             self.P_F, self.S_Bound, self.learn_method, node_path, self.deterministic)
             for index in patients_to_solve
         ]
 
@@ -619,14 +622,15 @@ def solve_subproblem_for_patient(args):
 
     # Unpack arguments
     (index, duals_gamma, duals_pi, duals_delta, data, Req_agg, Entry_agg, app_data, W_coeff,
-     E_dict, therapist_type, P_F, S_Bound, learn_meth, node_path) = args
+     E_dict, therapist_type, P_F, S_Bound, learn_meth, node_path, deterministic) = args
     max_cols_per_iter = 10
 
     # Create and solve subproblem
     subproblem = Subproblem(
         data, duals_gamma, duals_pi, duals_delta, index, 0, Req_agg, Entry_agg,
         app_data, W_coeff, E_dict, S_Bound, num_tangents=10, reduction=True, learn_method=learn_meth,  node_path='',
-        verbose=False  # Disable verbose in multiprocessing workers to avoid mixed output
+        verbose=False,  # Disable verbose in multiprocessing workers to avoid mixed output
+        deterministic=deterministic
     )
     subproblem.buildModel()
 

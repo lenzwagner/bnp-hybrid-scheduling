@@ -5,7 +5,7 @@ from Utils.Generell.utils import *
 class Subproblem:
     def __init__(self, df, duals_gamma, duals_pi, duals_delta, p, col_id, Req, Entry, app_data, W_coeff, E_dict, S_Bound,
                  learn_method,
-                 reduction=False, num_tangents=10, node_path='', verbose=True):
+                 reduction=False, num_tangents=10, node_path='', verbose=True, deterministic=False):
         self.reduction = reduction
         self.P = p
         self.W_coeff = W_coeff
@@ -19,6 +19,7 @@ class Subproblem:
         self.learn_method = learn_method
         self.num_tangents = num_tangents
         self.verbose = verbose
+        self.deterministic = deterministic
         self.P_Full = df['P_Full'].dropna().astype(int).unique().tolist()
         self.D_raw = df['D_Ext'].dropna().astype(int).unique().tolist()
 
@@ -35,6 +36,12 @@ class Subproblem:
         env.start()
         self.Model = gu.Model("Subproblem", env=env)
         self.Model.Params.Seed = 0  # Fixed seed for reproducibility across different PCs
+
+        # Apply deterministic settings if requested
+        if self.deterministic:
+            self.Model.Params.Threads = 1  # Single thread for determinism
+            self.Model.Params.Method = 2   # Barrier method (more deterministic than dual simplex)
+
         self.M = max(self.D) + 1
         self.S_Bound = S_Bound[self.P]
         self.R = list(range(1, 1 + self.S_Bound))

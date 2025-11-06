@@ -1979,7 +1979,8 @@ class BranchAndPrice:
             reduction=True,
             num_tangents=10,
             node_path=node.path,
-            verbose=self.verbose
+            verbose=self.verbose,
+            deterministic=self.cg_solver.deterministic
         )
 
         sp.buildModel()

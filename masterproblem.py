@@ -2,7 +2,7 @@ import gurobipy as gu
 from Utils.Generell.utils import *
 
 class MasterProblem_d:
-    def __init__(self, df, T_Max, Nr_agg, Req, pre_x, E_dict, verbose=False):
+    def __init__(self, df, T_Max, Nr_agg, Req, pre_x, E_dict, verbose=False, deterministic=False):
         self.P_Full = df['P_Full'].dropna().astype(int).unique().tolist()
         self.P_Pre = df['P_Pre'].dropna().astype(int).unique().tolist()
         self.P_Join = df['P_Join'].dropna().astype(int).unique().tolist()
@@ -20,6 +20,13 @@ class MasterProblem_d:
         env.start()
         self.Model = gu.Model("MasterProblem", env=env)
         self.Model.Params.Seed = 0  #
+        self.deterministic = deterministic
+
+        # Apply deterministic settings if requested
+        if self.deterministic:
+            self.Model.Params.Threads = 1  # Single thread for determinism
+            self.Model.Params.Method = 2   # Barrier method (more deterministic than dual simplex)
+
         self.cons_p_max = {}
         self.cons_los = {}
         self.E = E_dict
