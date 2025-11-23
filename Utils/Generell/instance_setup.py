@@ -63,12 +63,12 @@ def print_comparison_results(results):
     """
     print("\nGrouping of Identical Patients:")
     print(f"Groups Found: {len(results)}")
-    for gruppe, details in results.items():
-        print(f"\n{gruppe}:")
-        print(f"  Patients: {details['Patienten']}")
-        print(f"  Count: {details['Anzahl']}")
-        print(f"  Treatment Days (t,d): {details['Behandlungstage']}")
-        print(f"  Appointment Days (d): {details['Appointment_Tage']}")
+    for group, details in results.items():
+        print(f"\n{group}:")
+        print(f"  Patients: {details['Patients']}")
+        print(f"  Count: {details['Count']}")
+        print(f"  Treatment Days (t,d): {details['Treatment_Days']}")
+        print(f"  Appointment Days (d): {details['Appointment_Days']}")
         print(f"  LOS: {details['LOS']}")
 
 
@@ -149,11 +149,13 @@ def get_unique_combinations_and_list_with_dicts(R_p, Entry_p, P, filter_entry_ge
 
 def categorize_patients_full(Entry_p, D):
     """
-    Kategorisiert Patienten in Pre-, Focus- und Post-Gruppen.
+    Categorizes patients into Pre, Focus, and Post groups.
+
     Args:
-        Entry_p (dict): Eintrittstage der Patienten
-        D (list): Fokus-Horizont
-        D_full (list): Voller Planungshorizont
+        Entry_p (dict): Entry days of patients
+        D (list): Focus horizon
+        D_full (list): Full planning horizon
+
     Returns:
         tuple: (P_Pre, P_F, P_Post)
     """
