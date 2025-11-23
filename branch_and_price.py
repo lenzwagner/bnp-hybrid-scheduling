@@ -1851,6 +1851,7 @@ class BranchAndPrice:
 
             elif isinstance(constraint, MPVariableBranching):
                 # MP branching uses variable bounds, not linear constraints
+                # So we do NOT add any coefficient to the column vector
                 pass
 
         return coefs
