@@ -656,7 +656,7 @@ class BranchAndPrice:
         if branching_type == 'mp':
             left_child, right_child = self.branch_on_mp_variable(root_node, branching_info)
         else:  # 'sp'
-            left_child, right_child = self.branch_on_sp_variable(root_node, branching_info)
+            left_child, right_child = self.branch_on_sp_pattern(root_node, branching_info)
         #print(left_child, right_child)
         # Mark root as branched
         root_node.status = 'branched'
@@ -944,33 +944,59 @@ class BranchAndPrice:
                 print(f"║   Master Problem (MP):  Lambda[{n},{a}] ≥ {ceil_val}".ljust(99) + "║")
                 print(f"║   Subproblem (SP):      No constraint (column required by MP bound)".ljust(99) + "║")
 
-            else:  # SP Variable Branching
+            else:  # SP Branching (Variable or Pattern)
                 n = branching_info['profile']
-                j = branching_info['agent']
-                t = branching_info['period']
                 beta_val = branching_info['beta_value']
                 floor_val = branching_info['floor']
                 ceil_val = branching_info['ceil']
 
-                print(f"║ 🔀 Branching Strategy: SP VARIABLE BRANCHING".ljust(99) + "║")
-                print("╠" + "═" * 98 + "╣")
-                print(f"║ Branching Variable: x[{n},{j},{t}] (aggregated from columns)".ljust(99) + "║")
-                print(f"║   Profile (n):  {n}".ljust(99) + "║")
-                print(f"║   Agent (j):    {j}".ljust(99) + "║")
-                print(f"║   Period (t):   {t}".ljust(99) + "║")
-                print(f"║   Beta value:   {beta_val:.6f} (fractional sum over columns)".ljust(99) + "║")
-                print("╠" + "═" * 98 + "╣")
-                print(f"║ 📋 CONSTRAINTS TO BE ADDED:".ljust(99) + "║")
-                print("╠" + "═" * 98 + "╣")
-                print(f"║ LEFT CHILD (Node {self.node_counter + 1}):".ljust(99) + "║")
-                print(f"║   Master Problem (MP):  Σ Lambda[{n},a] * chi[{n},{j},{t},a] ≤ {floor_val}".ljust(99) + "║")
-                print(f"║                         (sum over columns where patient {n} sees agent {j} at time {t})".ljust(99) + "║")
-                print(f"║   Subproblem (SP):      x[{n},{j},{t}] = 0 (assignment forbidden)".ljust(99) + "║")
-                print("╠" + "═" * 98 + "╣")
-                print(f"║ RIGHT CHILD (Node {self.node_counter + 2}):".ljust(99) + "║")
-                print(f"║   Master Problem (MP):  Σ Lambda[{n},a] * chi[{n},{j},{t},a] ≥ {ceil_val}".ljust(99) + "║")
-                print(f"║                         (sum over columns where patient {n} sees agent {j} at time {t})".ljust(99) + "║")
-                print(f"║   Subproblem (SP):      x[{n},{j},{t}] = 1 (assignment required)".ljust(99) + "║")
+                if 'pattern' in branching_info:
+                    # SP Pattern Branching
+                    pattern = branching_info['pattern']
+                    pattern_size = branching_info.get('pattern_size', len(pattern))
+                    pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(pattern)) + "}"
+                    
+                    print(f"║ 🔀 Branching Strategy: SP PATTERN BRANCHING".ljust(99) + "║")
+                    print("╠" + "═" * 98 + "╣")
+                    print(f"║ Branching Pattern: P({n}) = {pattern_str}".ljust(99) + "║")
+                    print(f"║   Profile (n):  {n}".ljust(99) + "║")
+                    print(f"║   Size:         {pattern_size}".ljust(99) + "║")
+                    print(f"║   beta_P(k):    {beta_val:.6f} (fractional)".ljust(99) + "║")
+                    print("╠" + "═" * 98 + "╣")
+                    print(f"║ 📋 CONSTRAINTS TO BE ADDED:".ljust(99) + "║")
+                    print("╠" + "═" * 98 + "╣")
+                    print(f"║ LEFT CHILD (Node {self.node_counter + 1}):".ljust(99) + "║")
+                    print(f"║   SP Constraint: sum x_kjt <= {pattern_size - 1} (No full coverage)".ljust(99) + "║")
+                    print(f"║   MP Constraint: sum Lambda <= {floor_val}".ljust(99) + "║")
+                    print("╠" + "═" * 98 + "╣")
+                    print(f"║ RIGHT CHILD (Node {self.node_counter + 2}):".ljust(99) + "║")
+                    print(f"║   SP Constraint: sum x_kjt = {pattern_size} * w^Full (All-or-nothing)".ljust(99) + "║")
+                    print(f"║   MP Constraint: sum Lambda >= {ceil_val}".ljust(99) + "║")
+                    
+                else:
+                    # SP Variable Branching (Legacy/Singleton)
+                    j = branching_info['agent']
+                    t = branching_info['period']
+    
+                    print(f"║ 🔀 Branching Strategy: SP VARIABLE BRANCHING".ljust(99) + "║")
+                    print("╠" + "═" * 98 + "╣")
+                    print(f"║ Branching Variable: x[{n},{j},{t}] (aggregated from columns)".ljust(99) + "║")
+                    print(f"║   Profile (n):  {n}".ljust(99) + "║")
+                    print(f"║   Agent (j):    {j}".ljust(99) + "║")
+                    print(f"║   Period (t):   {t}".ljust(99) + "║")
+                    print(f"║   Value:        {beta_val:.6f} (fractional)".ljust(99) + "║")
+                    print("╠" + "═" * 98 + "╣")
+                    print(f"║ 📋 CONSTRAINTS TO BE ADDED:".ljust(99) + "║")
+                    print("╠" + "═" * 98 + "╣")
+                    print(f"║ LEFT CHILD (Node {self.node_counter + 1}):".ljust(99) + "║")
+                    print(f"║   Subproblem (SP):      x[{n},{j},{t}] = 0 (Fixed to 0)".ljust(99) + "║")
+                    print(f"║   Master Problem (MP):  Σ Lambda[{n},a] * chi[{n},{j},{t},a] ≤ {floor_val}".ljust(99) + "║")
+                    print(f"║                         (sum over columns where patient {n} sees agent {j} at time {t})".ljust(99) + "║")
+                    print("╠" + "═" * 98 + "╣")
+                    print(f"║ RIGHT CHILD (Node {self.node_counter + 2}):".ljust(99) + "║")
+                    print(f"║   Subproblem (SP):      x[{n},{j},{t}] = 1 (Fixed to 1)".ljust(99) + "║")
+                    print(f"║   Master Problem (MP):  Σ Lambda[{n},a] * chi[{n},{j},{t},a] ≥ {ceil_val}".ljust(99) + "║")
+                    print(f"║                         (sum over columns where patient {n} sees agent {j} at time {t})".ljust(99) + "║")
 
             print("╠" + "═" * 98 + "╣")
             print(f"║ 📊 BOTH CHILDREN WILL BE SOLVED IMMEDIATELY WITH FULL CG".ljust(99) + "║")
@@ -980,7 +1006,7 @@ class BranchAndPrice:
             if branching_type == 'mp':
                 left_child, right_child = self.branch_on_mp_variable(current_node, branching_info)
             else:  # 'sp'
-                left_child, right_child = self.branch_on_sp_variable(current_node, branching_info)
+                left_child, right_child = self.branch_on_sp_pattern(current_node, branching_info)
 
             # Mark current node as branched
             current_node.status = 'branched'
@@ -1077,7 +1103,8 @@ class BranchAndPrice:
 
         Strategy depends on self.branching_strategy:
         - 'mp': Branch on Lambda_{na} (master variable)
-        - 'sp': Branch on x_{njt} via beta_{njt} (subproblem variable)
+        - 'sp': Branch on Pattern P(k) (hierarchical pattern-based branching)
+        - 'sp_var': Branch on single x_{njt} via beta_{njt} (single variable branching)
 
         Tie-breaking: smallest n, then smallest a/j/t
 
@@ -1090,7 +1117,11 @@ class BranchAndPrice:
         if self.branching_strategy == 'mp':
             return self._select_mp_branching_candidate(node)
         elif self.branching_strategy == 'sp':
+            # Pattern-based branching (hierarchical)
             return self._select_sp_branching_candidate(node, node_lambda)
+        elif self.branching_strategy == 'sp_var':
+            # Single variable branching
+            return self._select_sp_variable_branching_candidate(node, node_lambda)
         else:
             raise ValueError(f"Unknown branching strategy: {self.branching_strategy}")
 
@@ -1127,81 +1158,283 @@ class BranchAndPrice:
 
         return 'mp', branching_info
 
+
+    def _find_fractional_pattern(self, node, lambdas, max_pattern_size=5):
+        """
+        Hierarchical pattern search as described in paper.
+        
+        Search for fractional beta_P(k) starting with singletons (|P(k)|=1),
+        incrementally increasing pattern size until a fractional value is found.
+        
+        Args:
+            node: Current BnPNode
+            lambdas: Current lambda values {(k,a): value}
+            max_pattern_size: Maximum pattern size to consider (default: 3)
+            
+        Returns:
+            tuple: (pattern_set, beta_value, floor, ceil, profile) or (None, None, None, None, None)
+        """
+        self.logger.info(f"\n[Pattern Search] Starting hierarchical pattern search...")
+        self.logger.info(f"  Max pattern size: {max_pattern_size}")
+        
+        # Try pattern sizes from 1 to max_pattern_size
+        for pattern_size in range(1, max_pattern_size + 1):
+            self.logger.info(f"\n  Searching patterns of size {pattern_size}...")
+            
+            pattern, beta_val, floor_val, ceil_val, profile = self._search_patterns_of_size(
+                node, lambdas, pattern_size
+            )
+            
+            if pattern is not None:
+                print(f"  ✅ Found fractional pattern of size {pattern_size}: {pattern}")
+                if pattern_size > 1:
+                    print("Find pattern greater than one")
+                    sys.exit()
+                return pattern, beta_val, floor_val, ceil_val, profile
+            
+            self.logger.info(f"  → No fractional pattern of size {pattern_size}, trying larger...")
+        
+        self.logger.warning(f"  ❌ No fractional pattern found up to size {max_pattern_size}")
+        return None, None, None, None, None
+    
+    def _search_patterns_of_size(self, node, lambdas, pattern_size):
+        """
+        Search for fractional patterns of a specific size.
+        
+        For each profile k, generate combinations of (j,t) pairs of given size,
+        compute beta_P(k) for each pattern, and return the most fractional one.
+        
+        Args:
+            node: Current BnPNode
+            lambdas: Current lambda values {(k,a): value}
+            pattern_size: Size of patterns to search for
+            
+        Returns:
+            tuple: (pattern, beta_value, floor, ceil, profile) or (None, None, None, None, None)
+        """
+        from itertools import combinations
+        
+        # First, collect all (j,t) assignments per profile
+        profile_assignments = {}  # profile -> set of (j,t) tuples
+        
+        for (k, a), lambda_val in lambdas.items():
+            if lambda_val < 1e-6:
+                continue
+            
+            if (k, a) not in node.column_pool:
+                continue
+            
+            col_data = node.column_pool[(k, a)]
+            schedules_x = col_data.get('schedules_x', {})
+            
+            if k not in profile_assignments:
+                profile_assignments[k] = set()
+            
+            # Extract all (j,t) assignments from this column
+            for (p, j, t, _), chi_val in schedules_x.items():
+                if p == k and chi_val > 0.5:
+                    profile_assignments[k].add((j, t))
+        
+        # Now search for fractional patterns
+        best_candidate = None
+        max_fractionality = 0.0
+        
+        for profile_k, assignments in profile_assignments.items():
+            if len(assignments) < pattern_size:
+                continue  # Not enough assignments for this pattern size
+            
+            # Generate all combinations of pattern_size
+            for pattern_tuple in combinations(sorted(assignments), pattern_size):
+                pattern = frozenset(pattern_tuple)
+                
+                # Compute beta_P(k) for this pattern
+                # beta_P(k) = sum_{a in A(k,P(k))} Lambda_{ka}
+                # where A(k,P(k)) = {a : chi^a_{kjt}=1 for all (j,t) in P(k)}
+                
+                beta_val = 0.0
+                
+                for (k2, a), lambda_val in lambdas.items():
+                    if k2 != profile_k or lambda_val < 1e-6:
+                        continue
+                    
+                    if (k2, a) not in node.column_pool:
+                        continue
+                    
+                    col_data = node.column_pool[(k2, a)]
+                    schedules_x = col_data.get('schedules_x', {})
+                    
+                    # Check if this column covers ALL elements of the pattern
+                    covers_all = True
+                    for (j_pat, t_pat) in pattern:
+                        found = False
+                        for (p, j, t, _), chi_val in schedules_x.items():
+                            if p == k2 and j == j_pat and t == t_pat and chi_val > 0.5:
+                                found = True
+                                break
+                        if not found:
+                            covers_all = False
+                            break
+                    
+                    if covers_all:
+                        beta_val += lambda_val
+                
+                # Check fractionality
+                floor_val = int(beta_val)
+                ceil_val = floor_val + 1
+                
+                dist_to_floor = beta_val - floor_val
+                dist_to_ceil = ceil_val - beta_val
+                fractionality = min(dist_to_floor, dist_to_ceil)
+                
+                if fractionality > 1e-5:  # Fractional
+                    is_better = False
+                    
+                    if fractionality > max_fractionality + 1e-10:
+                        is_better = True
+                    elif abs(fractionality - max_fractionality) < 1e-10:
+                        # Tie: prefer smaller profile, then lexicographically smaller pattern
+                        if best_candidate is None:
+                            is_better = True
+                        else:
+                            current_key = (profile_k, sorted(pattern))
+                            best_key = (best_candidate['profile'], sorted(best_candidate['pattern']))
+                            if current_key < best_key:
+                                is_better = True
+                    
+                    if is_better:
+                        max_fractionality = fractionality
+                        best_candidate = {
+                            'profile': profile_k,
+                            'pattern': pattern,
+                            'beta_value': beta_val,
+                            'floor': floor_val,
+                            'ceil': ceil_val,
+                            'fractionality': fractionality
+                        }
+        
+        if best_candidate is None:
+            return None, None, None, None, None
+        
+        pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(best_candidate['pattern'])) + "}"
+        self.logger.info(f"    Found fractional pattern for profile {best_candidate['profile']}: {pattern_str}")
+        self.logger.info(f"    beta_P(k) = {best_candidate['beta_value']:.6f}, fractionality = {best_candidate['fractionality']:.6f}")
+        
+        return (best_candidate['pattern'], 
+                best_candidate['beta_value'], 
+                best_candidate['floor'], 
+                best_candidate['ceil'],
+                best_candidate['profile'])
+
     def _select_sp_branching_candidate(self, node, lambdas):
         """
-        Select most fractional beta_{njt} for SP branching.
-
-        Uses node.column_pool to get correct column_ids instead of master.all_schedules.
-
-        beta_{njt} = sum_{a: chi^a_{njt}=1} Lambda_{na}
+        Select most fractional pattern P(k) for SP Pattern Branching.
+        
+        Uses hierarchical pattern search: starts with singletons |P(k)|=1,
+        incrementally increases pattern size until fractional beta_P(k) is found.
 
         Returns:
             tuple: ('sp', branching_info) or (None, None)
         """
-        beta_values = {}
-
-
-        self.logger.info(f"\n[SP Branching] Computing beta values from node.column_pool...")
+        self.logger.info(f"\n[SP Branching] Starting pattern-based candidate selection...")
         self.logger.info(f"  Column pool size: {len(node.column_pool)}")
         self.logger.info(f"  Lambda values size: {len(lambdas)}")
+        
+        # Use hierarchical pattern search
+        pattern, beta_val, floor_val, ceil_val, profile = self._find_fractional_pattern(
+            node, lambdas, max_pattern_size=3
+        )
+        
+        if pattern is None:
+            self.logger.error(f"  ❌ No fractional pattern found!")
+            return None, None
+        
+        # Build branching info
+        branching_info = {
+            'profile': profile,
+            'pattern': pattern,
+            'beta_value': beta_val,
+            'floor': floor_val,
+            'ceil': ceil_val,
+            'fractionality': min(beta_val - floor_val, ceil_val - beta_val),
+            'pattern_size': len(pattern)
+        }
+        
+        pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(pattern)) + "}"
+        self.logger.info(f"\n  ✅ Selected pattern for branching:")
+        self.logger.info(f"     Profile: {profile}")
+        self.logger.info(f"     Pattern: {pattern_str}")
+        self.logger.info(f"     beta_P(k) = {beta_val:.6f}")
+        self.logger.info(f"     Fractionality: {branching_info['fractionality']:.6f}")
+        self.logger.info(f"     Floor: {floor_val}, Ceil: {ceil_val}")
+        
+        return 'sp', branching_info
 
-        if len(node.column_pool) != len(lambdas):
-            self.logger.warning(f"  ⚠️  Lambda pool is not equal sized as the column pool")
-
-        # Iterate over Lambda variables to get their current LP values
+    def _select_sp_variable_branching_candidate(self, node, lambdas):
+        """
+        Select most fractional single x_{njt} for SP Variable Branching.
+        
+        Computes beta_{njt} = sum_{a: chi^a_{njt}=1} Lambda_{na} for all (n,j,t),
+        then selects the one with highest fractionality.
+        
+        This is the classic SP variable branching (NOT pattern-based).
+        
+        Returns:
+            tuple: ('sp', branching_info) or (None, None)
+        """
+        self.logger.info(f"\n[SP Variable Branching] Starting single variable candidate selection...")
+        self.logger.info(f"  Column pool size: {len(node.column_pool)}")
+        self.logger.info(f"  Lambda values size: {len(lambdas)}")
+        
+        # Compute beta_{njt} for all (n,j,t) combinations
+        beta_values = {}  # (n, j, t) -> beta value
+        
         for (n, a), lambda_val in lambdas.items():
-
-            # lambda_val is already a float - no need for .X
             if lambda_val < 1e-6:
                 continue
-
-            # Get column data from node's column pool
+            
             if (n, a) not in node.column_pool:
-                self.logger.warning(f"  ⚠️  Lambda[{n},{a}] = {lambda_val:.4f} but column not in pool!")
                 continue
-
+            
             col_data = node.column_pool[(n, a)]
             schedules_x = col_data.get('schedules_x', {})
-
-            if not schedules_x:
-                continue
-
-            # Extract assignments from this column
+            
+            # For each assignment in this column
             for (p, j, t, _), chi_val in schedules_x.items():
                 if p == n and chi_val > 0.5:
                     key = (n, j, t)
-                    beta_values[key] = beta_values.get(key, 0.0) + lambda_val
-
-        #print(f"  Found {len(beta_values)} non-zero beta values")
-        #print('With beta values:', beta_values, sep='\n')
-
-        # Find most fractional beta
+                    if key not in beta_values:
+                        beta_values[key] = 0.0
+                    beta_values[key] += lambda_val
+        
+        # Find most fractional beta_{njt}
         best_candidate = None
         max_fractionality = 0.0
-
+        
         for (n, j, t), beta_val in beta_values.items():
             floor_val = int(beta_val)
             ceil_val = floor_val + 1
-
+            
             dist_to_floor = beta_val - floor_val
             dist_to_ceil = ceil_val - beta_val
             fractionality = min(dist_to_floor, dist_to_ceil)
-
+            
             if fractionality > 1e-5:  # Fractional
                 is_better = False
-
+                
                 if fractionality > max_fractionality + 1e-10:
                     is_better = True
                 elif abs(fractionality - max_fractionality) < 1e-10:
-                    # Tie: prefer smaller n, then j, then t
+                    # Tie-breaking: smallest n, then j, then t
                     if best_candidate is None:
                         is_better = True
                     else:
-                        current = (n, j, t)
-                        best = best_candidate['assignment']
-                        if current < best:
+                        current_key = (n, j, t)
+                        best_key = (best_candidate['profile'], 
+                                  best_candidate['agent'], 
+                                  best_candidate['period'])
+                        if current_key < best_key:
                             is_better = True
-
+                
                 if is_better:
                     max_fractionality = fractionality
                     best_candidate = {
@@ -1211,23 +1444,20 @@ class BranchAndPrice:
                         'beta_value': beta_val,
                         'floor': floor_val,
                         'ceil': ceil_val,
-                        'fractionality': fractionality,
-                        'assignment': (n, j, t)
+                        'fractionality': fractionality
                     }
-
-        #print('Best Beta', best_candidate)
-
+        
         if best_candidate is None:
-            self.logger.error(f"  ❌ No fractional beta found!")
-
+            self.logger.error(f"  ❌ No fractional variable found!")
             return None, None
-
-        self.logger.info(f"\n  ✅ Most fractional beta:")
-        self.logger.info(f"     beta[{best_candidate['profile']},{best_candidate['agent']},{best_candidate['period']}] = {best_candidate['beta_value']:.6f}")
-        self.logger.info(f"     Fractionality: {best_candidate['fractionality']:.6f}")
-        self.logger.info(f"     Floor: {best_candidate['floor']}, Ceil: {best_candidate['ceil']}")
-
+        
+        self.logger.info(f"\n  ✅ Selected variable for branching:")
+        self.logger.info(f"     x[{best_candidate['profile']},{best_candidate['agent']},{best_candidate['period']}]")
+        self.logger.info(f"     beta = {best_candidate['beta_value']:.6f}")
+        self.logger.info(f"     fractionality = {best_candidate['fractionality']:.6f}")
+        
         return 'sp', best_candidate
+
 
     def branch_on_mp_variable(self, parent_node, branching_info):
         """
@@ -1825,7 +2055,7 @@ class BranchAndPrice:
 
         CRITICAL: A branching constraint on profile n only affects columns for profile n!
         """
-        from branching_constraints import SPVariableBranching, MPVariableBranching
+        from branching_constraints import SPVariableBranching, SPPatternBranching, MPVariableBranching
 
         coefs = []
         schedules_x = col_data.get('schedules_x', {})
@@ -1847,6 +2077,31 @@ class BranchAndPrice:
                         break
 
                 coef = 1 if chi_value > 0.5 else 0
+                coefs.append(coef)
+            
+            elif isinstance(constraint, SPPatternBranching):
+                k = constraint.profile
+                pattern = constraint.pattern
+                
+                # If this column is not for the branched profile, coef = 0
+                if profile != k:
+                    coefs.append(0)
+                    continue
+                
+                # Check if this column covers the ENTIRE pattern
+                # coef = 1 if ALL pattern elements (j,t) are present in this column
+                pattern_fully_covered = True
+                for (j_pat, t_pat) in pattern:
+                    found = False
+                    for (p, j_sched, t_sched, a), val in schedules_x.items():
+                        if p == profile and j_sched == j_pat and t_sched == t_pat and a == col_id and val > 0.5:
+                            found = True
+                            break
+                    if not found:
+                        pattern_fully_covered = False
+                        break
+                
+                coef = 1 if pattern_fully_covered else 0
                 coefs.append(coef)
 
             elif isinstance(constraint, MPVariableBranching):
@@ -1876,12 +2131,16 @@ class BranchAndPrice:
     def _get_branching_constraint_duals(self, master, node):
         """
         Extract dual variables from SP branching constraints.
+        
+        Supports both SPVariableBranching and SPPatternBranching.
 
         According to Paper Eq. (branch:sub4):
         - Left branch (≤): δ^L ≤ 0
         - Right branch (≥): δ^R ≥ 0
         - Both are ADDED in pricing: - sum(δ^L + δ^R)
         """
+        from branching_constraints import SPVariableBranching, SPPatternBranching
+        
         branching_duals = {}
 
         self.logger.info(f"\n      [Extracting Branching Duals] Node {node.node_id}, Path: '{node.path}'")
@@ -1890,27 +2149,49 @@ class BranchAndPrice:
         sp_constraints_found = 0
 
         for constraint in node.branching_constraints:
-            # Only SP-Variable Branching constraints have master constraints
+            # Only SP branching constraints (Variable or Pattern) have master constraints
             if not hasattr(constraint, 'master_constraint') or constraint.master_constraint is None:
                 continue
 
             try:
                 dual_val = constraint.master_constraint.Pi
                 sp_constraints_found += 1
+                
+                # Get direction attribute (different for SPVariableBranching vs SPPatternBranching)
+                if isinstance(constraint, SPVariableBranching):
+                    direction = constraint.dir
+                elif isinstance(constraint, SPPatternBranching):
+                    direction = constraint.direction
+                else:
+                    direction = 'unknown'
 
                 # Validate dual sign (according to constraint direction)
-                if constraint.dir == 'left' and dual_val > 1e-6:
+                if direction == 'left' and dual_val > 1e-6:
                     self.logger.warning(f"      ⚠️  WARNING: Left branch (≤) has positive dual: {dual_val:.6f}")
-                if constraint.dir == 'right' and dual_val < -1e-6:
+                if direction == 'right' and dual_val < -1e-6:
                     self.logger.warning(f"      ⚠️  WARNING: Right branch (≥) has negative dual: {dual_val:.6f}")
 
-                # Store with unique key (profile, agent, period, level)
-                key = (constraint.profile, constraint.agent, constraint.period, constraint.level)
-                branching_duals[key] = dual_val
-
-                self.logger.info(f"      [Dual] Level {constraint.level:2d} ({constraint.dir:5s}): "
-                            f"x[{constraint.profile},{constraint.agent:2d},{constraint.period:2d}] "
-                            f"→ π={dual_val:+.6f}")
+                # Store dual - key format depends on constraint type
+                if isinstance(constraint, SPVariableBranching):
+                    # Key: (profile, agent, period, level)
+                    key = (constraint.profile, constraint.agent, constraint.period, constraint.level)
+                    branching_duals[key] = dual_val
+                    
+                    self.logger.info(f"      [Dual] Level {constraint.level:2d} ({direction:5s}): "
+                                f"x[{constraint.profile},{constraint.agent:2d},{constraint.period:2d}] "
+                                f"→ π={dual_val:+.6f}")
+                
+                elif isinstance(constraint, SPPatternBranching):
+                    # For pattern branching, store with pattern identifier
+                    # Key: (profile, 'pattern', pattern_id, level) where pattern_id is the pattern hash
+                    pattern_id = hash(constraint.pattern)
+                    key = (constraint.profile, 'pattern', pattern_id, constraint.level)
+                    branching_duals[key] = dual_val
+                    
+                    pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(constraint.pattern)) + "}"
+                    self.logger.info(f"      [Dual] Level {constraint.level:2d} ({direction:5s}): "
+                                f"Pattern[{constraint.profile}] {pattern_str} "
+                                f"→ π={dual_val:+.6f}")
 
             except Exception as e:
                 self.logger.warning(f"      ⚠️  Could not extract dual from constraint: {e}")
@@ -1939,20 +2220,36 @@ class BranchAndPrice:
         if branching_duals is None:
             branching_duals = {}
 
-        # Filter relevant branching duals for this profile
-        relevant_duals = {key: value for key, value in branching_duals.items() if key[0] == profile}
-
-        if relevant_duals:
-            duals_delta = sum(relevant_duals.values())
-
-            # Detailed logging
-            self.logger.info(f"\n      [SP Duals] Profile {profile} has {len(relevant_duals)} branching duals:")
-            for (p, j, t, level), dual_val in relevant_duals.items():
-                self.logger.info(f"         Level {level}: x[{p},{j},{t}] → dual={dual_val:.6f}")
-            self.logger.info(f"      [SP Duals] Total duals_delta = {duals_delta:.6f}\n")
+        # Separate variable and pattern branching duals
+        variable_duals = {}
+        pattern_duals = {}
+        
+        for key, value in branching_duals.items():
+            if key[0] == profile:
+                # Check if this is a pattern dual (has 'pattern' as second element)
+                if len(key) == 4 and key[1] == 'pattern':
+                    pattern_duals[key] = value
+                elif len(key) == 4:
+                    # Variable branching: (profile, agent, period, level)
+                    variable_duals[key] = value
+        
+        # Calculate duals_delta from variable branching constraints only
+        if variable_duals:
+            duals_delta = sum(variable_duals.values())
+            print(f"\n      [SP Variable Duals] Profile {profile} has {len(variable_duals)} variable branching duals: {variable_duals}")
+            for (p, j, t, level), dual_val in variable_duals.items():
+                print(f"         Level {level}: x[{p},{j},{t}] → dual={dual_val:.6f}")
+            print(f"      [SP Variable Duals] Total duals_delta = {duals_delta:.6f}\n")
         else:
             duals_delta = 0.0
-            self.logger.info(f"      [SP Duals] Profile {profile} has NO branching constraints\n")
+            #print(f"      [SP Variable Duals] Profile {profile} has NO variable branching constraints\n")
+        
+        # Log pattern duals (these will be handled separately)
+        if pattern_duals:
+            print(f"\n      [SP Pattern Duals] Profile {profile} has {len(pattern_duals)} pattern branching duals: {pattern_duals}")
+            for (p, pattern_type, pattern_id, level), dual_val in pattern_duals.items():
+                self.logger.info(f"         Level {level}: Pattern {pattern_id} → dual={dual_val:.6f}")
+            print(f"      [SP Pattern Duals] These will be integrated via w^Full variables\n")
 
         # Determine next col_id based on column_pool of this node
         profile_columns = [col_id for (p, col_id) in node.column_pool.keys() if p == profile]
@@ -1991,6 +2288,27 @@ class BranchAndPrice:
             constraint.apply_to_subproblem(sp)
 
         sp.Model.update()
+        
+        # ========================================================================
+        # INTEGRATE PATTERN BRANCHING DUALS WITH w^Full VARIABLES
+        # ========================================================================
+        # For pattern branching right branches, add dual coefficient to w^Full
+        if pattern_duals and hasattr(sp, 'pattern_w_full_vars'):
+            self.logger.info(f"\n      [Pattern Dual Integration] Adding dual coefficients to w^Full variables...")
+            
+            for (p, pattern_type, pattern_id, level), dual_val in pattern_duals.items():
+                if level in sp.pattern_w_full_vars:
+                    w_var = sp.pattern_w_full_vars[level]
+                    # Add dual to w variable objective coefficient
+                    # The dual enters the pricing problem as: obj_coeff = -dual
+                    # (negative because we minimize reduced cost)
+                    w_var.Obj = -dual_val
+                    self.logger.info(f"         Level {level}: Set w^Full obj coefficient = {-dual_val:.6f}")
+                else:
+                    self.logger.warning(f"         ⚠️  Level {level} pattern dual found but no w^Full variable exists!")
+            
+            sp.Model.update()
+            self.logger.info(f"      [Pattern Dual Integration] Complete\n")
         return sp
 
     def _add_column_from_subproblem(self, subproblem, profile, node, master):
@@ -2270,6 +2588,141 @@ class BranchAndPrice:
 
         self.stats['nodes_branched'] += 1
 
+        return left_child, right_child
+
+    def branch_on_sp_pattern(self, parent_node, branching_info):
+        """
+        Branch on Pattern P(k) ⊆ J × T_k.
+        
+        Creates two child nodes:
+        - Left:  sum_{(j,t) in P(k)} x_{kjt} <= |P(k)| - 1  (no full pattern coverage)
+        - Right: sum_{(j,t) in P(k)} x_{kjt} = |P(k)| * w^Full  (all-or-nothing)
+        
+        Paper Section 3.2.4, Equations (branch:sp_mp) and (branch:sp_rest)
+        
+        Args:
+            parent_node: BnPNode to branch from
+            branching_info: Dict with 'profile', 'pattern', 'beta_value', 'floor', 'ceil'
+            
+        Returns:
+            tuple: (left_child, right_child)
+        """
+        k = branching_info['profile']
+        pattern = branching_info['pattern']
+        beta_val = branching_info['beta_value']
+        floor_val = branching_info['floor']
+        ceil_val = branching_info['ceil']
+        pattern_size = branching_info['pattern_size']
+        
+        pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(pattern)) + "}"
+        
+        self.logger.info(f"\n{'=' * 100}")
+        self.logger.info(f" BRANCHING ON SP PATTERN ".center(100, "="))
+        self.logger.info(f"{'=' * 100}")
+        self.logger.info(f"Branching on pattern P({k}) = {pattern_str}")
+        self.logger.info(f"  Pattern size: {pattern_size}")
+        self.logger.info(f"  beta_P(k) = {beta_val:.6f}")
+        self.logger.info(f"  Left:  sum x_kjt <= {pattern_size - 1} (no full coverage)")
+        self.logger.info(f"  Right: sum x_kjt = {pattern_size} * w^Full (all-or-nothing)")
+        
+        # -------------------------
+        # LEFT CHILD
+        # -------------------------
+        self.node_counter += 1
+        left_child = BnPNode(
+            node_id=self.node_counter,
+            parent_id=parent_node.node_id,
+            depth=parent_node.depth + 1,
+            path=parent_node.path + 'l'
+        )
+        
+        from branching_constraints import SPPatternBranching
+        
+        left_constraint = SPPatternBranching(
+            profile_k=k,
+            pattern=pattern,
+            direction='left',
+            level=left_child.depth,
+            floor_val=floor_val,
+            ceil_val=ceil_val
+        )
+        
+        left_child.branching_constraints = parent_node.branching_constraints.copy()
+        left_child.branching_constraints.append(left_constraint)
+        
+        self._inherit_columns_from_parent(left_child, parent_node)
+        
+        # -------------------------
+        # RIGHT CHILD
+        # -------------------------
+        self.node_counter += 1
+        right_child = BnPNode(
+            node_id=self.node_counter,
+            parent_id=parent_node.node_id,
+            depth=parent_node.depth + 1,
+            path=parent_node.path + 'r'
+        )
+        
+        right_constraint = SPPatternBranching(
+            profile_k=k,
+            pattern=pattern,
+            direction='right',
+            level=right_child.depth,
+            floor_val=floor_val,
+            ceil_val=ceil_val
+        )
+        
+        right_child.branching_constraints = parent_node.branching_constraints.copy()
+        right_child.branching_constraints.append(right_constraint)
+        
+        self._inherit_columns_from_parent(right_child, parent_node)
+        
+        # Store nodes in the main dictionary first
+        self.nodes[left_child.node_id] = left_child
+        self.nodes[right_child.node_id] = right_child
+        
+        # -------------------------
+        # SOLVE BOTH CHILDREN WITH FULL COLUMN GENERATION
+        # -------------------------
+        self.logger.info("\n" + "=" * 100)
+        self.logger.info(" SOLVING BOTH CHILDREN IMMEDIATELY WITH FULL CG ".center(100, "="))
+        self.logger.info("=" * 100)
+        
+        # Solve left child
+        left_is_active, left_bound, left_lambdas = self._solve_and_evaluate_child_node(left_child)
+        
+        # Solve right child
+        right_is_active, right_bound, right_lambdas = self._solve_and_evaluate_child_node(right_child)
+        
+        self.logger.info(f"\n  Child Node Evaluation Summary:")
+        self.logger.info(f"    Left  (Node {left_child.node_id}): Bound={left_bound:.6f}, Active={left_is_active}, Status={left_child.status}")
+        self.logger.info(f"    Right (Node {right_child.node_id}): Bound={right_bound:.6f}, Active={right_is_active}, Status={right_child.status}")
+        
+        # Add to open nodes ONLY if they are active (not fathomed)
+        if self.search_strategy == 'bfs':
+            if left_is_active:
+                self.open_nodes.append((left_bound, left_child.node_id))
+                self.logger.info(f"    ✓ Left child added to open_nodes with bound {left_bound:.6f}")
+            if right_is_active:
+                self.open_nodes.append((right_bound, right_child.node_id))
+                self.logger.info(f"    ✓ Right child added to open_nodes with bound {right_bound:.6f}")
+        else:  # DFS
+            # Add right first, then left (so left is processed first in LIFO)
+            if right_is_active:
+                self.open_nodes.append(right_child.node_id)
+                self.logger.info(f"    ✓ Right child added to open_nodes")
+            if left_is_active:
+                self.open_nodes.append(left_child.node_id)
+                self.logger.info(f"    ✓ Left child added to open_nodes")
+        
+        parent_node.status = 'branched'
+        
+        self.logger.info(f"  Created left child:  Node {left_child.node_id} (depth {left_child.depth})")
+        self.logger.info(f"  Created right child: Node {right_child.node_id} (depth {right_child.depth})")
+        self.logger.info(f"{'=' * 100}\n")
+        
+        self.stats['nodes_branched'] += 1
+        
         return left_child, right_child
 
     def _update_node_column_pool(self, node):
