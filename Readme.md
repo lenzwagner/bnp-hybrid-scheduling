@@ -18,6 +18,11 @@ The implementation supports both classical Column Generation (root node only) an
 ### Core Algorithms
 - **Column Generation**: Iterative solving of master and subproblems with pricing filters
 - **Branch-and-Price**: Full tree exploration with DFS or BFS search strategies
+- **Labeling Algorithm**: Dynamic programming approach for pricing subproblems with strict feasibility checks
+  - State-based exploration with dominance rules
+  - Handles rolling window constraints (MS/MIN_MS)
+  - Validates start/end constraints and service targets
+  - Supports timeout scenarios at planning horizon
 - **Dual Stagnation Detection**: Early termination when LP bound stops improving
 - **IP Heuristics**: Periodic integer program solving to find better incumbents
 
@@ -27,10 +32,11 @@ The implementation supports both classical Column Generation (root node only) an
    - Right branch: Lower bound on column usage
    - No-good cuts prevent column regeneration
 
-2. **SP Variable Branching**: Branch on subproblem variables (x_{njt})
-   - Left branch: Fix assignment to 0
-   - Right branch: Fix assignment to 1
-   - Master constraints regulate column usage
+2. **SP Pattern Branching**: Branch on patterns P(k) ⊆ J × T_k (sets of resource pairs)
+   - Hierarchical pattern-based branching on multiple (j,t) pairs simultaneously
+   - Left branch: sum_{a ∈ A(k,P(k))} Lambda_{ka} <= floor(beta_P(k))
+   - Right branch: sum_{a ∈ A(k,P(k))} Lambda_{ka} >= ceil(beta_P(k))
+   - Subproblem constraints enforce pattern restrictions
 
 ### Learning Models
 - **Exponential Learning**: Classic exponential learning curves
@@ -51,6 +57,7 @@ branch-and-price-hybrid-scheduling/
 ├── CG.py                        # Column Generation solver (652 lines)
 ├── masterproblem.py             # Restricted Master Problem (RMP)
 ├── subproblem.py                # Pricing subproblems
+├── label.py                     # Labeling algorithm for pricing (DP-based)
 ├── bnp_node.py                  # Node representation for B&P tree
 ├── branching_constraints.py     # Branching constraint implementations
 ├── tree_visualization.py        # Tree visualization utilities
