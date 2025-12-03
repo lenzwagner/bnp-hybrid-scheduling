@@ -1,9 +1,84 @@
 import sys
+import math
 import time
 from bnp_node import BnPNode
 import gurobipy as gu
 import copy
 import logging
+
+
+# ============================================================================
+# GLOBAL WORKER FUNCTION FOR PARALLEL PRICING
+# ============================================================================
+def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branching_duals, 
+                             threshold, cg_solver_data):
+    """
+    Global worker function for parallel pricing (can be pickled by multiprocessing).
+    
+    This function is called by multiprocessing.Pool to solve pricing problems in parallel.
+    It must be a top-level function (not a class method) to be picklable.
+    
+    Args:
+        profile: Profile index
+        node_data: Dictionary with node information
+        duals_pi: Dual variables for capacity constraints
+        duals_gamma: Dual variable for this profile
+        branching_duals: Dict of branching constraint duals
+        threshold: Reduced cost threshold
+        cg_solver_data: Dict with CG solver data needed for pricing
+    
+    Returns:
+        Tuple of (profile, col_data_list) where col_data_list is list of columns or None
+    """
+    from label import solve_pricing_for_profile_bnp
+    from bnp_node import BnPNode
+    
+    # Reconstruct minimal node object for pricing
+    node = BnPNode(
+        node_id=node_data['node_id'],
+        parent_id=node_data['parent_id'],
+        depth=node_data['depth'],
+        path=node_data['path']
+    )
+    node.branching_constraints = node_data['branching_constraints']
+    node.column_pool = {}
+    
+    # Extract profile-specific data
+    r_k = cg_solver_data['Entry_agg'][profile]
+    s_k = cg_solver_data['Req_agg'][profile]
+    obj_multiplier = cg_solver_data['E_dict'].get(profile, 1)
+    
+    # Get next column ID
+    next_col_id = 1  # Will be reassigned by caller
+    
+    # Extract duals_delta from branching constraints
+    duals_delta = 0.0
+    if branching_duals:
+        variable_duals = {k: v for k, v in branching_duals.items() 
+                        if k[0] == profile and len(k) == 4 and k[1] != 'pattern'}
+        if variable_duals:
+            duals_delta = sum(variable_duals.values())
+    
+    # Call labeling algorithm
+    col_data_list = solve_pricing_for_profile_bnp(
+        profile=profile,
+        duals_pi=duals_pi,
+        duals_gamma=duals_gamma,
+        duals_delta=duals_delta,
+        r_k=r_k,
+        s_k=s_k,
+        obj_multiplier=obj_multiplier,
+        workers=cg_solver_data['workers'],
+        max_time=cg_solver_data['max_time'],
+        theta_lookup=cg_solver_data['theta_lookup'],
+        MS=cg_solver_data['MS'],
+        MIN_MS=cg_solver_data['MIN_MS'],
+        col_id=next_col_id,
+        branching_constraints=node.branching_constraints,
+        max_columns=cg_solver_data['max_columns_per_iter']
+    )
+    
+    return (profile, col_data_list)
 
 
 class BranchAndPrice:
@@ -21,7 +96,9 @@ class BranchAndPrice:
     """
 
     def __init__(self, cg_solver, branching_strategy='mp', search_strategy='dfs', verbose=True,
-                 ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True):
+                 ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True,
+                 use_labeling=False, max_columns_per_iter=10, use_parallel_pricing=False, 
+                 n_pricing_workers=4):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -36,6 +113,10 @@ class BranchAndPrice:
                                       - If > 0: solve RMP as IP after this iteration,
                                                then continue CG without further IP solves
             save_lps: If True, save LP and SOL files during solving
+            use_labeling: If True, use labeling algorithm for pricing instead of Gurobi
+            max_columns_per_iter: Maximum number of columns to return per recipient per iteration
+            use_parallel_pricing: If True, solve pricing problems in parallel (only with use_labeling=True)
+            n_pricing_workers: Number of parallel workers for pricing (only if use_parallel_pricing=True)
         """
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -62,6 +143,16 @@ class BranchAndPrice:
         # Search and Branching Configuration
         self.branching_strategy = branching_strategy
         self.search_strategy = search_strategy
+        self.use_labeling = use_labeling  # Use labeling algorithm for pricing
+        self.max_columns_per_iter = max_columns_per_iter
+        
+        # Parallelization Configuration
+        self.use_parallel_pricing = use_parallel_pricing and use_labeling  # Only works with labeling
+        self.n_pricing_workers = n_pricing_workers
+        
+        if self.use_parallel_pricing and not self.use_labeling:
+            self.logger.warning("⚠️  Parallel pricing requires use_labeling=True. Disabling parallelization.")
+            self.use_parallel_pricing = False
 
         # IP Heuristic
         self.ip_heuristic_frequency = ip_heuristic_frequency
@@ -108,6 +199,7 @@ class BranchAndPrice:
         import os
         os.makedirs("results", exist_ok=True)
         os.makedirs("LPs/MP/LPs", exist_ok=True)
+        os.makedirs("LPs/MP/Root", exist_ok=True)
         os.makedirs("LPs/MP/SOLs", exist_ok=True)
         os.makedirs("LPs/SPs/pricing", exist_ok=True)
 
@@ -288,60 +380,86 @@ class BranchAndPrice:
 
         # Log processing of root node
         self.stats['node_processing_order'].append(0)
-
-        # Setup callback if early incumbent is requested
-        if self.early_incumbent_iteration > 0:
-            self.cg_solver.callback_after_iteration = self._early_incumbent_callback
-            self.logger.info(
-                f"[Root] Early incumbent will be computed after CG iteration {self.early_incumbent_iteration}\n")
-        else:
-            self.cg_solver.callback_after_iteration = None
-            self.logger.info(f"[Root] Incumbent will be computed after CG convergence\n")
-
-        # Solve with Column Generation
-        self.cg_solver.solve_cg()
-
-        # After CG converges: Check if we need to compute incumbent
-        if not self.incumbent_computed_early:
-            self.logger.info("\n" + "=" * 100)
-            self.logger.info(" COMPUTING FINAL INCUMBENT ".center(100, "="))
-            self.logger.info("=" * 100)
-            self.logger.info("Column Generation converged. All columns generated.")
-            self.logger.info("Solving final Root Master Problem as IP to get initial upper bound...\n")
-
-            self._compute_final_incumbent()
-        else:
-            self.logger.info("\n" + "=" * 100)
-            self.logger.info(" USING EARLY INCUMBENT ".center(100, "="))
-            self.logger.info("=" * 100)
-            self.logger.info(f"Incumbent was already computed at iteration {self.early_incumbent_iteration}")
-            self.logger.info(f"Current incumbent: {self.incumbent:.6f}")
-            self.logger.info("=" * 100 + "\n")
-
-        # Final LP relaxation check
-        self.logger.debug("\n[Root] Final LP relaxation check...")
-        self.cg_solver.master.solRelModel()
-
-        lambda_list_root = {key: var.X for key, var in self.cg_solver.master.lmbda.items()}
-
-        is_integral, lp_bound, most_frac_info = self.cg_solver.master.check_fractionality()
-
-        # Update root node
+        
         root_node = self.nodes[0]
-        root_node.lp_bound = lp_bound
-        root_node.is_integral = is_integral
-        root_node.most_fractional_var = most_frac_info
 
-        # Update root node's column pool
-        self._update_node_column_pool(root_node)
+        # Choose solving method based on use_labeling flag
+        if self.use_labeling:
+            # ===== USE BRANCH-AND-PRICE CG (with labeling) =====
+            self.logger.info("[Root] Using Branch-and-Price CG with LABELING ALGORITHM\n")
+            
+            # Solve root node using the same method as child nodes
+            # This ensures labeling algorithm is used consistently
+            lp_bound, is_integral, most_frac_info, lambda_list_root = self.solve_node_with_cg(
+                root_node, 
+                max_cg_iterations=100
+            )
+            
+            # Compute incumbent after CG converges (if not using early incumbent)
+            if self.early_incumbent_iteration == 0:
+                self.logger.info("\n" + "=" * 100)
+                self.logger.info(" COMPUTING FINAL INCUMBENT ".center(100, "="))
+                self.logger.info("=" * 100)
+                self.logger.info("Column Generation converged. All columns generated.")
+                self.logger.info("Solving final Root Master Problem as IP to get initial upper bound...\n")
+                self._compute_final_incumbent()
+        
+        else:
+            # ===== USE ORIGINAL CG SOLVER (with Gurobi) =====
+            self.logger.info("[Root] Using original CG solver with GUROBI\n")
+            
+            # Setup callback if early incumbent is requested
+            if self.early_incumbent_iteration > 0:
+                self.cg_solver.callback_after_iteration = self._early_incumbent_callback
+                self.logger.info(
+                    f"[Root] Early incumbent will be computed after CG iteration {self.early_incumbent_iteration}\n")
+            else:
+                self.cg_solver.callback_after_iteration = None
+                self.logger.info(f"[Root] Incumbent will be computed after CG convergence\n")
 
-        # Update node status
+            # Solve with Column Generation
+            self.cg_solver.solve_cg()
+
+            # After CG converges: Check if we need to compute incumbent
+            if not self.incumbent_computed_early:
+                self.logger.info("\n" + "=" * 100)
+                self.logger.info(" COMPUTING FINAL INCUMBENT ".center(100, "="))
+                self.logger.info("=" * 100)
+                self.logger.info("Column Generation converged. All columns generated.")
+                self.logger.info("Solving final Root Master Problem as IP to get initial upper bound...\n")
+
+                self._compute_final_incumbent()
+            else:
+                self.logger.info("\n" + "=" * 100)
+                self.logger.info(" USING EARLY INCUMBENT ".center(100, "="))
+                self.logger.info("=" * 100)
+                self.logger.info(f"Incumbent was already computed at iteration {self.early_incumbent_iteration}")
+                self.logger.info(f"Current incumbent: {self.incumbent:.6f}")
+                self.logger.info("=" * 100 + "\n")
+
+            # Final LP relaxation check
+            self.logger.debug("\n[Root] Final LP relaxation check...")
+            self.cg_solver.master.solRelModel()
+
+            lambda_list_root = {key: var.X for key, var in self.cg_solver.master.lmbda.items()}
+
+            is_integral, lp_bound, most_frac_info = self.cg_solver.master.check_fractionality()
+
+            # Update root node
+            root_node.lp_bound = lp_bound
+            root_node.is_integral = is_integral
+            root_node.most_fractional_var = most_frac_info
+
+            # Update root node's column pool
+            self._update_node_column_pool(root_node)
+
+        # Update node status (common for both paths)
         if is_integral:
             root_node.status = 'integral'
             root_node.fathom_reason = 'integral'
             self.logger.info(f"\n✅ ROOT NODE IS INTEGRAL (LP)!")
         else:
-            root_node.status = 'solved'  # Changed from 'open' to 'solved'
+            root_node.status = 'solved'
             self.logger.warning(f"\n⚠️  ROOT NODE IS FRACTIONAL (LP) - Status: SOLVED")
 
         self.logger.info(f"   LP Bound: {lp_bound:.6f}")
@@ -352,13 +470,18 @@ class BranchAndPrice:
         self.update_gap()
 
         # Save initial Root-LP/SOL
-        if self.save_lps:
+        if self.save_lps and not self.use_labeling:
+            # Only save if using CG solver (has master attribute)
             self.cg_solver.master.Model.write('LPs/MP/LPs/master_node_root.lp')
             self.cg_solver.master.Model.write('LPs/MP/SOLs/master_node_root.sol')
 
         self.logger.info(f"\n{'=' * 100}")
         self.logger.info(" ROOT NODE SOLVED ".center(100, "="))
         self.logger.info(f"{'=' * 100}\n")
+
+        # Exit after root node for debugging
+        # self.logger.info("🛑 STOPPING AFTER ROOT NODE (sys.exit() for debugging)")
+        # sys.exit()
 
         return lp_bound, is_integral, most_frac_info, lambda_list_root
 
@@ -1803,6 +1926,7 @@ class BranchAndPrice:
         # 2. Column Generation loop
         threshold = self.cg_solver.threshold  # Use same threshold as CG
         cg_iteration = 0
+        last_lp_obj = float('inf')
 
         # Node time limit
         node_start_time = time.time()
@@ -1820,6 +1944,18 @@ class BranchAndPrice:
 
             cg_iteration += 1
 
+            print(f"\n{'*' * 102}\n*{f'Begin Column Generation Iteration {cg_iteration}':^100}*\n{'*' * 102}")
+            
+            # Print parallelization info
+            if self.use_labeling:
+                if self.use_parallel_pricing:
+                    print(f"* Parallel Labeling: ENABLED ({self.n_pricing_workers} workers){' ' * (100 - len(f'Parallel Labeling: ENABLED ({self.n_pricing_workers} workers)'))}*")
+                else:
+                    print(f"* Parallel Labeling: DISABLED (sequential){' ' * (100 - len('Parallel Labeling: DISABLED (sequential)'))}*")
+            else:
+                print(f"* Using Gurobi Subproblems (no labeling){' ' * (100 - len('Using Gurobi Subproblems (no labeling)'))}*")
+            print(f"{'*' * 102}")
+
             self.logger.info(f"    [CG Iter {cg_iteration}] Solving master LP...")
 
             # Solve master as LP
@@ -1829,6 +1965,15 @@ class BranchAndPrice:
                 return float('inf'), False, None, {}
 
             current_lp_obj = master.Model.objVal
+            
+            # Calculate improvement
+            if last_lp_obj != float('inf'):
+                improvement = last_lp_obj - current_lp_obj
+                relative_improvement = improvement / abs(last_lp_obj) if last_lp_obj != 0 else 0.0
+                print(f"    [Dual] LP objective improved: {current_lp_obj:.6f} (Δ={improvement:.6f}, rel={relative_improvement:.4%})")
+            
+            last_lp_obj = current_lp_obj
+            
             self.logger.info(f"    [CG Iter {cg_iteration}] LP objective: {current_lp_obj:.6f}")
 
             # Get duals from master
@@ -1844,27 +1989,165 @@ class BranchAndPrice:
             new_columns_found = False
             columns_added_this_iter = 0
 
-            for profile in self.cg_solver.P_Join:
-                # Build and solve subproblem with branching constraints
-                sp = self._build_subproblem_for_node(
-                    profile, node, duals_pi, duals_gamma, branching_duals
-                )
-                # SAVE FIRST SP FOR BRANCHING PROFILE
-                if profile == branching_profile and self.save_lps:
-                    sp_filename = f"LPs/SPs/pricing/sp_node_{node.node_id}_profile_{profile}_iter{cg_iteration}.lp"
-                    sp.Model.write(sp_filename)
-                    self.logger.info(f"    ✅ [SP Saved] First pricing SP for branching profile {profile}: {sp_filename}")
-                sp.solModel()
+            # ========================================================================
+            # PARALLEL PRICING (only with labeling algorithm)
+            # ========================================================================
+            if self.use_parallel_pricing and self.use_labeling:
+                from multiprocessing import Pool
+                
+                self.logger.info(f"    [Parallel Pricing] Solving {len(self.cg_solver.P_Join)} profiles with {self.n_pricing_workers} workers")
+                
+                # Prepare node data (without Gurobi models which can't be pickled)
+                node_data = {
+                    'node_id': node.node_id,
+                    'parent_id': node.parent_id,
+                    'depth': node.depth,
+                    'path': node.path,
+                    'branching_constraints': node.branching_constraints
+                }
+                
+                # Prepare CG solver data (picklable data only)
+                # Build theta_lookup
+                theta_base = self.cg_solver.app_data['theta_base'][0]
+                learn_type = self.cg_solver.app_data['learn_type'][0]
+                
+                theta_lookup = []
+                if learn_type == 'lin':
+                    lin_increase = self.cg_solver.app_data['lin_increase'][0]
+                    theta_lookup = [theta_base + lin_increase * k for k in range(50)]
+                elif learn_type == 'exp':
+                    k_learn = self.cg_solver.app_data['k_learn'][0]
+                    theta_lookup = [theta_base + (1 - theta_base) * (1 - math.exp(-k_learn * k)) for k in range(50)]
+                elif learn_type == 'sigmoid':
+                    k_learn = self.cg_solver.app_data['k_learn'][0]
+                    infl_point = self.cg_solver.app_data['infl_point'][0]
+                    theta_lookup = [theta_base + (1 - theta_base) / (1 + math.exp(-k_learn * (k - infl_point))) for k in range(50)]
+                else:
+                    try:
+                        const_val = float(learn_type)
+                        theta_lookup = [const_val] * 50
+                    except ValueError:
+                        theta_lookup = [theta_base] * 50
+                theta_lookup = [min(x, 1.0) for x in theta_lookup]
+                
+                cg_solver_data = {
+                    'Entry_agg': self.cg_solver.Entry_agg,
+                    'Req_agg': self.cg_solver.Req_agg,
+                    'E_dict': self.cg_solver.E_dict,
+                    'workers': list(range(1, len(self.cg_solver.T) + 1)),
+                    'max_time': max(self.cg_solver.D_Ext),
+                    'theta_lookup': theta_lookup,
+                    'MS': self.cg_solver.app_data['MS'][0],
+                    'MIN_MS': self.cg_solver.app_data['MS_min'][0],
+                    'max_columns_per_iter': self.max_columns_per_iter
+                }
+                
+                # Prepare arguments for each profile
+                profile_args = [
+                    (profile, node_data, duals_pi, duals_gamma.get(profile, 0.0), branching_duals, threshold, cg_solver_data)
+                    for profile in self.cg_solver.P_Join
+                ]
+                
+                # Solve all pricing problems in parallel using the GLOBAL function
+                with Pool(processes=self.n_pricing_workers) as pool:
+                    pricing_results = pool.starmap(_parallel_pricing_worker, profile_args)
+                
+                # Now add all columns sequentially (to avoid race conditions)
+                for profile, col_data_list in pricing_results:
+                    if not col_data_list:
+                        self.logger.debug(f"    [Parallel] Profile {profile}: no column found")
+                        continue
+                    
+                    # Ensure it's a list
+                    if isinstance(col_data_list, dict):
+                        col_data_list = [col_data_list]
+                    
+                    columns_added_for_profile = 0
+                    for col_data in col_data_list:
+                        # Print reduced cost if negative
+                        if col_data['reduced_cost'] < 0:
+                            self.logger.info(f'    [Parallel] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
+                        
+                        # Check if column has negative reduced cost below threshold
+                        if col_data['reduced_cost'] < -threshold:
+                            self.logger.info(f'    [Parallel] ✅ Adding column (below threshold -{threshold})')
+                            
+                            # Add column to node and master (sequentially!)
+                            self._add_column_from_labeling(col_data, profile, node, master)
+                            new_columns_found = True
+                            columns_added_this_iter += 1
+                            columns_added_for_profile += 1
+                        else:
+                            self.logger.debug(f"    [Parallel] Profile {profile}: red. cost {col_data['reduced_cost']:.6f} >= threshold")
+                    
+                    if columns_added_for_profile > 0:
+                        master.Model.update()
+            
+            # ========================================================================
+            # SEQUENTIAL PRICING (fallback or when parallelization is disabled)
+            # ========================================================================
+            else:
+                for profile in self.cg_solver.P_Join:
+                    # Choose between labeling algorithm and Gurobi
+                    if self.use_labeling:
+                        # ===== LABELING ALGORITHM =====
+                        self.logger.info(f"    [Labeling] Solving pricing for profile {profile}...")
+                        
+                        col_data_list = self._solve_with_labeling(
+                            profile, node, duals_pi, duals_gamma, branching_duals
+                        )
+                        
+                        # Handle list of columns (or single None if no columns found)
+                        if not col_data_list:
+                             self.logger.debug(f"    [Labeling] Profile {profile}: no column found")
+                        else:
+                            # Ensure it's a list (backward compatibility if _solve_with_labeling returns dict)
+                            if isinstance(col_data_list, dict):
+                                col_data_list = [col_data_list]
+                                
+                            columns_added_for_profile = 0
+                            for col_data in col_data_list:
+                                # Print reduced cost if negative
+                                if col_data['reduced_cost'] < 0:
+                                    self.logger.info(f'    [Labeling] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
+                                
+                                # Check if column has negative reduced cost below threshold
+                                if col_data['reduced_cost'] < -threshold:
+                                    self.logger.info(f'    [Labeling] ✅ Adding column (below threshold -{threshold})')
+                                    
+                                    # Add column to node and master
+                                    self._add_column_from_labeling(col_data, profile, node, master)
+                                    new_columns_found = True
+                                    columns_added_this_iter += 1
+                                    columns_added_for_profile += 1
+                                else:
+                                    self.logger.debug(f"    [Labeling] Profile {profile}: red. cost {col_data['reduced_cost']:.6f} >= threshold")
+                            
+                            if columns_added_for_profile > 0:
+                                 master.Model.update()
+                    
+                    else:
+                        # ===== GUROBI SUBPROBLEM =====
+                        # Build and solve subproblem with branching constraints
+                        sp = self._build_subproblem_for_node(
+                            profile, node, duals_pi, duals_gamma, branching_duals
+                        )
+                        # SAVE FIRST SP FOR BRANCHING PROFILE
+                        if profile == branching_profile and self.save_lps:
+                            sp_filename = f"LPs/SPs/pricing/sp_node_{node.node_id}_profile_{profile}_iter{cg_iteration}.lp"
+                            sp.Model.write(sp_filename)
+                            self.logger.info(f"    ✅ [SP Saved] First pricing SP for branching profile {profile}: {sp_filename}")
+                        sp.solModel()
 
-                # Check reduced cost
-                if sp.Model.status == 2 and sp.Model.objVal < -threshold:
-                    self.logger.info(f'Red. cost for profile {profile} : {sp.Model.objVal}')
+                        # Check reduced cost
+                        if sp.Model.status == 2 and sp.Model.objVal < -threshold:
+                            self.logger.info(f'    Red. cost for profile {profile} : {sp.Model.objVal}')
 
-                    # Add column to node and master
-                    self._add_column_from_subproblem(sp, profile, node, master)
-                    new_columns_found = True
-                    columns_added_this_iter += 1
-                    master.Model.update()
+                            # Add column to node and master
+                            self._add_column_from_subproblem(sp, profile, node, master)
+                            new_columns_found = True
+                            columns_added_this_iter += 1
+                            master.Model.update()
 
             self.logger.info(f"    [CG Iter {cg_iteration}] Added {columns_added_this_iter} new columns")
 
@@ -1873,6 +2156,12 @@ class BranchAndPrice:
                 self.logger.info(f"    [CG] Converged after {cg_iteration} iterations - no improving columns found")
                 break
             master.Model.update()
+            
+            # Save LP per iteration for Root Node
+            if self.save_lps and node.node_id == 0:
+                lp_filename = f"LPs/MP/Root/Root_Iter_{cg_iteration}.lp"
+                master.Model.write(lp_filename)
+                self.logger.info(f"    [LP Saved] Saved root node LP to {lp_filename}")
 
 
         # 4. Final LP solve and integrality check
@@ -2310,6 +2599,155 @@ class BranchAndPrice:
             sp.Model.update()
             self.logger.info(f"      [Pattern Dual Integration] Complete\n")
         return sp
+
+    def _solve_with_labeling(self, profile, node, duals_pi, duals_gamma, branching_duals=None):
+        """
+        Solve pricing problem using labeling algorithm instead of Gurobi.
+        
+        Args:
+            profile: Profile index
+            node: BnPNode
+            duals_pi: Dual variables for capacity constraints
+            duals_gamma: Dual variables for profile constraints
+            branching_duals: Dict of branching constraint duals (not yet used)
+        
+        Returns:
+            dict or None: Column data or None if no improving column found
+        """
+        from label import solve_pricing_for_profile_bnp
+        
+        # Extract profile-specific data from cg_solver
+        r_k = self.cg_solver.Entry_agg[profile]  # Release time
+
+        # Get service requirement from Req dictionary
+        s_k = self.cg_solver.Req_agg[profile]
+        
+        # Get objective mode from E_dict - determines if duration is minimized (1) or not (0)
+        # E_dict[profile] = 1 if profile in Focus Horizon (minimize duration)
+        # E_dict[profile] = 0 if profile in Post Horizon (only minimize cost, not duration)
+        obj_multiplier = self.cg_solver.E_dict.get(profile, 1)
+        
+        # Get next column ID
+        profile_columns = [col_id for (p, col_id) in node.column_pool.keys() if p == profile]
+        next_col_id = max(profile_columns) + 1 if profile_columns else 1
+        
+        # Configuration parameters from app_data
+        workers = list(range(1, len(self.cg_solver.T) + 1))  # [1, 2, 3, ...] based on number of therapists
+        max_time = max(self.cg_solver.D_Ext)  # Maximum time from extended day set (e.g., 42)
+        
+        # Learning curve parameters
+        # Learning curve parameters
+        theta_base = self.cg_solver.app_data['theta_base'][0]
+        learn_type = self.cg_solver.app_data['learn_type'][0]
+        
+        theta_lookup = []
+        
+        if learn_type == 'lin':
+            lin_increase = self.cg_solver.app_data['lin_increase'][0]
+            theta_lookup = [theta_base + lin_increase * k for k in range(50)]
+            
+        elif learn_type == 'exp':
+            k_learn = self.cg_solver.app_data['k_learn'][0]
+            theta_lookup = [theta_base + (1 - theta_base) * (1 - math.exp(-k_learn * k)) for k in range(50)]
+            
+        elif learn_type == 'sigmoid':
+            k_learn = self.cg_solver.app_data['k_learn'][0]
+            infl_point = self.cg_solver.app_data['infl_point'][0]
+            theta_lookup = [theta_base + (1 - theta_base) / (1 + math.exp(-k_learn * (k - infl_point))) for k in range(50)]
+            
+        else:
+            # Constant learning factor (numeric value or string representation of float)
+            try:
+                const_val = float(learn_type)
+                theta_lookup = [const_val] * 50
+            except ValueError:
+                # Fallback to theta_base if unknown string
+                self.logger.warning(f"Unknown learn_type '{learn_type}', using theta_base constant.")
+                theta_lookup = [theta_base] * 50
+
+        theta_lookup = [min(x, 1.0) for x in theta_lookup]  # Cap at 1.0
+        
+        # Milestone parameters
+        MS = self.cg_solver.app_data['MS'][0]
+        MIN_MS = self.cg_solver.app_data['MS_min'][0]
+        
+        # Extract duals_delta from branching constraints (for SP variable branching)
+        duals_delta = 0.0
+        if branching_duals:
+            variable_duals = {k: v for k, v in branching_duals.items() 
+                            if k[0] == profile and len(k) == 4 and k[1] != 'pattern'}
+            if variable_duals:
+                duals_delta = sum(variable_duals.values())
+        
+        # Call labeling algorithm
+
+        col_data_list = solve_pricing_for_profile_bnp(
+            profile=profile,
+            duals_pi=duals_pi,
+            duals_gamma=duals_gamma.get(profile, 0.0),
+            duals_delta=duals_delta,
+            r_k=r_k,
+            s_k=s_k,
+            obj_multiplier=obj_multiplier,
+            workers=workers,
+            max_time=max_time,
+            theta_lookup=theta_lookup,
+            MS=MS,
+            MIN_MS=MIN_MS,
+            col_id=next_col_id,
+            branching_constraints=node.branching_constraints,
+            max_columns=self.max_columns_per_iter  # Return up to N columns
+        )
+        
+        return col_data_list
+    
+    def _add_column_from_labeling(self, col_data, profile, node, master):
+        """
+        Add column generated by labeling algorithm to node and master.
+        
+        Args:
+            col_data: Column data from labeling algorithm
+            profile: Profile index
+            node: BnPNode
+            master: MasterProblem instance
+        """
+        # Print los_list for debugging
+        print(f"\n[Column Added] col_data['los_list'] = {col_data['los_list']}\n")
+        
+        # Extract column ID from schedules_x keys
+        sample_key = next(iter(col_data['schedules_x'].keys()))
+        col_id = sample_key[3]  # (profile, worker, time, col_id)
+        
+        # Add to node pool
+        node.column_pool[(profile, col_id)] = {
+            'schedules_x': col_data['schedules_x'],
+            'schedules_los': col_data['schedules_los'],
+            'x_list': col_data['x_list'],
+            'los_list': col_data['los_list'],
+        }
+        
+        # Add to master
+        master.addSchedule(col_data['schedules_x'])
+        master.addLOS(col_data['schedules_los'])
+        
+        # Build coefficient vector for master
+        lambda_list = self._create_lambda_list(profile)
+        
+        # Use x_vector directly from labeling algorithm
+        # This vector is already full length (workers * max_time)
+        x_list_full = col_data['x_vector']
+        
+        col_coefs = lambda_list + x_list_full
+
+        # Add lambda variable to master
+        if profile in self.cg_solver.P_F:
+            master.addLambdaVar(profile, col_id, col_coefs, col_data['los_list'])
+        else:
+            master.addLambdaVar(profile, col_id, col_coefs, [0])
+        
+        self.logger.info(f"      [Labeling] Added column {col_id} for profile {profile}, "
+                        f"reduced cost: {col_data['reduced_cost']:.6f}")
+
 
     def _add_column_from_subproblem(self, subproblem, profile, node, master):
         """

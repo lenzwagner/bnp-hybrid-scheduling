@@ -476,6 +476,7 @@ class ColumnGeneration:
                     if not col_info['is_focus_patient']:
                         los_list_for_master[0] = 0
 
+                    print('Lambda_mastzer', col_info['lambda_list'])
                     self.master.addLambdaVar(
                         col_info['index'], current_col_id,
                         [*col_info['lambda_list'], *col_info['x_list']],

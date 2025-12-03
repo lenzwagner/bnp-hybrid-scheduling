@@ -66,6 +66,12 @@ def main():
     use_branch_and_price = True  # Set to False for standard CG
     branching_strategy = 'sp'  # 'mp' for MP variable branching, 'sp' for SP variable branching
     search_strategy = 'bfs' # 'dfs' for Depth-First, 'bfs' for Best-Fit-Search
+    
+    # Parallelization settings
+    use_parallel_pricing = True  # Enable parallel pricing (requires use_labeling=True)
+    import os
+    n_pricing_workers = min(os.cpu_count(), 4) if use_parallel_pricing else 1  # Auto-detect CPUs, max 4
+    print('Core Number - 1', n_pricing_workers, os.cpu_count())
 
     # Output settings
     save_lps = True # Set to True to save LP and SOL files
@@ -93,6 +99,9 @@ def main():
         if use_branch_and_price:
             print(f"  - Branching Strategy: {branching_strategy.upper()}")
             print(f"  - Search Strategy: {'Depth-First (DFS)' if search_strategy == 'dfs' else 'Best-Fit (BFS)'}")
+            print(f"  - Parallel Pricing: {'Enabled' if use_parallel_pricing else 'Disabled'}")
+            if use_parallel_pricing:
+                print(f"  - Pricing Workers: {n_pricing_workers}")
         print(f"  - Seed: {seed}")
         print(f"  - Learning type: {app_data['learn_type'][0]}")
         print(f"  - Learning method: {learn_method}")
@@ -149,7 +158,11 @@ def main():
                                     verbose=verbose_output,
                                     ip_heuristic_frequency=5,
                                     early_incumbent_iteration=1,
-                                    save_lps=save_lps)
+                                    save_lps=save_lps,
+                                    use_labeling=True,
+                                    max_columns_per_iter=10,
+                                    use_parallel_pricing=use_parallel_pricing,
+                                    n_pricing_workers=n_pricing_workers)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)
 
         # Extract optimal schedules

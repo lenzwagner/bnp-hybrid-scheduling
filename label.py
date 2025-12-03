@@ -1,54 +1,29 @@
-import collections
-import sys
+"""
+Core Labeling Algorithm for Column Generation (Pricing Problem Solver)
+
+This module contains the core dynamic programming algorithm for solving 
+the pricing problem in column generation, without validation, testing, 
+or comparison utilities.
+"""
+
 import time
 
-# --- 1. Input Data ---
 
-pi = {(1, 1): 0.0, (1, 2): 0.0, (1, 3): 0.0, (1, 4): 0.0, (1, 5): 0.0, (1, 6): 0.0, (1, 7): -12.0, (1, 8): 0.0,
-      (1, 9): 0.0, (1, 10): 0.0, (1, 11): 0.0, (1, 12): 0.0, (1, 13): 0.0, (1, 14): 0.0, (1, 15): 0.0, (1, 16): 0.0,
-      (1, 17): 0.0, (1, 18): 0.0, (1, 19): 0.0, (1, 20): 0.0, (1, 21): -43119570900367.81, (1, 22): 0.0, (1, 23): 0.0,
-      (1, 24): 0.0, (1, 25): 0.0, (1, 26): 0.0, (1, 27): 0.0, (1, 28): 0.0, (1, 29): 0.0, (1, 30): 0.0, (1, 31): 0.0,
-      (1, 32): 0.0, (1, 33): 0.0, (1, 34): 0.0, (1, 35): -9.0, (1, 36): 0.0, (1, 37): 0.0, (1, 38): 0.0, (1, 39): 0.0,
-      (1, 40): 0.0, (1, 41): 0.0, (1, 42): 0.0, (2, 1): 0.0, (2, 2): 0.0, (2, 3): 0.0, (2, 4): 0.0, (2, 5): 0.0,
-      (2, 6): 0.0, (2, 7): 0.0, (2, 8): -12.0, (2, 9): 0.0, (2, 10): 0.0, (2, 11): 0.0, (2, 12): 0.0, (2, 13): 0.0,
-      (2, 14): 0.0, (2, 15): 0.0, (2, 16): 0.0, (2, 17): 0.0, (2, 18): 0.0, (2, 19): 0.0, (2, 20): 0.0, (2, 21): 0.0,
-      (2, 22): -12.0, (2, 23): 0.0, (2, 24): 0.0, (2, 25): 0.0, (2, 26): 0.0, (2, 27): 0.0, (2, 28): 0.0,
-      (2, 29): -21.0, (2, 30): 0.0, (2, 31): 0.0, (2, 32): 0.0, (2, 33): 0.0, (2, 34): 0.0, (2, 35): 0.0, (2, 36): 0.0,
-      (2, 37): 0.0, (2, 38): 0.0, (2, 39): 0.0, (2, 40): 0.0, (2, 41): 0.0, (2, 42): 0.0, (3, 1): 0.0, (3, 2): 0.0,
-      (3, 3): 0.0, (3, 4): 0.0, (3, 5): 0.0, (3, 6): 0.0, (3, 7): 0.0, (3, 8): 0.0, (3, 9): -12.0, (3, 10): 0.0,
-      (3, 11): 0.0, (3, 12): 0.0, (3, 13): 0.0, (3, 14): 0.0, (3, 15): 0.0, (3, 16): -12.0, (3, 17): 0.0, (3, 18): 0.0,
-      (3, 19): 0.0, (3, 20): 0.0, (3, 21): 0.0, (3, 22): 0.0, (3, 23): -12.0, (3, 24): 0.0, (3, 25): 0.0, (3, 26): 0.0,
-      (3, 27): 0.0, (3, 28): 0.0, (3, 29): 0.0, (3, 30): 0.0, (3, 31): 0.0, (3, 32): 0.0, (3, 33): 0.0, (3, 34): 0.0,
-      (3, 35): 0.0, (3, 36): 0.0, (3, 37): -9.0, (3, 38): 0.0, (3, 39): 0.0, (3, 40): 0.0, (3, 41): 0.0, (3, 42): 0.0}
-gamma = {2: 21.0, 3: 0.0, 4: 0.0, 7: 0.0, 8: 0.0, 10: 0.0, 12: 0.0, 15: 9.0, 18: 0.0, 19: 0.0, 21: 12.0, 22: 12.0,
-         24: 0.0, 29: 0.0, 31: 0.0, 33: 0.0, 34: 0.0, 35: 0.0, 37: 0.0, 38: 0.0, 41: 0.0, 42: 3.0, 46: 0.0, 47: 4.0,
-         49: 0.0, 53: 0.0, 55: 2.0, 57: 3.0, 58: 0.0, 59: 2.0, 61: 2.0, 62: 0.0, 64: 3.0, 66: 0.0, 67: 0.0, 70: 0.0,
-         71: 0.0, 72: 0.0, 75: 0.0, 76: 0.0, 80: 0.0, 81: 4.0}
-
-r_i = {2: 19, 3: 15, 4: 38, 7: 22, 8: 16, 10: 17, 12: 25, 15: 34, 18: 26, 19: 13, 21: 7, 22: 16, 24: 15, 29: 40, 31: 41,
-       33: 11, 34: 32, 35: 18, 37: 10, 38: 13, 41: 32, 42: 4, 46: 26, 47: 3, 49: 28, 53: 22, 55: 5, 57: 2, 58: 17,
-       59: 5, 61: 2, 62: 10, 64: 1, 66: 31, 67: 37, 70: 19, 71: 9, 72: 38, 75: 9, 76: 37, 80: 13, 81: 1}
-s_i = {2: 18, 3: 16, 4: 7, 7: 8, 8: 6, 10: 7, 12: 5, 15: 10, 18: 7, 19: 3, 21: 10, 22: 11, 24: 6, 29: 6, 31: 4, 33: 2,
-       34: 5, 35: 4, 37: 4, 38: 10, 41: 4, 42: 5, 46: 4, 47: 6, 49: 11, 53: 6, 55: 3, 57: 5, 58: 5, 59: 2, 61: 3, 62: 8,
-       64: 5, 66: 6, 67: 8, 70: 6, 71: 3, 72: 4, 75: 7, 76: 2, 80: 4, 81: 6}
-obj_mode = {2: 0, 3: 0, 4: 0, 7: 0, 8: 0, 10: 0, 12: 0, 15: 0, 18: 0, 19: 0, 21: 0, 22: 0, 24: 0, 29: 0, 31: 0, 33: 0,
-            34: 0, 35: 0, 37: 0, 38: 0, 41: 0, 42: 1, 46: 0, 47: 1, 49: 0, 53: 0, 55: 1, 57: 1, 58: 0, 59: 1, 61: 1,
-            62: 0, 64: 1, 66: 0, 67: 0, 70: 0, 71: 0, 72: 0, 75: 0, 76: 0, 80: 0, 81: 1}
-
-# Parameter
-MS = 5
-MIN_MS = 2
-MAX_TIME = 42  # Hier wird es dynamisch verwendet
-WORKERS = [1, 2, 3]
-
-# Lookup Table
-theta_lookup = [0.2 + 0.01 * k for k in range(50)]
-theta_lookup = [min(x, 1.0) for x in theta_lookup]
-
-
-# --- 2. Helper Functions ---
+# --- Helper Functions ---
 
 def check_strict_feasibility(history, next_val, MS, MIN_MS):
+    """
+    Check if adding next_val to the history satisfies rolling window constraints.
+    
+    Args:
+        history: Tuple of recent actions (0 or 1 values)
+        next_val: The next action to check (0 or 1)
+        MS: Rolling window size
+        MIN_MS: Minimum human services required in window
+        
+    Returns:
+        bool: True if feasible, False otherwise
+    """
     potential_sequence = history + (next_val,)
     seq_len = len(potential_sequence)
 
@@ -66,7 +41,123 @@ def check_strict_feasibility(history, next_val, MS, MIN_MS):
         return True
 
 
+def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id, 
+                         pruning_stats, dominance_mode='bucket', zeta=None, epsilon=1e-9):
+    """
+    Adds a state to buckets, applying dominance rules.
+    
+    Args:
+        buckets: State storage structure
+        cost: Current accumulated cost
+        prog: Current progress towards target
+        ai_count: Number of AI sessions used
+        hist: History tuple for rolling window
+        path: Path pattern (list of 0s and 1s)
+        recipient_id: Current recipient ID (for debug output)
+        pruning_stats: Statistics dictionary
+        dominance_mode: 'bucket' or 'global'
+        zeta: Branch constraint deviation vector (optional)
+        epsilon: Tolerance for float comparisons
+    """
+    # Bucket key includes zeta if branch constraints are active
+    if zeta is not None:
+        bucket_key = (ai_count, hist, zeta)
+    else:
+        bucket_key = (ai_count, hist)
+    
+    # --- GLOBAL PRUNING CHECK (Only in Global Mode) ---
+    if dominance_mode == 'global':
+        is_dominated_globally = False
+        dominator_global = None
+        
+        for (ai_other, hist_other), other_list in buckets.items():
+            # Another bucket can only dominate if it is "better/equal" in AI & Hist
+            if ai_other < ai_count:
+                continue
+                
+            # Hist Check (component-wise >=)
+            if len(hist_other) != len(hist):
+                continue
+            
+            hist_better = True
+            for h1, h2 in zip(hist_other, hist):
+                if h1 < h2:
+                    hist_better = False
+                    break
+            if not hist_better:
+                continue
+            
+            # Check Cost & Prog in this bucket
+            for c_old, p_old, _ in other_list:
+                if c_old <= cost + epsilon and p_old >= prog - epsilon:
+                    is_dominated_globally = True
+                    dominator_global = (c_old, p_old, ai_other, hist_other)
+                    break
+            
+            if is_dominated_globally:
+                break
+        
+        if is_dominated_globally:
+            pruning_stats['dominance'] += 1
+            if not pruning_stats['printed_dominance'].get(recipient_id, False):
+                print(f"    [DOMINANCE GLOBAL] Recipient {recipient_id}: Pruned new state (C={cost:.2f}, P={prog:.2f}, AI={ai_count})")
+                print(f"                       by (C={dominator_global[0]:.2f}, P={dominator_global[1]:.2f}, AI={dominator_global[2]})")
+                pruning_stats['printed_dominance'][recipient_id] = True
+            return
+
+    # --- BUCKET MANAGEMENT ---
+    if bucket_key not in buckets:
+        buckets[bucket_key] = []
+    
+    bucket_list = buckets[bucket_key]
+
+    # --- LOCAL DOMINANCE (Within the Bucket) ---
+    is_dominated = False
+    dominator = None
+    
+    for c_old, p_old, _ in bucket_list:
+        if c_old <= cost + epsilon and p_old >= prog - epsilon:
+            is_dominated = True
+            dominator = (c_old, p_old)
+            break
+    
+    if is_dominated:
+        pruning_stats['dominance'] += 1
+        if not pruning_stats['printed_dominance'].get(recipient_id, False):
+            #print(f"    [DOMINANCE BUCKET] Recipient {recipient_id}: Pruned new state (C={cost:.2f}, P={prog:.2f})")
+            #print(f"                       by same bucket (C={dominator[0]:.2f}, P={dominator[1]:.2f})")
+            pruning_stats['printed_dominance'][recipient_id] = True
+        return 
+    
+    # --- CLEANUP ---
+    # Remove existing states that are dominated by the new one
+    new_bucket_list = []
+    
+    for c_old, p_old, path_old in bucket_list:
+        if cost <= c_old + epsilon and prog >= p_old - epsilon:
+            pruning_stats['dominance'] += 1
+            continue 
+        new_bucket_list.append((c_old, p_old, path_old))
+    
+    new_bucket_list.append((cost, prog, path))
+    buckets[bucket_key] = new_bucket_list
+
+
 def generate_full_column_vector(worker_id, path_assignments, start_time, end_time, max_time, num_workers):
+    """
+    Generate the full column vector for a schedule.
+    
+    Args:
+        worker_id: Worker ID (1-indexed)
+        path_assignments: List of assignments (0 or 1)
+        start_time: Start time of schedule
+        end_time: End time of schedule
+        max_time: Maximum time horizon
+        num_workers: Total number of workers
+        
+    Returns:
+        List of floats representing the full column vector
+    """
     vector_length = num_workers * max_time
     full_vector = [0.0] * vector_length
     worker_offset = (worker_id - 1) * max_time
@@ -78,223 +169,624 @@ def generate_full_column_vector(worker_id, path_assignments, start_time, end_tim
     return full_vector
 
 
-def validate_final_column(col_data, s_req, MS, MIN_MS, theta_table):
+def compute_lower_bound(current_cost, start_time, end_time, gamma_k, obj_mode):
     """
-    Validiert eine fertige Spalte strikt auf alle Constraints.
-    Gibt eine Liste von Fehlern zurück (leer wenn alles OK).
+    Calculates Lower Bound for Bound Pruning.
+
+    Assumption: Maximum productivity (only therapists with efficiency = 1.0)
+    This guarantees that we don't miss any optimal solutions.
+    compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+    Returns:
+        float: Minimum achievable final Reduced Cost (optimistic)
     """
-    errors = []
-    path = col_data['path_pattern']
+    import math
 
-    # 1. Check Start & End Constraint
-    if path[0] != 1:
-        errors.append(f"Start constraint violation: First day must be Machine (1), found {path[0]}")
+    # Time Cost is fixed for the specific column length (end_time - start_time + 1)
+    duration = end_time - start_time + 1
+    time_cost = duration * obj_mode
 
-    # MODIFIZIERT: Check End Constraint
-    # Wenn es KEIN Timeout ist, MUSS es eine 1 sein.
-    # Wenn es ein Timeout ist, darf es auch eine 0 sein.
-    is_timeout = (col_data['end'] == MAX_TIME)
+    # Current cost contains the accumulated -pi values so far.
+    # We assume future -pi values are 0 (optimistic, since -pi >= 0).
 
-    if path[-1] != 1:
-        if not is_timeout:
-            errors.append(f"End constraint violation: Last day must be Machine (1), found {path[-1]}")
-        # Im Timeout-Fall (is_timeout == True) erlauben wir hier implizit die 0.
+    lower_bound = current_cost + time_cost - gamma_k
 
-    # 2. Check Service Target (s_i)
-    progress = 0.0
-    ai_usage = 0
-    for x in path:
-        if x == 1:
-            progress += 1.0
-        else:
-            eff = theta_table[ai_usage] if ai_usage < len(theta_table) else 1.0
-            progress += eff
-            ai_usage += 1
-
-    # Toleranz 1e-9
-    if progress < s_req - 1e-9:
-        # Sonderfall: Timeout (Ende des Horizonts) darf Ziel verfehlen, wenn Modell das erlaubt.
-        # Wir markieren es hier als Info/Fehler zur Kontrolle (wie gewünscht).
-        if is_timeout:
-            errors.append(f"Target NOT met (TIMEOUT case): {progress:.2f} < {s_req}")
-        else:
-            errors.append(f"Target NOT met: {progress:.2f} < {s_req}")
-
-    # 3. Check Rolling Window (Strict Window-by-Window)
-    if len(path) >= MS:
-        for i in range(len(path) - MS + 1):
-            window = path[i: i + MS]
-            if sum(window) < MIN_MS:
-                errors.append(
-                    f"Window violation at index {i} (Days {col_data['start'] + i}-{col_data['start'] + i + MS - 1}): {window} sum={sum(window)}")
-
-    else:
-        current_sum = sum(path)
-        remaining = MS - len(path)
-        if current_sum + remaining < MIN_MS:
-            errors.append(f"Short path violation: {path} (sum {current_sum}) cannot satisfy MIN_MS={MIN_MS}")
-
-    return errors
+    return lower_bound
 
 
-# --- 3. Labeling Algorithm ---
+def compute_candidate_workers(workers, r_k, tau_max, pi_dict):
+    """
+    Worker Dominance Pre-Elimination:
+    Worker j1 dominates j2 if π_{j1,t} >= π_{j2,t} for all t in [r_k, tau_max]
+    AND π_{j1,t} > π_{j2,t} for at least one t (strict dominance).
+    Since π values are <= 0 (implicit costs), higher π means lower cost.
+    
+    Returns:
+        List of non-dominated workers
+    """
+    candidate_workers = []
 
-def solve_pricing_for_recipient(k, r_k, s_k, gamma_k, obj_multiplier):
-    best_reduced_cost = float('inf')
+    for j1 in workers:
+        is_dominated = False
+
+        for j2 in workers:
+            if j1 == j2:
+                continue
+
+            # Check if j2 dominates j1
+            all_better_or_equal = True
+            at_least_one_strictly_better = False
+
+            for t in range(r_k, tau_max + 1):
+                pi_j1 = pi_dict.get((j1, t), 0.0)
+                pi_j2 = pi_dict.get((j2, t), 0.0)
+
+                if pi_j2 < pi_j1:  # j2 is worse in this period
+                    all_better_or_equal = False
+                    break
+                elif pi_j2 > pi_j1:  # j2 is strictly better in this period
+                    at_least_one_strictly_better = True
+
+            # j2 dominates j1 if it's at least as good everywhere and strictly better somewhere
+            if all_better_or_equal and at_least_one_strictly_better:
+                is_dominated = True
+                break
+
+        if not is_dominated:
+            candidate_workers.append(j1)
+
+    return candidate_workers
+
+
+# --- Core Labeling Algorithm ---
+
+def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_dict, 
+                                workers, max_time, ms, min_ms, theta_lookup,
+                                use_bound_pruning=True, dominance_mode='bucket', 
+                                branch_constraints=None, branching_variant='mp',
+                                max_columns=10):
+    """
+    Solve the pricing problem for a single recipient.
+    
+    Args:
+        recipient_id: Recipient ID
+        r_k: Release time
+        s_k: Service target
+        gamma_k: Dual value gamma
+        obj_mode: Objective mode multiplier
+        pi_dict: Dual values pi {(worker_id, time): value}
+        workers: List of worker IDs
+        max_time: Planning horizon
+        ms: Rolling window size
+        min_ms: Minimum human services in window
+        theta_lookup: AI efficiency lookup table
+        use_bound_pruning: Enable lower bound pruning
+        dominance_mode: 'bucket' or 'global'
+        branch_constraints: Optional branch constraints
+        branching_variant: Branching strategy ('mp' or 'sp')
+        max_columns: Maximum number of columns to return
+        
+    Returns:
+        List of best columns (dictionaries)
+    """
     best_columns = []
     epsilon = 1e-9
+    
+    pruning_stats = {
+        'lb': 0,
+        'dominance': 0,
+        'printed_dominance': {}
+    }
 
-    time_until_end = MAX_TIME - r_k + 1
-    candidate_workers = WORKERS  # Simplified dominance
+
+    time_until_end = max_time - r_k + 1
+
+    # Worker Dominance Pre-Elimination
+    candidate_workers = compute_candidate_workers(workers, r_k, max_time, pi_dict)
+    eliminated_workers = [w for w in workers if w not in candidate_workers]
+
+    # Print for each Recipient
+    if eliminated_workers:
+        print(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (eliminated {eliminated_workers})")
+    else:
+        print(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (no dominance)")
+    
+    # --- Parse Branch Constraints (MP Branching) ---
+    forbidden_schedules = []
+    use_branch_constraints = False
+    
+    if branch_constraints:
+        # Handle list of constraint objects (from Branch-and-Price)
+        if isinstance(branch_constraints, list):
+            for constraint in branch_constraints:
+                # Check if constraint applies to this profile
+                if not hasattr(constraint, 'profile') or constraint.profile != recipient_id:
+                    continue
+                
+                # We only care about LEFT branches for MP branching (no-good cuts)
+                if not hasattr(constraint, 'direction') or constraint.direction != 'left':
+                    continue
+                
+                if branching_variant == 'mp':
+                    # Check for MPVariableBranching with original_schedule
+                    if hasattr(constraint, 'original_schedule') and constraint.original_schedule:
+                        use_branch_constraints = True
+                        forbidden_schedule = {}
+                        # original_schedule keys are (p, j, t, col_id)
+                        for key, val in constraint.original_schedule.items():
+                            if len(key) >= 3:
+                                j, t = key[1], key[2]
+                                forbidden_schedule[(j, t)] = val
+                        forbidden_schedules.append(forbidden_schedule)
+                        
+        # Handle dictionary (legacy format)
+        elif isinstance(branch_constraints, dict):
+            for constraint_key, constraint_data in branch_constraints.items():
+                if constraint_data.get("profile") != recipient_id:
+                    continue
+                
+                if constraint_data.get("direction") != "left":
+                    continue
+                
+                if branching_variant == 'mp':
+                    if "original_schedule" in constraint_data:
+                        use_branch_constraints = True
+                        forbidden_schedule = {}
+                        for key, val in constraint_data["original_schedule"].items():
+                            # key format might vary in dict, assume compatible
+                            if isinstance(key, tuple) and len(key) >= 3:
+                                j, t = key[1], key[2]
+                                forbidden_schedule[(j, t)] = val
+                        forbidden_schedules.append(forbidden_schedule)
+        
+        if use_branch_constraints:
+            print(f"  [MP BRANCHING] {len(forbidden_schedules)} no-good cut(s) active for recipient {recipient_id}")
 
     for j in candidate_workers:
         effective_min_duration = min(int(s_k), time_until_end)
         start_tau = r_k + effective_min_duration - 1
 
-        for tau in range(start_tau, MAX_TIME + 1):
-            is_timeout_scenario = (tau == MAX_TIME)
+        for tau in range(start_tau, max_time + 1):
+            is_timeout_scenario = (tau == max_time)
 
-            start_cost = -pi.get((j, r_k), 0)
-            current_states = {
-                (1.0, 0, (1,)): (start_cost, [1])
-            }
+            start_cost = -pi_dict.get((j, r_k), 0)
 
-            # DP Loop bis kurz vor Tau
+            # Initialize deviation vector ζ_t for branch constraints
+            num_cuts = len(forbidden_schedules)
+            initial_zeta = tuple([0] * num_cuts) if use_branch_constraints else None
+            
+            current_states = {}
+            # Initialize with start state
+            initial_history = (1,)  # First action is always 1 (Therapist)
+            add_state_to_buckets(current_states, start_cost, 1.0, 0, initial_history, [1], 
+                               recipient_id, pruning_stats, dominance_mode, initial_zeta, epsilon)
+
+            # DP Loop until just before Tau
+            pruned_count_total = 0
+
             for t in range(r_k + 1, tau):
                 next_states = {}
-                for state, (cost, path) in current_states.items():
-                    prog, ai_count, hist = state
+                pruned_count_this_period = 0
 
-                    remaining_steps = tau - t + 1
-                    if not is_timeout_scenario:
-                        if prog + remaining_steps * 1.0 < s_k - epsilon:
-                            continue
+                # Iterate over all buckets
+                for bucket_key, bucket_list in current_states.items():
+                    # Extract components from bucket key
+                    if use_branch_constraints:
+                        ai_count, hist, zeta = bucket_key
+                    else:
+                        ai_count, hist = bucket_key
+                        zeta = None
+                    
+                    # Iterate over all states in the bucket
+                    for cost, prog, path in bucket_list:
 
-                    # A: Therapist
-                    if check_strict_feasibility(hist, 1, MS, MIN_MS):
-                        cost_ther = cost - pi.get((j, t), 0)
-                        prog_ther = prog + 1.0
-                        new_hist_ther = (hist + (1,))
-                        if len(new_hist_ther) > MS - 1: new_hist_ther = new_hist_ther[-(MS - 1):]
+                        # BOUND PRUNING: Check if state is promising
+                        if use_bound_pruning:
+                            lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+                            if lb >= 0:
+                                pruned_count_this_period += 1
+                                pruned_count_total += 1
+                                pruning_stats['lb'] += 1
+                                continue  # State is pruned!
 
-                        state_ther = (prog_ther, ai_count, new_hist_ther)
-                        if state_ther not in next_states or cost_ther < next_states[state_ther][0]:
-                            next_states[state_ther] = (cost_ther, path + [1])
+                        # Feasibility Check
+                        remaining_steps = tau - t + 1
+                        if not is_timeout_scenario:
+                            if prog + remaining_steps * 1.0 < s_k - epsilon:
+                                continue
 
-                    # B: AI
-                    if check_strict_feasibility(hist, 0, MS, MIN_MS):
-                        cost_ai = cost
-                        efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
-                        prog_ai = prog + efficiency
-                        ai_count_new = ai_count + 1
-                        new_hist_ai = (hist + (0,))
-                        if len(new_hist_ai) > MS - 1: new_hist_ai = new_hist_ai[-(MS - 1):]
+                        # A: Therapist
+                        if check_strict_feasibility(hist, 1, ms, min_ms):
+                            cost_ther = cost - pi_dict.get((j, t), 0)
+                            prog_ther = prog + 1.0
+                            new_hist_ther = (hist + (1,))
+                            if len(new_hist_ther) > ms - 1: 
+                                new_hist_ther = new_hist_ther[-(ms - 1):]
+                            
+                            # Update deviation vector ζ_t if branch constraints are active
+                            new_zeta_ther = zeta
+                            if use_branch_constraints:
+                                new_zeta_ther = list(zeta)
+                                for cut_idx, cut in enumerate(forbidden_schedules):
+                                    if new_zeta_ther[cut_idx] == 0:  # Not yet deviated
+                                        forbidden_val = cut["schedule"].get((j, t), None)
+                                        if forbidden_val is not None and forbidden_val != 1:
+                                            new_zeta_ther[cut_idx] = 1  # Deviated!
+                                new_zeta_ther = tuple(new_zeta_ther)
 
-                        state_ai = (prog_ai, ai_count_new, new_hist_ai)
-                        if state_ai not in next_states or cost_ai < next_states[state_ai][0]:
-                            next_states[state_ai] = (cost_ai, path + [0])
+                            add_state_to_buckets(next_states, cost_ther, prog_ther, ai_count, new_hist_ther, 
+                                               path + [1], recipient_id, pruning_stats, dominance_mode, 
+                                               new_zeta_ther, epsilon)
+
+                        # B: AI
+                        if check_strict_feasibility(hist, 0, ms, min_ms):
+                            cost_ai = cost
+                            efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                            prog_ai = prog + efficiency
+                            ai_count_new = ai_count + 1
+                            new_hist_ai = (hist + (0,))
+                            if len(new_hist_ai) > ms - 1: 
+                                new_hist_ai = new_hist_ai[-(ms - 1):]
+                            
+                            # Update deviation vector ζ_t if branch constraints are active
+                            new_zeta_ai = zeta
+                            if use_branch_constraints:
+                                new_zeta_ai = list(zeta)
+                                for cut_idx, cut in enumerate(forbidden_schedules):
+                                    if new_zeta_ai[cut_idx] == 0:  # Not yet deviated
+                                        forbidden_val = cut["schedule"].get((j, t), None)
+                                        if forbidden_val is not None and forbidden_val != 0:
+                                            new_zeta_ai[cut_idx] = 1  # Deviated!
+                                new_zeta_ai = tuple(new_zeta_ai)
+
+                            add_state_to_buckets(next_states, cost_ai, prog_ai, ai_count_new, new_hist_ai, 
+                                               path + [0], recipient_id, pruning_stats, dominance_mode, 
+                                               new_zeta_ai, epsilon)
 
                 current_states = next_states
-                if not current_states: break
+                if not current_states: 
+                    break
 
             # Final Step (Transition to Tau)
-            # Hier ist die Änderung für den Timeout-Fall
-            for state, (cost, path) in current_states.items():
-                prog, ai_count, hist = state
+            for bucket_key, bucket_list in current_states.items():
+                # Extract components from bucket key
+                if use_branch_constraints:
+                    ai_count, hist, zeta = bucket_key
+                else:
+                    ai_count, hist = bucket_key
+                    zeta = None
+                    
+                for cost, prog, path in bucket_list:
+                    
+                    # Collect possible end steps for this state
+                    possible_moves = []
 
-                # Wir sammeln mögliche End-Schritte für diesen State
-                possible_moves = []
+                    # Option 1: End with Therapist (1) - Standard
+                    if check_strict_feasibility(hist, 1, ms, min_ms):
+                        possible_moves.append(1)
 
-                # Option 1: Enden mit Therapeut (1) - Standard
-                if check_strict_feasibility(hist, 1, MS, MIN_MS):
-                    possible_moves.append(1)
+                    # Option 2: End with App (0) - ONLY if Timeout
+                    if is_timeout_scenario:
+                        if check_strict_feasibility(hist, 0, ms, min_ms):
+                            possible_moves.append(0)
 
-                # Option 2: Enden mit App (0) - NUR wenn Timeout
-                if is_timeout_scenario:
-                    if check_strict_feasibility(hist, 0, MS, MIN_MS):
-                        possible_moves.append(0)
+                    for move in possible_moves:
+                        # Calculate values based on Move type
+                        if move == 1:
+                            final_cost_accum = cost - pi_dict.get((j, tau), 0)
+                            final_prog = prog + 1.0
+                            final_ai_count = ai_count
+                        else:  # move == 0
+                            final_cost_accum = cost
+                            efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                            final_prog = prog + efficiency
+                            final_ai_count = ai_count + 1
 
-                for move in possible_moves:
-                    # Berechne Werte basierend auf Move-Typ
-                    if move == 1:
-                        final_cost_accum = cost - pi.get((j, tau), 0)
-                        final_prog = prog + 1.0
-                        # Hier nutzen wir den alten count, da er sich nicht erhöht hat
-                        final_ai_count = ai_count
-                    else:  # move == 0
-                        final_cost_accum = cost
-                        efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
-                        final_prog = prog + efficiency
-                        final_ai_count = ai_count + 1
+                        final_path = path + [move]
+                        condition_met = (final_prog >= s_k - epsilon)
+                        
+                        # Update final zeta for this move
+                        final_zeta = zeta
+                        if use_branch_constraints:
+                            final_zeta = list(zeta)
+                            for cut_idx, cut in enumerate(forbidden_schedules):
+                                if final_zeta[cut_idx] == 0:  # Not yet deviated
+                                    forbidden_val = cut["schedule"].get((j, tau), None)
+                                    if forbidden_val is not None and forbidden_val != move:
+                                        final_zeta[cut_idx] = 1  # Deviated!
+                            final_zeta = tuple(final_zeta)
+                        
+                        # TERMINAL FEASIBILITY CHECK: All deviation vector entries must equal 1
+                        if use_branch_constraints:
+                            if not all(z == 1 for z in final_zeta):
+                                # This path hasn't deviated from all forbidden schedules -> REJECT
+                                continue
 
-                    final_path = path + [move]
-                    condition_met = (final_prog >= s_k - epsilon)
+                        if condition_met or is_timeout_scenario:
+                            duration = tau - r_k + 1
+                            reduced_cost = (obj_mode * duration) + final_cost_accum - gamma_k
 
-                    if condition_met or is_timeout_scenario:
-                        duration = tau - r_k + 1
-                        reduced_cost = (obj_multiplier * duration) + final_cost_accum - gamma_k
+                            col_candidate = {
+                                'k': recipient_id,
+                                'worker': j,
+                                'start': r_k,
+                                'end': tau,
+                                'duration': duration,
+                                'reduced_cost': reduced_cost,
+                                'final_progress': final_prog,
+                                'x_vector': generate_full_column_vector(j, final_path, r_k, tau, max_time, len(workers)),
+                                'path_pattern': final_path
+                            }
 
-                        col_candidate = {
-                            'k': k,
-                            'worker': j,
-                            'start': r_k,
-                            'end': tau,
-                            'duration': duration,
-                            'reduced_cost': reduced_cost,
-                            'final_progress': final_prog,
-                            'x_vector': generate_full_column_vector(j, final_path, r_k, tau, MAX_TIME, len(WORKERS)),
-                            'path_pattern': final_path
-                        }
+                            if reduced_cost < -epsilon:
+                                best_columns.append(col_candidate)
+            
+            # Debug Output: Bound Pruning Statistics
+            if pruned_count_total > 0:
+                print(f"    Worker {j}, tau={tau}: Pruned {pruned_count_total} states by Lower Bound")
 
-                        if reduced_cost < best_reduced_cost - epsilon:
-                            best_reduced_cost = reduced_cost
-                            best_columns = [col_candidate]
-                        elif abs(reduced_cost - best_reduced_cost) < epsilon:
-                            best_columns.append(col_candidate)
+    # Sort columns by reduced cost (ascending, most negative first)
+    best_columns.sort(key=lambda x: x['reduced_cost'])
+    
+    # Keep only unique columns (based on path pattern and worker)
+    unique_columns = []
+    seen_patterns = set()
+    
+    for col in best_columns:
+        pattern_key = (col['worker'], tuple(col['path_pattern']))
+        if pattern_key not in seen_patterns:
+            unique_columns.append(col)
+            seen_patterns.add(pattern_key)
+            
+        if len(unique_columns) >= max_columns:
+            break
+            
+    best_columns = unique_columns
+
+    # Print negative reduced costs if found
+    #for col in best_columns:
+        #print(f"  [Labeling] Recipient {recipient_id} with gamma {gamma_k}: Negative red. cost: {col['reduced_cost']:.2f} with {col['duration']} and {col['x_vector']}")
 
     return best_columns
 
 
-# --- 4. Main Execution ---
+# --- 3b. Wrapper for Branch-and-Price Integration ---
 
-t0 = time.time()
-results = []
+def solve_pricing_for_profile_bnp(
+    profile,
+    duals_pi,
+    duals_gamma,
+    duals_delta,
+    r_k,
+    s_k,
+    obj_multiplier,
+    workers,
+    max_time,
+    theta_lookup,
+    MS,
+    MIN_MS,
+    col_id,
+    branching_constraints=None,
+    max_columns=10
+):
+    """
+    Wrapper function for Branch-and-Price integration.
+    
+    Solves the pricing problem for a single profile using the labeling algorithm
+    and returns results in the format expected by branch_and_price.py.
+    
+    Args:
+        profile: Profile index (k)
+        duals_pi: Dict of (worker, time) -> dual value
+        duals_gamma: Float, dual value for this profile's convexity constraint
+        duals_delta: Float, sum of branching constraint duals
+        r_k: Release time for this profile
+        s_k: Service requirement
+        obj_multiplier: Objective mode (0 or 1)
+        workers: List of available workers
+        max_time: Time horizon
+        theta_lookup: Lookup table for learning curve
+        MS: Milestone window size
+        MIN_MS: Minimum therapist sessions in window
+        col_id: Next column ID to use
+        branching_constraints: Optional list of branching constraints (not yet implemented)
+        max_columns: Maximum number of columns to return
+    
+    Returns:
+        list: List of best columns in subproblem format, or empty list if no improving column found
+        [
+            {
+                'reduced_cost': float,
+                'schedules_x': dict {(p, j, t, col_id): value},
+                'schedules_los': dict {(p, col_id): los_value},
+                'x_list': list of x values,
+                'los_list': list with single los value,
+                'path_pattern': list [0, 1, 1, ...],
+                'worker': int,
+                'start': int,
+                'end': int
+            }
+        ]
+    """
+    # Set global variables (temporary solution until we refactor to pass all parameters)
+    global MAX_TIME, WORKERS, pi, gamma
+    
+    MAX_TIME = max_time
+    WORKERS = workers
+    
+    # Convert duals_pi to global pi format expected by labeling algorithm
+    pi = duals_pi
+    # gamma for this profile
+    gamma_k = duals_gamma
+    
+    # Call the labeling algorithm with correct parameters
+    best_columns = solve_pricing_for_recipient(
+        recipient_id=profile,
+        r_k=r_k,
+        s_k=s_k,
+        gamma_k=gamma_k,
+        obj_mode=obj_multiplier,
+        pi_dict=pi,
+        workers=workers,
+        max_time=max_time,
+        ms=MS,
+        min_ms=MIN_MS,
+        theta_lookup=theta_lookup,
+        use_bound_pruning=False,  # Disable for now
+        dominance_mode='bucket',
+        branch_constraints=branching_constraints,
+        branching_variant='mp',
+        max_columns=max_columns
+    )
+    
+    if not best_columns:
+        return []
+    
+    formatted_columns = []
+    current_col_id = col_id
+    
+    for col in best_columns:
+        # Convert to subproblem format expected by branch_and_price.py
+        worker = col['worker']
+        start = col['start']
+        end = col['end']
+        path_pattern = col['path_pattern']
+    
+        # Build schedules_x: {(profile, worker, time, col_id): value}
+        schedules_x = {}
+        for t_idx, val in enumerate(path_pattern):
+            current_time = start + t_idx
+            schedules_x[(profile, worker, current_time, current_col_id)] = float(val)
+        
+        # Build schedules_los: {(profile, col_id): los_value}
+        duration = col['duration']
+        schedules_los = {(profile, current_col_id): duration}
+        
+        # Build x_list (list of all x values for this column)
+        x_list = list(schedules_x.values())
+        
+        # Build los_list (single element list with duration)
+        los_list = [duration]
+        
+        formatted_columns.append({
+            'reduced_cost': col['reduced_cost'],
+            'schedules_x': schedules_x,
+            'schedules_los': schedules_los,
+            'x_list': x_list,
+            'los_list': los_list,
+            'path_pattern': path_pattern,
+            'worker': worker,
+            'start': start,
+            'end': end,
+            'final_progress': col['final_progress'],
+            'x_vector': col['x_vector']
+        })
+        
+        # Increment col_id for next column? 
+        # Note: The caller (branch_and_price) manages col_ids. 
+        # Here we just use the passed col_id as a placeholder or base.
+        # Ideally, branch_and_price should re-assign IDs when adding to master.
+        # But for now, let's keep using the passed col_id to avoid breaking structure,
+        # assuming branch_and_price handles the actual ID assignment or we just return data.
+        # Actually, schedules_x keys use col_id. If we return multiple, they need unique IDs locally?
+        # Let's increment it locally to be safe, though BnP might overwrite it.
+        current_col_id += 1
+        
+    return formatted_columns
 
-for k in r_i:
-    if k in gamma:
-        gamma_val = gamma[k]
+
+def run_labeling_algorithm(recipients_r, recipients_s, gamma_dict, obj_mode_dict, 
+                           pi_dict, workers, max_time, ms, min_ms, theta_lookup,
+                           print_worker_selection=True, use_bound_pruning=True, 
+                           dominance_mode='bucket', branch_constraints=None, 
+                           branching_variant='mp', n_workers=None):
+    """
+    Global Labeling Algorithm Function.
+    
+    Labeling Algorithm for Column Generation (Pricing Problem Solver)
+    
+    Args:
+        recipients_r: Release times {recipient_id: r_k}
+        recipients_s: Service targets {recipient_id: s_k}
+        gamma_dict: Dual values gamma {recipient_id: gamma_k}
+        obj_mode_dict: Objective multipliers {recipient_id: multiplier}
+        pi_dict: Dual values pi {(worker_id, time): pi_jt}
+        workers: List of worker IDs
+        max_time: Planning horizon
+        ms: Rolling window size
+        min_ms: Minimum human services in window
+        theta_lookup: AI efficiency lookup table
+        print_worker_selection: Print worker dominance info per recipient
+        use_bound_pruning: Enable/Disable lower bound pruning
+        dominance_mode: 'bucket' (default) or 'global' dominance strategy
+        branch_constraints: Optional branch constraints dictionary
+        branching_variant: Branching strategy ('mp' or 'sp')
+        n_workers: Number of parallel workers (None = sequential)
+        
+    Returns:
+        List of best columns (can be multiple per recipient if alternatives exist)
+    """
+    t0 = time.time()
+    results = []
+    
+    # Pruning Statistics
+    pruning_stats = {
+        'lb': 0,
+        'dominance': 0,
+        'printed_dominance': {}
+    }
+    
+    # === PARALLEL OR SEQUENTIAL PROCESSING ===
+    
+    if n_workers is not None and n_workers > 1:
+        # --- PARALLEL PROCESSING ---
+        from multiprocessing import Pool
+        
+        print(f"\n[PARALLEL MODE] Using {n_workers} workers for {len(recipients_r)} recipients")
+        
+        # Prepare arguments for each recipient
+        recipient_args = []
+        for k in recipients_r:
+            gamma_val = gamma_dict.get(k, 0.0)
+            multiplier = obj_mode_dict.get(k, 1)
+            recipient_args.append((
+                k, recipients_r[k], recipients_s[k], 
+                gamma_val, multiplier, pi_dict, workers, 
+                max_time, ms, min_ms, theta_lookup,
+                use_bound_pruning, dominance_mode, 
+                branch_constraints, branching_variant
+            ))
+        
+        # Execute in parallel
+        with Pool(processes=n_workers) as pool:
+            all_cols = pool.starmap(solve_pricing_for_recipient, recipient_args)
+        
+        # Merge results
+        recipient_keys = list(recipients_r.keys())
+        for k, cols in zip(recipient_keys, all_cols):
+            if cols:
+                results.extend(cols)
+    
     else:
-        gamma_val = 0.0
-    multiplier = obj_mode.get(k, 1)
-
-    cols = solve_pricing_for_recipient(k, r_i[k], s_i[k], gamma_val, multiplier)
-
-    if cols:
-        results.append(cols[0])
-
-print(f"\nRuntime: {time.time() - t0:.4f}s")
-
-print("\n--- Final Results (First found optimal per Recipient) ---")
-for res in results:
-    print(f"\nRecipient {res['k']}:")
-    print(f"  Reduced Cost: {res['reduced_cost']:.6f}")
-    print(f"  Worker: {res['worker']}, Interval: {res['start']}-{res['end']}")
-
-    vec = res['x_vector']
-    time_indices = [(i % MAX_TIME) + 1 for i, x in enumerate(vec) if x > 0.5]
-    print(f"  Active Time Steps (Day 1-{MAX_TIME}): {time_indices}")
-
-    # Kurzer Check, ob es eine App am Ende war
-    last_day_val = res['path_pattern'][-1]
-    last_day_type = "Therapist" if last_day_val == 1 else "App"
-    print(f"  Last Session Type: {last_day_type} (Val: {last_day_val})")
-
-    # --- NEU: VALIDIERUNGS-CHECK ---
-    validation_errors = validate_final_column(res, s_i[res['k']], MS, MIN_MS, theta_lookup)
-
-    if validation_errors:
-        print("  [!] NOT CHECKED CONSTRAINTS / VIOLATIONS:")
-        for err in validation_errors:
-            print(f"      - {err}")
-    else:
-        print("  [OK] All constraints satisfied.")
+        # --- SEQUENTIAL PROCESSING ---
+        for k in recipients_r:
+            gamma_val = gamma_dict.get(k, 0.0)
+            multiplier = obj_mode_dict.get(k, 1)
+            
+            cols = solve_pricing_for_recipient(k, recipients_r[k], recipients_s[k], 
+                                              gamma_val, multiplier, pi_dict, workers, 
+                                              max_time, ms, min_ms, theta_lookup,
+                                              use_bound_pruning=use_bound_pruning, 
+                                              dominance_mode=dominance_mode, 
+                                              branch_constraints=branch_constraints, 
+                                              branching_variant=branching_variant)
+            
+            if cols:
+                results.extend(cols)
+    
+    runtime = time.time() - t0
+    
+    print(f"\nRuntime: {runtime:.4f}s")
+    print(f"Pruning Stats: Lower Bound = {pruning_stats['lb']}, State Dominance = {pruning_stats['dominance']}")
+    print(f"\n--- Final Results ({len(results)} optimal schedules) ---")
+    
+    return results
