@@ -1,6 +1,6 @@
 from CG import ColumnGeneration
 from branch_and_price import BranchAndPrice
-from logging_config import setup_logging, get_logger
+from logging_config import setup_multi_level_logging, get_logger
 
 logger = get_logger(__name__)
 
@@ -11,10 +11,11 @@ def main():
     # ===========================
     # LOGGING CONFIGURATION
     # ===========================
-    setup_logging(log_level='INFO', log_to_file=True, log_dir='logs/info')
-    setup_logging(log_level='DEBUG', log_to_file=True, log_dir='logs')
-    setup_logging(log_level='ERROR', log_to_file=True, log_dir='logs')
-    setup_logging(log_level='WARNING', log_to_file=True, log_dir='logs')
+    # Setup multi-level logging: separate files for DEBUG, INFO, WARNING, ERROR
+    # Console will ONLY show logger.print() messages
+    setup_multi_level_logging(base_log_dir='logs', enable_console=True)
+
+
 
 
     logger.info("=" * 100)
@@ -26,7 +27,7 @@ def main():
     # ===========================
 
     # Random seed
-    seed = 16
+    seed = 13
 
     # Learning parameters
     app_data = {
@@ -71,7 +72,6 @@ def main():
     use_parallel_pricing = True  # Enable parallel pricing (requires use_labeling=True)
     import os
     n_pricing_workers = min(os.cpu_count(), 4) if use_parallel_pricing else 1  # Auto-detect CPUs, max 4
-    print('Core Number - 1', n_pricing_workers, os.cpu_count())
 
     # Output settings
     save_lps = True # Set to True to save LP and SOL files
@@ -81,7 +81,7 @@ def main():
     deterministic = False  # Set to True for deterministic solver behavior (single-threaded, barrier method)
 
     # Visualization settings
-    visualize_tree = True  # Enable tree visualization
+    visualize_tree = False  # Enable tree visualization
     tree_layout = 'hierarchical'  # 'hierarchical' or 'radial'
     detailed_tree = False  # Show detailed info on nodes
     save_tree_path = 'bnp_tree.png'  # Path to save (None to not save)

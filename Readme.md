@@ -53,15 +53,15 @@ The implementation supports both classical Column Generation (root node only) an
 ```
 branch-and-price-hybrid-scheduling/
 ├── main.py                      # Entry point with configuration
-├── branch_and_price.py          # Branch-and-Price algorithm (2620 lines)
+├── branch_and_price.py          # Branch-and-Price algorithm (3994 lines)
 ├── CG.py                        # Column Generation solver (652 lines)
 ├── masterproblem.py             # Restricted Master Problem (RMP)
 ├── subproblem.py                # Pricing subproblems
-├── label.py                     # Labeling algorithm for pricing (DP-based)
+├── label.py                     # Labeling algorithm for pricing (792 lines, DP-based)
 ├── bnp_node.py                  # Node representation for B&P tree
 ├── branching_constraints.py     # Branching constraint implementations
 ├── tree_visualization.py        # Tree visualization utilities
-├── logging_config.py            # Logging setup
+├── logging_config.py            # Multi-level logging configuration
 │
 ├── Utils/
 │   ├── Generell/
@@ -78,7 +78,12 @@ branch-and-price-hybrid-scheduling/
 │   ├── MP/                      # Master problem files
 │   └── SPs/                     # Subproblem files
 │
-├── logs/                        # Log files
+├── logs/                        # Multi-level log files
+│   ├── debug/                   # DEBUG level logs
+│   ├── info/                    # INFO level logs
+│   ├── warning/                 # WARNING level logs
+│   └── error/                   # ERROR level logs
+│
 ├── results/                     # Output files
 └── requirements.txt             # Python dependencies
 ```
@@ -88,7 +93,7 @@ branch-and-price-hybrid-scheduling/
 ### Prerequisites
 - Python 3.8+
 - Gurobi Optimizer (license required)
-- 4+ CPU cores recommended for parallel subproblem solving
+- 4+ CPU cores recommended for parallel pricing (labeling algorithm)
 
 ### Setup
 
@@ -124,7 +129,7 @@ Edit `main.py` to customize parameters:
 
 #### Instance Parameters
 ```python
-seed = 18                    # Random seed
+seed = 13                    # Random seed
 T = 3                        # Number of therapists
 D_focus = 5                  # Focus days
 pttr = 'medium'             # Patient-to-therapist ratio: 'low', 'medium', 'high'
@@ -158,15 +163,21 @@ learn_method = 'pwl'                    # Learning method: 'pwl', 'tangent', 'bi
 
 # Branch-and-Price
 use_branch_and_price = True             # Enable B&P (vs. pure CG)
-branching_strategy = 'mp'               # 'mp' or 'sp' branching
-search_strategy = 'dfs'                 # 'dfs' or 'bfs'
-ip_heuristic_frequency = 10             # IP heuristic every N nodes
-early_incumbent_iteration = 0           # Compute incumbent at iteration N (0 = after CG)
+branching_strategy = 'sp'               # 'mp' or 'sp' branching
+search_strategy = 'bfs'                 # 'dfs' or 'bfs'
+ip_heuristic_frequency = 5              # IP heuristic every N nodes
+early_incumbent_iteration = 1           # Compute incumbent at iteration N (0 = after CG)
+
+# Labeling Algorithm (Pricing)
+use_labeling = True                     # Use labeling algorithm for pricing (vs. Gurobi)
+max_columns_per_iter = 10               # Max columns to return per recipient
+use_parallel_pricing = True             # Enable parallel pricing
+n_pricing_workers = 4                   # Number of parallel workers
 ```
 
 #### Tree Visualization
 ```python
-visualize_tree = True                   # Enable tree visualization
+visualize_tree = False                  # Enable tree visualization
 tree_layout = 'hierarchical'            # 'hierarchical' or 'radial'
 detailed_tree = False                   # Show detailed node info
 save_tree_path = 'bnp_tree.png'        # Save path
@@ -179,23 +190,73 @@ use_branch_and_price = False
 max_itr = 100
 ```
 
-### Example: Branch-and-Price with BFS
+### Example: Branch-and-Price with BFS and Labeling
 
 ```python
 use_branch_and_price = True
 branching_strategy = 'sp'
 search_strategy = 'bfs'
-ip_heuristic_frequency = 5
+use_labeling = True
+use_parallel_pricing = True
+n_pricing_workers = 4
+```
+
+## Logging System
+
+The project uses a sophisticated multi-level logging system with separate files for each log level.
+
+### Log Levels
+
+- **DEBUG**: Detailed algorithmic steps, state information
+- **INFO**: General progress, worker selection, candidate workers
+- **WARNING**: Potential issues, numerical warnings
+- **ERROR**: Errors and failures
+- **PRINT**: Terminal output only (via `logger.print()`)
+
+### Log Files
+
+```
+logs/
+├── debug/bnp_TIMESTAMP.log      # DEBUG messages only
+├── info/bnp_TIMESTAMP.log       # INFO messages only
+├── warning/bnp_TIMESTAMP.log    # WARNING messages only
+└── error/bnp_TIMESTAMP.log      # ERROR messages only
+```
+
+Each log file contains only messages of its specific level (no duplication).
+
+### Console Output
+
+The console displays only `logger.print()` messages for clean terminal output:
+- Critical progress updates
+- Final results
+- User-facing information
+
+All other logging (DEBUG, INFO, WARNING, ERROR) goes exclusively to files.
+
+### Example Log Usage
+
+```python
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
+# Terminal output (visible to user)
+logger.print("Branch-and-Price completed!")
+
+# File-only logging (not in terminal)
+logger.debug("State exploration details...")
+logger.info("Node 5 solved with bound 123.45")
+logger.warning("Potential numerical instability")
+logger.error("Pricing problem failed")
 ```
 
 ## Output
 
 ### Console Output
-The algorithm prints detailed progress information:
-- Setup phase with instance details
-- CG iterations with dual values and column generation
-- Branch-and-Price tree exploration
-- Node processing with bounds and status
+The algorithm prints only critical information via `logger.print()`:
+- Setup phase completion
+- Node processing milestones
 - Final results and statistics
 
 ### Results Files
@@ -213,16 +274,42 @@ The algorithm prints detailed progress information:
    - Visual representation of the B&P tree
 
 ### Log Files
-- `logs/info/*.log`: INFO level logs
-- `logs/*.log`: DEBUG level logs with detailed algorithm steps
+- `logs/debug/bnp_*.log`: Detailed algorithm steps
+- `logs/info/bnp_*.log`: General progress information
+- `logs/warning/bnp_*.log`: Warnings and potential issues
+- `logs/error/bnp_*.log`: Errors and failures
 
 ## Algorithm Details
+
+### Labeling Algorithm (Pricing Subproblems)
+
+The labeling algorithm is a dynamic programming approach that solves the pricing problem for each recipient:
+
+1. **Initialization**: Start with initial state (cost, progress, AI count, history)
+2. **State Expansion**: For each time period, explore therapist and AI options
+3. **Feasibility Checks**: 
+   - Rolling window constraints (MS/MIN_MS)
+   - Service target requirements
+   - Timeout scenarios at horizon
+4. **Dominance Pruning**:
+   - Bucket dominance: Within same AI count and history
+   - Global dominance: Across all buckets (optional)
+5. **Lower Bound Pruning**: Prune states that cannot improve best solution
+6. **Worker Dominance**: Pre-eliminate dominated workers before DP
+7. **Terminal States**: Collect feasible schedules with negative reduced cost
+8. **No-Good Cuts**: Enforce branching constraints via deviation vectors
+
+Key features:
+- Parallel processing with multiprocessing (optional)
+- Returns multiple columns per recipient (up to max_columns_per_iter)
+- Handles MP branching constraints (no-good cuts)
+- Efficient state representation with tuples
 
 ### Column Generation Process
 
 1. **Initialization**: Generate initial columns with heuristic
 2. **Master Problem**: Solve RMP to get dual variables
-3. **Pricing**: Solve subproblems in parallel to find negative reduced cost columns
+3. **Pricing**: Solve subproblems (via labeling or Gurobi) to find negative reduced cost columns
 4. **Pricing Filter**: Skip subproblems unlikely to produce improving columns
 5. **Column Addition**: Add profitable columns to master
 6. **Convergence Check**: Stop if no improving columns or stagnation detected
@@ -244,11 +331,13 @@ The algorithm prints detailed progress information:
 
 ### Performance Optimizations
 
-- **Parallel Subproblem Solving**: Uses multiprocessing for pricing
-- **Pricing Filter**: Reduces subproblems solved by ~50-80%
+- **Parallel Pricing**: Uses multiprocessing for labeling algorithm (4 workers default)
+- **Pricing Filter**: Reduces subproblems solved by approximately 50-80%
 - **Column Pool Management**: Efficient column inheritance in tree
 - **Dual Stagnation Detection**: Early termination when LP stops improving
 - **Solution Pool**: Generates multiple columns per subproblem (up to 10)
+- **Worker Dominance**: Pre-eliminates dominated workers before DP
+- **State Dominance**: Bucket and global dominance pruning
 
 ## Results Interpretation
 
@@ -275,6 +364,7 @@ Gap:               0.53%     # Optimality gap
 - **Columns Added**: More columns = larger master problem
 - **Subproblems Skipped**: Higher percentage = better pricing filter
 - **IP Solves**: Frequency of heuristic runs
+- **Pruning Statistics**: Lower bound pruning and state dominance effectiveness
 
 ## Troubleshooting
 
@@ -288,12 +378,14 @@ Gap:               0.53%     # Optimality gap
    - Reduce `max_nodes` parameter
    - Use DFS instead of BFS (less memory)
    - Reduce `D_focus` or `T` (smaller instances)
+   - Disable parallel pricing: `use_parallel_pricing = False`
 
 3. **Slow Performance**
+   - Enable labeling algorithm: `use_labeling = True`
+   - Enable parallel pricing: `use_parallel_pricing = True`
    - Enable pricing filter: `pricing_filtering = True`
    - Reduce `max_itr` (CG iterations)
    - Increase `dual_stagnation_threshold` for earlier termination
-   - Use fewer `num_tangents` in subproblem (default: 10)
 
 4. **No Improvement in Gap**
    - Increase `max_nodes` to explore more of tree
@@ -305,6 +397,11 @@ Gap:               0.53%     # Optimality gap
    - Normal for complex instances
    - Branch-and-Price will explore tree to find integer solution
    - Check that `use_branch_and_price = True`
+
+6. **Parallel Pricing Issues**
+   - Requires `use_labeling = True`
+   - Check available CPU cores: `os.cpu_count()`
+   - Reduce `n_pricing_workers` if system is overloaded
 
 ## Advanced Features
 
@@ -335,6 +432,17 @@ Replace `generate_patient_data_log()` in `main.py`:
 Req, Entry, Max_t, P, D, ... = load_from_file('data.csv')
 ```
 
+### Custom Logging Configuration
+
+Modify `logging_config.py` for different log levels or formats:
+```python
+# Single file logging (all levels)
+setup_logging(log_level='INFO', log_to_file=True, log_dir='logs')
+
+# Multi-level logging (separate files)
+setup_multi_level_logging(base_log_dir='logs', enable_console=True)
+```
+
 ## Citation
 
 If you use this code in your research, please cite:
@@ -342,7 +450,7 @@ If you use this code in your research, please cite:
 ```bibtex
 @article{branch-and-price-hybrid,
   title={Branch-and-Price for Hybrid Scheduling with Learning Effects},
-  author={Your Name},
+  author={Wagner, Lorenz},
   year={2024}
 }
 ```
