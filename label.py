@@ -7,6 +7,10 @@ or comparison utilities.
 """
 
 import time
+from logging_config import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 
 # --- Helper Functions ---
@@ -100,8 +104,8 @@ def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id
         if is_dominated_globally:
             pruning_stats['dominance'] += 1
             if not pruning_stats['printed_dominance'].get(recipient_id, False):
-                print(f"    [DOMINANCE GLOBAL] Recipient {recipient_id}: Pruned new state (C={cost:.2f}, P={prog:.2f}, AI={ai_count})")
-                print(f"                       by (C={dominator_global[0]:.2f}, P={dominator_global[1]:.2f}, AI={dominator_global[2]})")
+                logger.print(f"    [DOMINANCE GLOBAL] Recipient {recipient_id}: Pruned new state (C={cost:.2f}, P={prog:.2f}, AI={ai_count})")
+                logger.print(f"                       by (C={dominator_global[0]:.2f}, P={dominator_global[1]:.2f}, AI={dominator_global[2]})")
                 pruning_stats['printed_dominance'][recipient_id] = True
             return
 
@@ -286,9 +290,9 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
     # Print for each Recipient
     if eliminated_workers:
-        print(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (eliminated {eliminated_workers})")
+        logger.info(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (eliminated {eliminated_workers})")
     else:
-        print(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (no dominance)")
+        logger.info(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (no dominance)")
     
     # --- Parse Branch Constraints (MP Branching) ---
     forbidden_schedules = []
@@ -339,7 +343,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                         forbidden_schedules.append(forbidden_schedule)
         
         if use_branch_constraints:
-            print(f"  [MP BRANCHING] {len(forbidden_schedules)} no-good cut(s) active for recipient {recipient_id}")
+            logger.print(f"  [MP BRANCHING] {len(forbidden_schedules)} no-good cut(s) active for recipient {recipient_id}")
 
     for j in candidate_workers:
         effective_min_duration = min(int(s_k), time_until_end)
@@ -522,7 +526,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
             
             # Debug Output: Bound Pruning Statistics
             if pruned_count_total > 0:
-                print(f"    Worker {j}, tau={tau}: Pruned {pruned_count_total} states by Lower Bound")
+                logger.print(f"    Worker {j}, tau={tau}: Pruned {pruned_count_total} states by Lower Bound")
 
     # Sort columns by reduced cost (ascending, most negative first)
     best_columns.sort(key=lambda x: x['reduced_cost'])
@@ -741,7 +745,7 @@ def run_labeling_algorithm(recipients_r, recipients_s, gamma_dict, obj_mode_dict
         # --- PARALLEL PROCESSING ---
         from multiprocessing import Pool
         
-        print(f"\n[PARALLEL MODE] Using {n_workers} workers for {len(recipients_r)} recipients")
+        logger.print(f"\n[PARALLEL MODE] Using {n_workers} workers for {len(recipients_r)} recipients")
         
         # Prepare arguments for each recipient
         recipient_args = []
@@ -785,8 +789,8 @@ def run_labeling_algorithm(recipients_r, recipients_s, gamma_dict, obj_mode_dict
     
     runtime = time.time() - t0
     
-    print(f"\nRuntime: {runtime:.4f}s")
-    print(f"Pruning Stats: Lower Bound = {pruning_stats['lb']}, State Dominance = {pruning_stats['dominance']}")
-    print(f"\n--- Final Results ({len(results)} optimal schedules) ---")
+    logger.print(f"\nRuntime: {runtime:.4f}s")
+    logger.print(f"Pruning Stats: Lower Bound = {pruning_stats['lb']}, State Dominance = {pruning_stats['dominance']}")
+    logger.print(f"\n--- Final Results ({len(results)} optimal schedules) ---")
     
     return results
