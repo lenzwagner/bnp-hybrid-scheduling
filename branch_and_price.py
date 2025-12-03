@@ -2711,9 +2711,6 @@ class BranchAndPrice:
             node: BnPNode
             master: MasterProblem instance
         """
-        # Print los_list for debugging
-        print(f"\n[Column Added] col_data['los_list'] = {col_data['los_list']}\n")
-        
         # Extract column ID from schedules_x keys
         sample_key = next(iter(col_data['schedules_x'].keys()))
         col_id = sample_key[3]  # (profile, worker, time, col_id)
@@ -3394,7 +3391,7 @@ class BranchAndPrice:
                      For academic style: node_color, fathomed_color, integral_color, show_best_bound
                      For standard plot: figsize, show_bounds, show_edge_labels
         """
-        from tree_visualization import BnPTreeVisualizer
+        from Utils.tree_visualization import BnPTreeVisualizer
 
         visualizer = BnPTreeVisualizer(self)
 
@@ -3409,7 +3406,7 @@ class BranchAndPrice:
 
     def export_tree_graphviz(self, filename='bnp_tree.dot'):
         """Export tree to Graphviz format."""
-        from tree_visualization import BnPTreeVisualizer
+        from Utils.tree_visualization import BnPTreeVisualizer
 
         visualizer = BnPTreeVisualizer(self)
         visualizer.export_to_graphviz(filename)
@@ -3423,7 +3420,7 @@ class BranchAndPrice:
         Args:
             filename: Output filename for TikZ code (default: 'bnp_tree.tex')
         """
-        from tree_visualization import BnPTreeVisualizer
+        from Utils.tree_visualization import BnPTreeVisualizer
 
         visualizer = BnPTreeVisualizer(self)
         visualizer.export_tikz(filename)
