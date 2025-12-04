@@ -11,7 +11,7 @@ import logging
 # GLOBAL WORKER FUNCTION FOR PARALLEL PRICING
 # ============================================================================
 def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branching_duals, 
-                             threshold, cg_solver_data):
+                             threshold, cg_solver_data, next_col_id):
     """
     Global worker function for parallel pricing (can be pickled by multiprocessing).
     
@@ -26,6 +26,7 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         branching_duals: Dict of branching constraint duals
         threshold: Reduced cost threshold
         cg_solver_data: Dict with CG solver data needed for pricing
+        next_col_id: Next column ID to use for this profile
     
     Returns:
         Tuple of (profile, col_data_list) where col_data_list is list of columns or None
@@ -47,9 +48,6 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
     r_k = cg_solver_data['Entry_agg'][profile]
     s_k = cg_solver_data['Req_agg'][profile]
     obj_multiplier = cg_solver_data['E_dict'].get(profile, 1)
-    
-    # Get next column ID
-    next_col_id = 1  # Will be reassigned by caller
     
     # Extract duals_delta from branching constraints
     duals_delta = 0.0
@@ -2096,10 +2094,17 @@ class BranchAndPrice:
                 }
                 
                 # Prepare arguments for each profile
-                profile_args = [
-                    (profile, node_data, duals_pi, duals_gamma.get(profile, 0.0), branching_duals, threshold, cg_solver_data)
-                    for profile in patients_to_solve
-                ]
+                # CRITICAL: Compute correct next_col_id for each profile FIRST
+                profile_args = []
+                for profile in patients_to_solve:
+                    profile_columns = [col_id for (p, col_id) in node.column_pool.keys() if p == profile]
+                    next_col_id = max(profile_columns) + 1 if profile_columns else 1
+                    
+                    profile_args.append((
+                        profile, node_data, duals_pi, duals_gamma.get(profile, 0.0), 
+                        branching_duals, threshold, cg_solver_data, next_col_id
+                    ))
+                
                 
                 # Solve all pricing problems in parallel using the GLOBAL function
                 with Pool(processes=self.n_pricing_workers) as pool:
@@ -2115,8 +2120,12 @@ class BranchAndPrice:
                     if isinstance(col_data_list, dict):
                         col_data_list = [col_data_list]
                     
+                    # CRITICAL: Get current max col_id for this profile to ensure unique IDs
+                    profile_columns = [col_id for (p, col_id) in node.column_pool.keys() if p == profile]
+                    current_max_col_id = max(profile_columns) if profile_columns else 0
+                    
                     columns_added_for_profile = 0
-                    for col_data in col_data_list:
+                    for col_idx, col_data in enumerate(col_data_list):
                         # Print reduced cost if negative
                         if col_data['reduced_cost'] < 0:
                             self.logger.info(f'    [Parallel] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
@@ -2124,6 +2133,27 @@ class BranchAndPrice:
                         # Check if column has negative reduced cost below threshold
                         if col_data['reduced_cost'] < -threshold:
                             self.logger.info(f'    [Parallel] ✅ Adding column (below threshold -{threshold})')
+                            
+                            # CRITICAL: Reassign col_id to ensure uniqueness
+                            # The labeling algorithm returns columns with sequential IDs starting from next_col_id
+                            # But we need to track the ACTUAL col_id based on what's already added
+                            correct_col_id = current_max_col_id + col_idx + 1
+                            
+                            # Update schedules_x keys with correct col_id
+                            original_schedules_x = col_data['schedules_x']
+                            corrected_schedules_x = {}
+                            for key, val in original_schedules_x.items():
+                                # key format: (profile, worker, time, old_col_id)
+                                corrected_schedules_x[(key[0], key[1], key[2], correct_col_id)] = val
+                            col_data['schedules_x'] = corrected_schedules_x
+                            
+                            # Update schedules_los keys with correct col_id
+                            original_schedules_los = col_data['schedules_los']
+                            corrected_schedules_los = {}
+                            for key, val in original_schedules_los.items():
+                                # key format: (profile, old_col_id)
+                                corrected_schedules_los[(key[0], correct_col_id)] = val
+                            col_data['schedules_los'] = corrected_schedules_los
                             
                             # Add column to node and master (sequentially!)
                             self._add_column_from_labeling(col_data, profile, node, master)
@@ -2167,8 +2197,12 @@ class BranchAndPrice:
                             if isinstance(col_data_list, dict):
                                 col_data_list = [col_data_list]
                                 
+                            # CRITICAL: Get current max col_id for this profile to ensure unique IDs
+                            profile_columns = [col_id for (p, col_id) in node.column_pool.keys() if p == profile]
+                            current_max_col_id = max(profile_columns) if profile_columns else 0
+                                
                             columns_added_for_profile = 0
-                            for col_data in col_data_list:
+                            for col_idx, col_data in enumerate(col_data_list):
                                 # Print reduced cost if negative
                                 if col_data['reduced_cost'] < 0:
                                     self.logger.info(f'    [Labeling] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
@@ -2176,6 +2210,25 @@ class BranchAndPrice:
                                 # Check if column has negative reduced cost below threshold
                                 if col_data['reduced_cost'] < -threshold:
                                     self.logger.info(f'    [Labeling] ✅ Adding column (below threshold -{threshold})')
+                                    
+                                    # CRITICAL: Reassign col_id to ensure uniqueness
+                                    correct_col_id = current_max_col_id + col_idx + 1
+                                    
+                                    # Update schedules_x keys with correct col_id
+                                    original_schedules_x = col_data['schedules_x']
+                                    corrected_schedules_x = {}
+                                    for key, val in original_schedules_x.items():
+                                        # key format: (profile, worker, time, old_col_id)
+                                        corrected_schedules_x[(key[0], key[1], key[2], correct_col_id)] = val
+                                    col_data['schedules_x'] = corrected_schedules_x
+                                    
+                                    # Update schedules_los keys with correct col_id
+                                    original_schedules_los = col_data['schedules_los']
+                                    corrected_schedules_los = {}
+                                    for key, val in original_schedules_los.items():
+                                        # key format: (profile, old_col_id)
+                                        corrected_schedules_los[(key[0], correct_col_id)] = val
+                                    col_data['schedules_los'] = corrected_schedules_los
                                     
                                     # Add column to node and master
                                     self._add_column_from_labeling(col_data, profile, node, master)
