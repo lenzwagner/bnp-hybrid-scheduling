@@ -5,7 +5,7 @@ This module contains the core dynamic programming algorithm for solving
 the pricing problem in column generation, without validation, testing, 
 or comparison utilities.
 """
-
+import sys
 import time
 from logging_config import get_logger
 
@@ -344,6 +344,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
         
         if use_branch_constraints:
             logger.print(f"  [MP BRANCHING] {len(forbidden_schedules)} no-good cut(s) active for recipient {recipient_id}")
+        else:
+            logger.info(f"  [MP BRANCHING] No active constraints for recipient {recipient_id}")
 
     for j in candidate_workers:
         effective_min_duration = min(int(s_k), time_until_end)
@@ -395,8 +397,9 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                         # Feasibility Check
                         remaining_steps = tau - t + 1
                         if not is_timeout_scenario:
-                            if prog + remaining_steps * 1.0 < s_k - epsilon:
-                                continue
+                            if obj_mode > 0.5:
+                                if prog + remaining_steps * 1.0 < s_k - epsilon:
+                                    continue
 
                         # A: Therapist
                         if check_strict_feasibility(hist, 1, ms, min_ms):
@@ -503,9 +506,19 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                         if use_branch_constraints:
                             if not all(z == 1 for z in final_zeta):
                                 # This path hasn't deviated from all forbidden schedules -> REJECT
+                                logger.print(f"    [MP BRANCHING] Recipient {recipient_id}: Pruned forbidden column (Worker {j})")
                                 continue
 
-                        if condition_met or is_timeout_scenario:
+                        is_focus_patient = (obj_mode > 0.5)
+
+                        if is_focus_patient:
+                            # Focus-Patient (E_k=1):
+                            is_valid_end = condition_met
+                        else:
+                            # Post-Patient (E_k=0):
+                            is_valid_end = condition_met or is_timeout_scenario
+
+                        if is_valid_end:
                             duration = tau - r_k + 1
                             reduced_cost = (obj_mode * duration) + final_cost_accum - gamma_k
 
@@ -620,7 +633,7 @@ def solve_pricing_for_profile_bnp(
     # Convert duals_pi to global pi format expected by labeling algorithm
     pi = duals_pi
     # gamma for this profile
-    gamma_k = duals_gamma
+    gamma_k = duals_gamma + duals_delta
     
     # Call the labeling algorithm with correct parameters
     best_columns = solve_pricing_for_recipient(
