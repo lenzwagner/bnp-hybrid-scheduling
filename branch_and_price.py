@@ -767,6 +767,7 @@ class BranchAndPrice:
             self.open_nodes.pop()
 
         # Branch on root
+        self.logger.info(f"DEBUG: Root node most_fractional_var: {root_node.most_fractional_var}")
         branching_type, branching_info = self.select_branching_candidate(root_node, root_lambdas)
         #print(branching_info, branching_type)
 
@@ -977,6 +978,14 @@ class BranchAndPrice:
                     is_integral = is_integral_check
                     most_frac_info = most_frac_info_check
                     print(f"  → Using rebuilt integrality value: {is_integral}")
+            
+            # DEBUG: Log fractionality status
+            self.logger.info(f"    [Debug] Node {current_node_id} Fractionality Check:")
+            self.logger.info(f"      is_integral: {is_integral}")
+            if most_frac_info:
+                self.logger.info(f"      most_frac_info: {most_frac_info}")
+            else:
+                self.logger.info(f"      most_frac_info: None")
 
             # Update best LP bound if needed (though should have been done at creation)
             if lp_bound < self.best_lp_bound:
@@ -996,7 +1005,9 @@ class BranchAndPrice:
             print(f"║   Status:         {current_node.status}".ljust(99) + "║")
             print("╠" + "═" * 98 + "╣")
 
-            if self.should_fathom(current_node, node_lambdas):
+            should_fathom_result = self.should_fathom(current_node, node_lambdas)
+            self.logger.info(f"    [Debug] should_fathom result: {should_fathom_result}")
+            if should_fathom_result:
                 print(f"║ ❌ DECISION: FATHOM".ljust(99) + "║")
                 print(f"║    Reason: {current_node.fathom_reason}".ljust(99) + "║")
                 print("╚" + "═" * 98 + "╝\n")
@@ -1238,10 +1249,16 @@ class BranchAndPrice:
             tuple: (branching_type, branching_info) or (None, None) if no fractional var
         """
         if self.branching_strategy == 'mp':
-            return self._select_mp_branching_candidate(node)
+            self.logger.info("DEBUG: Calling _select_mp_branching_candidate")
+            result = self._select_mp_branching_candidate(node)
+            self.logger.info(f"DEBUG: _select_mp_branching_candidate returned: {result}")
+            return result
         elif self.branching_strategy == 'sp':
             # Pattern-based branching (hierarchical)
-            return self._select_sp_branching_candidate(node, node_lambda)
+            self.logger.info(f"DEBUG: Calling _select_sp_branching_candidate with {len(node_lambda)} lambdas")
+            result = self._select_sp_branching_candidate(node, node_lambda)
+            self.logger.info(f"DEBUG: _select_sp_branching_candidate returned: {result}")
+            return result
         elif self.branching_strategy == 'sp_var':
             # Single variable branching
             return self._select_sp_variable_branching_candidate(node, node_lambda)
@@ -1312,7 +1329,6 @@ class BranchAndPrice:
                 print(f"  ✅ Found fractional pattern of size {pattern_size}: {pattern}")
                 if pattern_size > 1:
                     print("Find pattern greater than one")
-                    sys.exit()
                 return pattern, beta_val, floor_val, ceil_val, profile
             
             self.logger.info(f"  → No fractional pattern of size {pattern_size}, trying larger...")
@@ -1605,6 +1621,8 @@ class BranchAndPrice:
         floor_val = branching_info['floor']
         ceil_val = branching_info['ceil']
 
+        self.logger.info("DEBUG: Entering branch_on_mp_variable")
+
         self.logger.info(f"\n{'=' * 100}")
         self.logger.info(f" BRANCHING ON MP VARIABLE ".center(100, "="))
         self.logger.info(f"{'=' * 100}")
@@ -1814,6 +1832,7 @@ class BranchAndPrice:
                 - lp_bound: LP bound after full CG convergence
                 - node_lambdas: Lambda values from solution
         """
+        self.logger.info(f"DEBUG: Entering _solve_and_evaluate_child_node for Node {child_node.node_id}")
         self.logger.info(f"\n  [Immediate Child Solving] Solving Node {child_node.node_id} with full CG...")
 
         try:
@@ -1926,6 +1945,8 @@ class BranchAndPrice:
         # 2. Column Generation loop
         threshold = self.cg_solver.threshold  # Use same threshold as CG
         cg_iteration = 0
+        pricing_filter_history = {}
+        skipped_sp = 0
         last_lp_obj = float('inf')
 
         # Node time limit
@@ -1985,7 +2006,39 @@ class BranchAndPrice:
             if self.branching_strategy == 'sp':
                 branching_duals = self._get_branching_constraint_duals(master, node)
 
-            # 3. Solve subproblems for all profiles
+            # 3. Solve subproblems
+            # Pricing Filter Logic
+            patients_to_solve = []
+            if self.cg_solver.pricing_filtering and cg_iteration > 1:
+                for index in self.cg_solver.P_Join:
+                    skip_subproblem = False
+                    previous_iterations = [ell for (n, ell) in pricing_filter_history.keys()
+                                           if n == index and ell < cg_iteration]
+
+                    if previous_iterations:
+                        ell = max(previous_iterations)
+                        hist = pricing_filter_history[(index, ell)]
+                        lb = hist['bar_c'] + hist['gamma_n'] - duals_gamma.get(index, 0)
+                        sum_term = sum(min(0, hist['pi_td'].get(key, 0) - duals_pi.get(key, 0))
+                                       for key in hist['pi_td'])
+                        lb += sum_term
+
+                        if lb >= -threshold:
+                            skip_subproblem = True
+                            skipped_sp += 1
+
+                    if not skip_subproblem:
+                        patients_to_solve.append(index)
+                
+                if not patients_to_solve:
+                    self.logger.info(f"    [Pricing Filter] All subproblems skipped. Terminating CG.")
+                    break
+                    
+                skipped_profiles = sorted(list(set(self.cg_solver.P_Join) - set(patients_to_solve)))
+                self.logger.info(f"    [Pricing Filter] Solving {len(patients_to_solve)} of {len(self.cg_solver.P_Join)} profiles (skipped {len(skipped_profiles)}: {skipped_profiles})")
+            else:
+                patients_to_solve = self.cg_solver.P_Join
+
             new_columns_found = False
             columns_added_this_iter = 0
 
@@ -1995,7 +2048,7 @@ class BranchAndPrice:
             if self.use_parallel_pricing and self.use_labeling:
                 from multiprocessing import Pool
                 
-                self.logger.info(f"    [Parallel Pricing] Solving {len(self.cg_solver.P_Join)} profiles with {self.n_pricing_workers} workers")
+                self.logger.info(f"    [Parallel Pricing] Solving {len(patients_to_solve)} profiles with {self.n_pricing_workers} workers")
                 
                 # Prepare node data (without Gurobi models which can't be pickled)
                 node_data = {
@@ -2045,7 +2098,7 @@ class BranchAndPrice:
                 # Prepare arguments for each profile
                 profile_args = [
                     (profile, node_data, duals_pi, duals_gamma.get(profile, 0.0), branching_duals, threshold, cg_solver_data)
-                    for profile in self.cg_solver.P_Join
+                    for profile in patients_to_solve
                 ]
                 
                 # Solve all pricing problems in parallel using the GLOBAL function
@@ -2082,12 +2135,21 @@ class BranchAndPrice:
                     
                     if columns_added_for_profile > 0:
                         master.Model.update()
+                    
+                    # Update pricing filter history
+                    if col_data_list:
+                        best_col = min(col_data_list, key=lambda c: c['reduced_cost'])
+                        pricing_filter_history[(profile, cg_iteration)] = {
+                            'bar_c': best_col['reduced_cost'],
+                            'gamma_n': duals_gamma.get(profile, 0.0),
+                            'pi_td': duals_pi.copy()
+                        }
             
             # ========================================================================
             # SEQUENTIAL PRICING (fallback or when parallelization is disabled)
             # ========================================================================
             else:
-                for profile in self.cg_solver.P_Join:
+                for profile in patients_to_solve:
                     # Choose between labeling algorithm and Gurobi
                     if self.use_labeling:
                         # ===== LABELING ALGORITHM =====
@@ -2125,6 +2187,15 @@ class BranchAndPrice:
                             
                             if columns_added_for_profile > 0:
                                  master.Model.update()
+                            
+                            # Update pricing filter history
+                            if col_data_list:
+                                best_col = min(col_data_list, key=lambda c: c['reduced_cost'])
+                                pricing_filter_history[(profile, cg_iteration)] = {
+                                    'bar_c': best_col['reduced_cost'],
+                                    'gamma_n': duals_gamma.get(profile, 0.0),
+                                    'pi_td': duals_pi.copy()
+                                }
                     
                     else:
                         # ===== GUROBI SUBPROBLEM =====
@@ -2148,6 +2219,14 @@ class BranchAndPrice:
                             new_columns_found = True
                             columns_added_this_iter += 1
                             master.Model.update()
+                        
+                        # Update pricing filter history (Gurobi)
+                        if sp.Model.status == 2:
+                             pricing_filter_history[(profile, cg_iteration)] = {
+                                'bar_c': sp.Model.objVal,
+                                'gamma_n': duals_gamma.get(profile, 0.0),
+                                'pi_td': duals_pi.copy()
+                            }
 
             self.logger.info(f"    [CG Iter {cg_iteration}] Added {columns_added_this_iter} new columns")
 
@@ -2289,7 +2368,7 @@ class BranchAndPrice:
                     if all(x == 0 for x in branching_coefs):
                         self.logger.info(
                             f"      [Column with postive Chi {profile},{col_id}] Added {len(branching_coefs)} branching coefficients")
-                        sys.exit()
+                        # sys.exit() # Removed debug exit
                     col_coefs = col_coefs + branching_coefs
                     self.logger.info(
                         f"      [Column {profile},{col_id}] Added {len(branching_coefs)} branching coefficients")
@@ -2310,7 +2389,7 @@ class BranchAndPrice:
             self.logger.info(f"    [Master] Applying {len(node.branching_constraints)} branching constraints...")
 
             for constraint in node.branching_constraints:
-                self.logger.info('Cons', constraint)
+                self.logger.info(f'Cons {constraint}')
 
                 constraint.apply_to_master(master, node)  # Pass node to constraint
 
