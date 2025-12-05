@@ -36,7 +36,7 @@ class LevelFilter(logging.Filter):
         return record.levelno == self.level
 
 
-def setup_multi_level_logging(base_log_dir='logs', enable_console=True):
+def setup_multi_level_logging(base_log_dir='logs', enable_console=True, print_all_logs=False):
     """
     Configure logging with separate log files for each level.
     
@@ -46,11 +46,14 @@ def setup_multi_level_logging(base_log_dir='logs', enable_console=True):
     - logs/warning/bnp_TIMESTAMP.log  - Only WARNING messages
     - logs/error/bnp_TIMESTAMP.log    - Only ERROR messages
     
-    Console output: Only shows PRINT level (use logger.print("message"))
+    Console output: 
+    - If print_all_logs=False: Only shows PRINT level (use logger.print("message"))
+    - If print_all_logs=True: Shows all log levels (DEBUG, INFO, WARNING, ERROR, PRINT)
     
     Args:
         base_log_dir: Base directory for log files (default: 'logs')
-        enable_console: If True, console will show PRINT level messages (default: True)
+        enable_console: If True, console will show log messages (default: True)
+        print_all_logs: If True, console shows all levels; if False, only PRINT level (default: False)
     
     Returns:
         root_logger: Configured root logger
@@ -63,10 +66,17 @@ def setup_multi_level_logging(base_log_dir='logs', enable_console=True):
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # Create simpler formatter for console (PRINT level only)
-    console_formatter = logging.Formatter(
-        fmt='%(message)s'  # Simple format for console
-    )
+    # Create formatter for console
+    if print_all_logs:
+        # Full format for console when showing all logs
+        console_formatter = logging.Formatter(
+            fmt='%(levelname)-8s | %(name)s | %(message)s'
+        )
+    else:
+        # Simple format for PRINT level only
+        console_formatter = logging.Formatter(
+            fmt='%(message)s'
+        )
     
     # Configure root logger (set to DEBUG to capture everything)
     root_logger = logging.getLogger()
@@ -75,11 +85,16 @@ def setup_multi_level_logging(base_log_dir='logs', enable_console=True):
     # Remove existing handlers
     root_logger.handlers = []
     
-    # Console handler - ONLY for PRINT level
+    # Console handler
     if enable_console:
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(PRINT_LEVEL)
-        console_handler.addFilter(LevelFilter(PRINT_LEVEL))  # Only PRINT level
+        if print_all_logs:
+            # Show all levels
+            console_handler.setLevel(logging.DEBUG)
+        else:
+            # Only PRINT level
+            console_handler.setLevel(PRINT_LEVEL)
+            console_handler.addFilter(LevelFilter(PRINT_LEVEL))
         console_handler.setFormatter(console_formatter)
         root_logger.addHandler(console_handler)
     

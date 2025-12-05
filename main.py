@@ -12,8 +12,9 @@ def main():
     # LOGGING CONFIGURATION
     # ===========================
     # Setup multi-level logging: separate files for DEBUG, INFO, WARNING, ERROR
-    # Console will ONLY show logger.print() messages
-    setup_multi_level_logging(base_log_dir='logs', enable_console=True)
+    # Set print_all_logs=True to also print all log levels to console (not just PRINT level)
+    print_all_logs = True  # Set to True to see all logger output on console
+    setup_multi_level_logging(base_log_dir='logs', enable_console=True, print_all_logs=print_all_logs)
 
 
 

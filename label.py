@@ -103,9 +103,12 @@ def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id
         
         if is_dominated_globally:
             pruning_stats['dominance'] += 1
+            logger.info(f"    [DOMINANCE GLOBAL] Recipient {recipient_id}: State DOMINATED")
+            logger.info(f"      Dominated state: Cost={cost:.4f}, Prog={prog:.4f}, AI={ai_count}, Hist={hist}")
+            logger.info(f"      Dominating state: Cost={dominator_global[0]:.4f}, Prog={dominator_global[1]:.4f}, AI={dominator_global[2]}, Hist={dominator_global[3]}")
+            logger.info(f"      Reason: Dominating state has Cost <= {cost:.4f} AND Prog >= {prog:.4f} with better/equal AI and History")
             if not pruning_stats['printed_dominance'].get(recipient_id, False):
-                logger.print(f"    [DOMINANCE GLOBAL] Recipient {recipient_id}: Pruned new state (C={cost:.2f}, P={prog:.2f}, AI={ai_count})")
-                logger.print(f"                       by (C={dominator_global[0]:.2f}, P={dominator_global[1]:.2f}, AI={dominator_global[2]})")
+                logger.print(f"    [DOMINANCE GLOBAL] Recipient {recipient_id}: First global dominance pruning occurred")
                 pruning_stats['printed_dominance'][recipient_id] = True
             return
 
@@ -127,21 +130,33 @@ def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id
     
     if is_dominated:
         pruning_stats['dominance'] += 1
+        logger.info(f"    [DOMINANCE BUCKET] Recipient {recipient_id}: State DOMINATED in same bucket")
+        logger.info(f"      Dominated state: Cost={cost:.4f}, Prog={prog:.4f}, Bucket_key={bucket_key}")
+        logger.info(f"      Dominating state: Cost={dominator[0]:.4f}, Prog={dominator[1]:.4f}")
+        logger.info(f"      Reason: Dominating state in same bucket has Cost <= {cost:.4f} AND Prog >= {prog:.4f}")
         if not pruning_stats['printed_dominance'].get(recipient_id, False):
-            #print(f"    [DOMINANCE BUCKET] Recipient {recipient_id}: Pruned new state (C={cost:.2f}, P={prog:.2f})")
-            #print(f"                       by same bucket (C={dominator[0]:.2f}, P={dominator[1]:.2f})")
+            logger.print(f"    [DOMINANCE BUCKET] Recipient {recipient_id}: First bucket dominance pruning occurred")
             pruning_stats['printed_dominance'][recipient_id] = True
         return 
     
     # --- CLEANUP ---
     # Remove existing states that are dominated by the new one
     new_bucket_list = []
+    dominated_by_new = 0
     
     for c_old, p_old, path_old in bucket_list:
         if cost <= c_old + epsilon and prog >= p_old - epsilon:
             pruning_stats['dominance'] += 1
+            dominated_by_new += 1
+            logger.info(f"    [DOMINANCE CLEANUP] Recipient {recipient_id}: New state dominates existing state")
+            logger.info(f"      New (dominating) state: Cost={cost:.4f}, Prog={prog:.4f}")
+            logger.info(f"      Old (dominated) state: Cost={c_old:.4f}, Prog={p_old:.4f}")
+            logger.info(f"      Reason: New state has Cost <= {c_old:.4f} AND Prog >= {p_old:.4f}")
             continue 
         new_bucket_list.append((c_old, p_old, path_old))
+    
+    if dominated_by_new > 0:
+        logger.info(f"    [DOMINANCE CLEANUP] Recipient {recipient_id}: New state removed {dominated_by_new} dominated state(s) from bucket")
     
     new_bucket_list.append((cost, prog, path))
     buckets[bucket_key] = new_bucket_list
@@ -238,6 +253,7 @@ def compute_candidate_workers(workers, r_k, tau_max, pi_dict):
         if not is_dominated:
             candidate_workers.append(j1)
 
+
     return candidate_workers
 
 
@@ -286,6 +302,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
     # Worker Dominance Pre-Elimination
     candidate_workers = compute_candidate_workers(workers, r_k, max_time, pi_dict)
+    if recipient_id == 22:
+        print('candidate_workers', candidate_workers)
     eliminated_workers = [w for w in workers if w not in candidate_workers]
 
     # Print for each Recipient
@@ -297,7 +315,28 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
     # --- Parse Branch Constraints (MP Branching) ---
     forbidden_schedules = []
     use_branch_constraints = False
+
     
+    # DEBUG: Print ALL branching constraints first
+    if branch_constraints:
+        logger.print(f"\n  [BRANCHING CONSTRAINTS DEBUG] Recipient {recipient_id}:")
+        logger.print(f"    Type of branch_constraints: {type(branch_constraints)}")
+        logger.print(f"    Length/Size: {len(branch_constraints) if hasattr(branch_constraints, '__len__') else 'N/A'}")
+        
+        if isinstance(branch_constraints, list):
+            for idx, constraint in enumerate(branch_constraints):
+                logger.print(f"    Constraint #{idx + 1}:")
+                logger.print(f"      Type: {type(constraint)}")
+                logger.print(f"      Has 'profile': {hasattr(constraint, 'profile')}")
+                if hasattr(constraint, 'profile'):
+                    logger.print(f"      Profile value: {constraint.profile}")
+                logger.print(f"      Has 'direction': {hasattr(constraint, 'direction')}")
+                if hasattr(constraint, 'direction'):
+                    logger.print(f"      Direction value: {constraint.direction}")
+                logger.print(f"      Has 'original_schedule': {hasattr(constraint, 'original_schedule')}")
+                if hasattr(constraint, 'original_schedule'):
+                    logger.print(f"      Original schedule length: {len(constraint.original_schedule)}")
+
     if branch_constraints:
         # Handle list of constraint objects (from Branch-and-Price)
         if isinstance(branch_constraints, list):
@@ -317,11 +356,11 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                         forbidden_schedule = {}
                         # original_schedule keys are (p, j, t, col_id)
                         for key, val in constraint.original_schedule.items():
-                            if len(key) >= 3:
+                            if len(key) >= 3 and val > 1e-6:
                                 j, t = key[1], key[2]
                                 forbidden_schedule[(j, t)] = val
                         forbidden_schedules.append(forbidden_schedule)
-                        
+
         # Handle dictionary (legacy format)
         elif isinstance(branch_constraints, dict):
             for constraint_key, constraint_data in branch_constraints.items():
@@ -341,9 +380,20 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 j, t = key[1], key[2]
                                 forbidden_schedule[(j, t)] = val
                         forbidden_schedules.append(forbidden_schedule)
-        
+
         if use_branch_constraints:
-            logger.print(f"  [MP BRANCHING] {len(forbidden_schedules)} no-good cut(s) active for recipient {recipient_id}")
+            logger.print(f"\n  [MP BRANCHING] Recipient {recipient_id}: {len(forbidden_schedules)} no-good cut(s) active")
+            for cut_idx, cut in enumerate(forbidden_schedules):
+                logger.print(f"    No-Good Cut #{cut_idx + 1}:")
+                # Show pattern of forbidden schedule
+                schedule_pattern = sorted(cut.items(), key=lambda x: (x[0][0], x[0][1]))  # Sort by (worker, time)
+                logger.print(f"      Pattern: {len(schedule_pattern)} assignments")
+                # Show first few assignments as preview
+                preview = schedule_pattern[:5]
+                for (worker, time), val in preview:
+                    logger.print(f"        Worker {worker}, Time {time}: {val}")
+                if len(schedule_pattern) > 5:
+                    logger.print(f"        ... and {len(schedule_pattern) - 5} more assignments")
         else:
             logger.info(f"  [MP BRANCHING] No active constraints for recipient {recipient_id}")
 
@@ -355,10 +405,27 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
             is_timeout_scenario = (tau == max_time)
 
             start_cost = -pi_dict.get((j, r_k), 0)
-
-            # Initialize deviation vector ζ_t for branch constraints
             num_cuts = len(forbidden_schedules)
+
             initial_zeta = tuple([0] * num_cuts) if use_branch_constraints else None
+
+            # DEBUG: Always log the state for troubleshooting
+            if use_branch_constraints:
+                print(f"  [DEBUG] Recipient {recipient_id}, Worker {j}, Tau {tau}: use_branch_constraints={use_branch_constraints}, num_cuts={num_cuts}")
+                print(f"  [DEBUG] tau == start_tau: {tau == start_tau}, j == candidate_workers[0]: {j == candidate_workers[0]}")
+                print(f"  [DEBUG] start_tau={start_tau}, candidate_workers={candidate_workers}")
+            
+            # Show zeta initialization for recipients with active branching constraints
+            # Display once per recipient (when processing first candidate worker at start_tau)
+            if use_branch_constraints and tau == start_tau:
+                # Check if this is the FIRST candidate worker (not necessarily worker ID 1!)
+                first_candidate = candidate_workers[0] if candidate_workers else None
+                if j == first_candidate:
+                    logger.print(f"\n  [ZETA VECTOR] Recipient {recipient_id} (BRANCHING PROFILE): Initialized with {num_cuts} elements")
+                    logger.print(f"    Initial ζ = {initial_zeta} (all zeros = no deviations yet)")
+                    logger.print(f"    Terminal condition: All ζ elements must be 1 (deviated from all cuts)")
+                    logger.print(f"    This recipient has active MP branching constraints!")
+                    logger.print(f"    First candidate worker: {first_candidate}, All candidates: {candidate_workers}")
             
             current_states = {}
             # Initialize with start state
@@ -415,9 +482,13 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 new_zeta_ther = list(zeta)
                                 for cut_idx, cut in enumerate(forbidden_schedules):
                                     if new_zeta_ther[cut_idx] == 0:  # Not yet deviated
-                                        forbidden_val = cut["schedule"].get((j, t), None)
+                                        forbidden_val = cut.get((j, t), None)
                                         if forbidden_val is not None and forbidden_val != 1:
-                                            new_zeta_ther[cut_idx] = 1  # Deviated!
+                                            # DEVIATION DETECTED: 0 → 1 transition
+                                            new_zeta_ther[cut_idx] = 1
+                                            logger.print(f"    [ZETA TRANSITION] Recipient {recipient_id}, Worker {j}, Time {t}:")
+                                            logger.print(f"      Cut #{cut_idx + 1}: ζ[{cut_idx}]: 0 → 1 (Therapist action deviates from forbidden value {forbidden_val})")
+                                            logger.print(f"      New ζ = {tuple(new_zeta_ther)}")
                                 new_zeta_ther = tuple(new_zeta_ther)
 
                             add_state_to_buckets(next_states, cost_ther, prog_ther, ai_count, new_hist_ther, 
@@ -440,9 +511,13 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 new_zeta_ai = list(zeta)
                                 for cut_idx, cut in enumerate(forbidden_schedules):
                                     if new_zeta_ai[cut_idx] == 0:  # Not yet deviated
-                                        forbidden_val = cut["schedule"].get((j, t), None)
+                                        forbidden_val = cut.get((j, t), None)
                                         if forbidden_val is not None and forbidden_val != 0:
-                                            new_zeta_ai[cut_idx] = 1  # Deviated!
+                                            # DEVIATION DETECTED: 0 → 1 transition
+                                            new_zeta_ai[cut_idx] = 1
+                                            logger.print(f"    [ZETA TRANSITION] Recipient {recipient_id}, Worker {j}, Time {t}:")
+                                            logger.print(f"      Cut #{cut_idx + 1}: ζ[{cut_idx}]: 0 → 1 (AI action deviates from forbidden value {forbidden_val})")
+                                            logger.print(f"      New ζ = {tuple(new_zeta_ai)}")
                                 new_zeta_ai = tuple(new_zeta_ai)
 
                             add_state_to_buckets(next_states, cost_ai, prog_ai, ai_count_new, new_hist_ai, 
@@ -497,7 +572,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                             final_zeta = list(zeta)
                             for cut_idx, cut in enumerate(forbidden_schedules):
                                 if final_zeta[cut_idx] == 0:  # Not yet deviated
-                                    forbidden_val = cut["schedule"].get((j, tau), None)
+                                    forbidden_val = cut.get((j, tau), None)
                                     if forbidden_val is not None and forbidden_val != move:
                                         final_zeta[cut_idx] = 1  # Deviated!
                             final_zeta = tuple(final_zeta)
@@ -506,7 +581,11 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                         if use_branch_constraints:
                             if not all(z == 1 for z in final_zeta):
                                 # This path hasn't deviated from all forbidden schedules -> REJECT
-                                logger.print(f"    [MP BRANCHING] Recipient {recipient_id}: Pruned forbidden column (Worker {j})")
+                                missing_deviations = [i for i, z in enumerate(final_zeta) if z == 0]
+                                logger.print(f"    [NO-GOOD CUT ACTIVE] Recipient {recipient_id}, Worker {j}:")
+                                logger.print(f"      Column REJECTED: ζ = {final_zeta}")
+                                logger.print(f"      Missing deviations from cuts: {[f'#{i+1}' for i in missing_deviations]}")
+                                logger.print(f"      → Column matches forbidden schedule(s), pruned by no-good cut")
                                 continue
 
                         is_focus_patient = (obj_mode > 0.5)
@@ -669,7 +748,16 @@ def solve_pricing_for_profile_bnp(
         path_pattern = col['path_pattern']
     
         # Build schedules_x: {(profile, worker, time, col_id): value}
+        # IMPORTANT: Initialize ALL possible (profile, worker, time, col_id) combinations with 0
+        # to match the format of Gurobi-generated subproblems
         schedules_x = {}
+        
+        # Initialize all combinations with 0 for ALL workers and times
+        for w in workers:
+            for t in range(1, max_time + 1):
+                schedules_x[(profile, w, t, current_col_id)] = 0.0
+        
+        # Now set the actual values from the path_pattern
         for t_idx, val in enumerate(path_pattern):
             current_time = start + t_idx
             schedules_x[(profile, worker, current_time, current_col_id)] = float(val)

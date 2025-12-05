@@ -1833,6 +1833,9 @@ class BranchAndPrice:
         self.logger.info(f"DEBUG: Entering _solve_and_evaluate_child_node for Node {child_node.node_id}")
         self.logger.info(f"\n  [Immediate Child Solving] Solving Node {child_node.node_id} with full CG...")
 
+        # Add to processing order (since we're solving it immediately, not from open_nodes)
+        self.stats['node_processing_order'].append(child_node.node_id)
+
         try:
             # Solve node with FULL Column Generation until convergence
             lp_bound, is_integral, most_frac_info, node_lambdas = self.solve_node_with_cg(
@@ -1963,7 +1966,7 @@ class BranchAndPrice:
 
             cg_iteration += 1
 
-            print(f"\n{'*' * 102}\n*{f'Begin Column Generation Iteration {cg_iteration}':^100}*\n{'*' * 102}")
+            print(f"\n{'*' * 102}\n*{f'Begin Column Generation Iteration {cg_iteration} (Node {node.node_id})':^100}*\n{'*' * 102}")
             
             # Print parallelization info
             if self.use_labeling:
@@ -2112,6 +2115,15 @@ class BranchAndPrice:
                 
                 # Now add all columns sequentially (to avoid race conditions)
                 for profile, col_data_list in pricing_results:
+                    # DEBUGGING: Explicit None check
+                    if col_data_list is None:
+                        print(f"\n{'='*80}")
+                        print(f"ERROR DETECTED: col_data_list is None for profile {profile}")
+                        print(f"Node ID: {node.node_id}")
+                        print(f"Pricing results: {pricing_results}")
+                        print(f"{'='*80}\n")
+                        sys.exit(1)
+                    
                     if not col_data_list:
                         self.logger.debug(f"    [Parallel] Profile {profile}: no column found")
                         continue
@@ -2188,6 +2200,15 @@ class BranchAndPrice:
                         col_data_list = self._solve_with_labeling(
                             profile, node, duals_pi, duals_gamma, branching_duals
                         )
+                        
+                        # DEBUGGING: Explicit None check
+                        if col_data_list is None:
+                            print(f"\n{'='*80}")
+                            print(f"ERROR DETECTED: col_data_list is None for profile {profile}")
+                            print(f"Node ID: {node.node_id}")
+                            print(f"CG Iteration: {cg_iteration}")
+                            print(f"{'='*80}\n")
+                            sys.exit(1)
                         
                         # Handle list of columns (or single None if no columns found)
                         if not col_data_list:
@@ -2394,6 +2415,7 @@ class BranchAndPrice:
                 schedules_x = col_data.get('schedules_x', {})
                 schedules_los = col_data.get('schedules_los', {})
 
+
                 if not schedules_x:
                     self.logger.warning(f"      ⚠️ WARNING: Column ({profile},{col_id}) has empty schedules_x!")
                     continue
@@ -2428,6 +2450,8 @@ class BranchAndPrice:
 
                 master.addLambdaVar(profile, col_id, col_coefs, los_list)
             master.Model.update()
+
+
 
         # Update Obj coefficients for initial column
         for (profile, col_id), col_data in node.column_pool.items():
@@ -2867,6 +2891,15 @@ class BranchAndPrice:
         x_list_full = col_data['x_vector']
         
         col_coefs = lambda_list + x_list_full
+
+        # DEBUG: Log array lengths before adding to master
+        num_constraints = len(master.Model.getConstrs())
+        self.logger.info(f"      [DEBUG Labeling Column {profile},{col_id}]:")
+        self.logger.info(f"        lambda_list length: {len(lambda_list)}")
+        self.logger.info(f"        x_list_full length: {len(x_list_full)}")
+        self.logger.info(f"        col_coefs total length: {len(col_coefs)}")
+        self.logger.info(f"        Master constraints count: {num_constraints}")
+        self.logger.info(f"        Match: {len(col_coefs) == num_constraints}")
 
         # Add lambda variable to master
         if profile in self.cg_solver.P_F:
@@ -3461,9 +3494,24 @@ class BranchAndPrice:
 
         # Detailed Processing Log
         if self.stats['node_processing_order']:
-
-            order_str = " -> ".join(map(str, self.stats['node_processing_order']))
-            self._print_always(f"Processing Order: {order_str}\n")
+            # Find which node provided the incumbent
+            incumbent_node_id = self._find_incumbent_node()
+            
+            # Build processing order string with incumbent node underlined
+            order_parts = []
+            for node_id in self.stats['node_processing_order']:
+                if node_id == incumbent_node_id:
+                    # Underline the incumbent node
+                    order_parts.append(f"\033[4m{node_id}\033[0m")  # ANSI underline
+                else:
+                    order_parts.append(str(node_id))
+            
+            order_str = " -> ".join(order_parts)
+            self._print_always(f"Processing Order: {order_str}")
+            if incumbent_node_id in self.stats['node_processing_order']:
+                self._print_always(f"                  (Node {incumbent_node_id} found the incumbent solution)\n")
+            else:
+                self._print_always("")
 
             if self.search_strategy == 'bfs' and self.stats['bfs_decision_log']:
                 self._print_always("BFS Decision Breakdown:")
