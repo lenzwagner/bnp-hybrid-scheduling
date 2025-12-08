@@ -13,7 +13,7 @@ def main():
     # ===========================
     # Setup multi-level logging: separate files for DEBUG, INFO, WARNING, ERROR
     # Set print_all_logs=True to also print all log levels to console (not just PRINT level)
-    print_all_logs = True  # Set to True to see all logger output on console
+    print_all_logs = False # Set to True to see all logger output on console
     setup_multi_level_logging(base_log_dir='logs', enable_console=True, print_all_logs=print_all_logs)
 
 
@@ -28,7 +28,7 @@ def main():
     # ===========================
 
     # Random seed
-    seed = 13
+    seed = 12
 
     # Learning parameters
     app_data = {
@@ -161,7 +161,7 @@ def main():
                                     early_incumbent_iteration=1,
                                     save_lps=save_lps,
                                     use_labeling=True,
-                                    max_columns_per_iter=10,
+                                    max_columns_per_iter=50,
                                     use_parallel_pricing=use_parallel_pricing,
                                     n_pricing_workers=n_pricing_workers)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)

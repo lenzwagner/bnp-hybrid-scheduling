@@ -334,8 +334,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                 if hasattr(constraint, 'direction'):
                     logger.print(f"      Direction value: {constraint.direction}")
                 logger.print(f"      Has 'original_schedule': {hasattr(constraint, 'original_schedule')}")
-                if hasattr(constraint, 'original_schedule'):
-                    logger.print(f"      Original schedule length: {len(constraint.original_schedule)}")
+
 
     if branch_constraints:
         # Handle list of constraint objects (from Branch-and-Price)
@@ -409,12 +408,6 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
             initial_zeta = tuple([0] * num_cuts) if use_branch_constraints else None
 
-            # DEBUG: Always log the state for troubleshooting
-            if use_branch_constraints:
-                print(f"  [DEBUG] Recipient {recipient_id}, Worker {j}, Tau {tau}: use_branch_constraints={use_branch_constraints}, num_cuts={num_cuts}")
-                print(f"  [DEBUG] tau == start_tau: {tau == start_tau}, j == candidate_workers[0]: {j == candidate_workers[0]}")
-                print(f"  [DEBUG] start_tau={start_tau}, candidate_workers={candidate_workers}")
-            
             # Show zeta initialization for recipients with active branching constraints
             # Display once per recipient (when processing first candidate worker at start_tau)
             if use_branch_constraints and tau == start_tau:
