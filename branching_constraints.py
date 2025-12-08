@@ -402,6 +402,9 @@ class MPVariableBranching(BranchingConstraint):
 
         No-good cut prevents regenerating the exact same column:
         sum_{(j,t): chi^a_{njt}=1} (1-x_{njt}) + sum_{(j,t): chi^a_{njt}=0} x_{njt} >= 1
+        
+        This implementation correctly handles the full Hamming distance, 
+        including the zero-entries (second term) which are implicit in the sparse original_schedule.
         """
         if subproblem.P != self.profile:
             return
@@ -410,44 +413,67 @@ class MPVariableBranching(BranchingConstraint):
             return
 
         # Left branch: Add no-good cut
-        if self.original_schedule is None or len(self.original_schedule) == 0:
-            print(f"      ⚠️ WARNING: No original_schedule for no-good cut!")
-            print(f"         Column ({self.profile}, {self.column}) can be regenerated!")
-            return
+        if self.original_schedule is None:
+            # Note: Empty schedule is valid (all zeros), so we should proceed with empty ones_set
+            print(f"      ⚠️ WARNING: No original_schedule provided. Assuming all-zeros.")
+            ones_set = set()
+        else:
+            # Extract set of (j,t) where original column has 1
+            # original_schedule keys are (p, j, t, col_id)
+            ones_set = set()
+            for (p, j, t, a_orig), chi_value in self.original_schedule.items():
+                if p == self.profile and chi_value > 0.5:
+                    ones_set.add((j, t))
 
         print(f"      [No-Good Cut] Adding for profile {self.profile}, column {self.column}")
-        print(f"                    Schedule has {len(self.original_schedule)} assignments")
+        print(f"                    Forbidden pattern has {len(ones_set)} active assignments")
 
-        # Build no-good constraint
         terms = []
-        schedule_pattern = []
-
-        for (p, j, t, a_orig), chi_value in self.original_schedule.items():
-            if p != self.profile:
+        lhs_constant = 0
+        handled_ones = set()
+        
+        # Iterate over ALL variables in the current subproblem iteration
+        # This covers both the "1->0" (flip 1 to 0) and "0->1" (flip 0 to 1) deviations
+        current_vars_found = 0
+        
+        for var_key, x_var in subproblem.x.items():
+            # var_key should be (p, j, t, itr)
+            if len(var_key) < 4: 
                 continue
-
-            var_key = (p, j, t, subproblem.itr)
-            if var_key not in subproblem.x:
+                
+            p, j, t, itr = var_key
+            
+            # Filter for current profile and iteration
+            if p != self.profile or itr != subproblem.itr:
                 continue
-
-            x_var = subproblem.x[var_key]
-
-            if chi_value == 1:
+            
+            current_vars_found += 1
+            
+            if (j, t) in ones_set:
+                # Case 1: Original was 1. Term is (1 - x)
                 terms.append(1 - x_var)
-                schedule_pattern.append(f"x[{j},{t}]=1")
+                handled_ones.add((j, t))
             else:
+                # Case 2: Original was 0. Term is x
                 terms.append(x_var)
-                schedule_pattern.append(f"x[{j},{t}]=0")
-
-        if terms:
+        
+        # Handle "1s" that are missing in the current subproblem variables
+        # If the subproblem doesn't even have a variable for (j,t), then x_{jt} is implicitly 0.
+        # Original was 1, New is 0. Difference = |0 - 1| = 1.
+        for (j, t) in ones_set:
+            if (j, t) not in handled_ones:
+                lhs_constant += 1
+        
+        if terms or lhs_constant > 0:
+            # Constraint: Sum(terms) + Constant >= 1
+            # Gurobi handles constants in constraints automatically
             subproblem.Model.addConstr(
-                gu.quicksum(terms) >= 1,
+                gu.quicksum(terms) + lhs_constant >= 1,
                 name=f"no_good_p{self.profile}_c{self.column}"
             )
-            print(f"                    Pattern: {', '.join(schedule_pattern[:5])}...")
-            print(f"                    Added constraint with {len(terms)} terms")
+            print(f"                    Added constraint with {len(terms)} terms and constant {lhs_constant}")
         else:
-            print(f"      ⚠️ WARNING: No terms in no-good cut (empty schedule?)")
+            print(f"      ⚠️ WARNING: No terms in no-good cut (Empty vars and empty schedule?)")
 
     def is_column_compatible(self, column_data):
         """

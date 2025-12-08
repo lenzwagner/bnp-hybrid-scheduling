@@ -475,13 +475,14 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 new_zeta_ther = list(zeta)
                                 for cut_idx, cut in enumerate(forbidden_schedules):
                                     if new_zeta_ther[cut_idx] == 0:  # Not yet deviated
-                                        forbidden_val = cut.get((j, t), None)
-                                        if forbidden_val is not None and forbidden_val != 1:
-                                            # DEVIATION DETECTED: 0 → 1 transition
+                                        # Default to 0 if not present in sparse schedule
+                                        forbidden_val = cut.get((j, t), 0)
+                                        if forbidden_val != 1:
+                                            # DEVIATION DETECTED: 0 → 1 transition (if forbidden=0) or mismatch
                                             new_zeta_ther[cut_idx] = 1
-                                            logger.print(f"    [ZETA TRANSITION] Recipient {recipient_id}, Worker {j}, Time {t}:")
-                                            logger.print(f"      Cut #{cut_idx + 1}: ζ[{cut_idx}]: 0 → 1 (Therapist action deviates from forbidden value {forbidden_val})")
-                                            logger.print(f"      New ζ = {tuple(new_zeta_ther)}")
+                                            # logger.print(f"    [ZETA TRANSITION] Recipient {recipient_id}, Worker {j}, Time {t}:")
+                                            # logger.print(f"      Cut #{cut_idx + 1}: ζ[{cut_idx}]: 0 → 1 (Therapist action deviates from forbidden value {forbidden_val})")
+                                            # logger.print(f"      New ζ = {tuple(new_zeta_ther)}")
                                 new_zeta_ther = tuple(new_zeta_ther)
 
                             add_state_to_buckets(next_states, cost_ther, prog_ther, ai_count, new_hist_ther, 
