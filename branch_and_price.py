@@ -96,7 +96,7 @@ class BranchAndPrice:
     def __init__(self, cg_solver, branching_strategy='mp', search_strategy='dfs', verbose=True,
                  ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True,
                  use_labeling=False, max_columns_per_iter=10, use_parallel_pricing=False, 
-                 n_pricing_workers=4):
+                 n_pricing_workers=4, debug_mode=True):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -115,6 +115,7 @@ class BranchAndPrice:
             max_columns_per_iter: Maximum number of columns to return per recipient per iteration
             use_parallel_pricing: If True, solve pricing problems in parallel (only with use_labeling=True)
             n_pricing_workers: Number of parallel workers for pricing (only if use_parallel_pricing=True)
+            debug_mode: If True, exceptions are re-raised instead of being caught (for debugging)
         """
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -127,6 +128,7 @@ class BranchAndPrice:
         # Output control
         self.verbose = verbose
         self.save_lps = save_lps
+        self.debug_mode = debug_mode  # DEBUG MODE: If True, re-raise exceptions
 
         # Global bounds
         self.incumbent = float('inf')  # Best IP solution (upper bound)
@@ -628,6 +630,11 @@ class BranchAndPrice:
 
             master.Model.Params.OutputFlag = 0
             master.Model.update()
+            
+            # DEBUG MODE: Re-raise exception instead of returning False
+            if self.debug_mode:
+                self.logger.error("🐛 DEBUG_MODE enabled - re-raising exception!")
+                raise
 
             return False
 
@@ -928,6 +935,12 @@ class BranchAndPrice:
                     self.stats['nodes_explored'] += 1
                 except Exception as e:
                     self.logger.error(f"❌ Error solving node {current_node_id}: {e}")
+                    
+                    # DEBUG MODE: Re-raise exception instead of continuing
+                    if self.debug_mode:
+                        self.logger.error("🐛 DEBUG_MODE enabled - re-raising exception!")
+                        raise
+                    
                     current_node.status = 'fathomed'
                     current_node.fathom_reason = 'error'
                     self.stats['nodes_fathomed'] += 1
@@ -1866,6 +1879,12 @@ class BranchAndPrice:
 
         except Exception as e:
             self.logger.error(f"  ✗ Error solving node {child_node.node_id}: {e}")
+            
+            # DEBUG MODE: Re-raise exception instead of fathoming
+            if self.debug_mode:
+                self.logger.error("🐛 DEBUG_MODE enabled - re-raising exception!")
+                raise
+            
             child_node.status = 'fathomed'
             child_node.fathom_reason = 'error'
             self.stats['nodes_fathomed'] += 1
@@ -2081,6 +2100,10 @@ class BranchAndPrice:
                         const_val = float(learn_type)
                         theta_lookup = [const_val] * 50
                     except ValueError:
+                        # DEBUG MODE: Re-raise exception for debugging
+                        if self.debug_mode:
+                            self.logger.error("🐛 DEBUG_MODE enabled - re-raising ValueError!")
+                            raise
                         theta_lookup = [theta_base] * 50
                 theta_lookup = [min(x, 1.0) for x in theta_lookup]
                 
@@ -2817,6 +2840,10 @@ class BranchAndPrice:
                 const_val = float(learn_type)
                 theta_lookup = [const_val] * 50
             except ValueError:
+                # DEBUG MODE: Re-raise exception for debugging
+                if self.debug_mode:
+                    self.logger.error("🐛 DEBUG_MODE enabled - re-raising ValueError!")
+                    raise
                 # Fallback to theta_base if unknown string
                 self.logger.warning(f"Unknown learn_type '{learn_type}', using theta_base constant.")
                 theta_lookup = [theta_base] * 50
@@ -3776,6 +3803,13 @@ class BranchAndPrice:
 
         except Exception as e:
             self.logger.error(f"  ❌ Error during IP heuristic: {e}")
+            
+            # DEBUG MODE: Re-raise exception for debugging
+            if self.debug_mode:
+                self.logger.error("🐛 DEBUG_MODE enabled - re-raising exception!")
+                # Still execute finally block to restore variables
+                raise
+            
             improved = False
 
         finally:

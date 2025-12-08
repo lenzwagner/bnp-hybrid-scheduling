@@ -642,6 +642,67 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
     #for col in best_columns:
         #print(f"  [Labeling] Recipient {recipient_id} with gamma {gamma_k}: Negative red. cost: {col['reduced_cost']:.2f} with {col['duration']} and {col['x_vector']}")
 
+    # Debug output for forbidden schedules and generated columns
+    if use_branch_constraints and forbidden_schedules:
+        logger.print(f"\n{'='*100}")
+        logger.print(f"  [FORBIDDEN vs GENERATED] Recipient {recipient_id}: {len(forbidden_schedules)} No-Good Cut(s) Active")
+        logger.print(f"{'='*100}")
+        
+        # First, show all forbidden schedules in detail
+        for cut_idx, cut in enumerate(forbidden_schedules):
+            logger.print(f"\n  Forbidden Schedule #{cut_idx+1}:")
+            # Group by worker
+            workers_in_cut = {}
+            for (worker, time), val in sorted(cut.items()):
+                if worker not in workers_in_cut:
+                    workers_in_cut[worker] = []
+                workers_in_cut[worker].append((time, val))
+            
+            for worker in sorted(workers_in_cut.keys()):
+                times_vals = workers_in_cut[worker]
+                pattern_str = "".join([str(int(v)) for _, v in sorted(times_vals)])
+                time_range = f"[{min(t for t, _ in times_vals)}→{max(t for t, _ in times_vals)}]"
+                logger.print(f"    Worker {worker:2d} {time_range:8s}: {pattern_str}")
+        
+        # Now, show all generated columns
+        if best_columns:
+            logger.print(f"\n  Generated Columns ({len(best_columns)} found):")
+            for col_idx, col in enumerate(best_columns):
+                logger.print(f"\n    Column #{col_idx+1}:")
+                logger.print(f"      Worker: {col['worker']:2d}, Period: [{col['start']}→{col['end']}], Reduced Cost: {col['reduced_cost']:.4f}")
+                pattern_str = "".join([str(int(v)) for v in col['path_pattern']])
+                logger.print(f"      Pattern: {pattern_str}")
+                
+                # Compare with each forbidden schedule
+                for cut_idx, cut in enumerate(forbidden_schedules):
+                    comparison = []
+                    deviations = []
+                    all_times = list(range(col['start'], col['end'] + 1))
+                    
+                    for t_step_idx, t in enumerate(all_times):
+                        forbidden_val = cut.get((col['worker'], t), None)
+                        generated_val = col['path_pattern'][t_step_idx]
+                        
+                        if forbidden_val is not None:
+                            if forbidden_val == generated_val:
+                                comparison.append(f"t{t}:✓")  # Match
+                            else:
+                                comparison.append(f"t{t}:✗({int(forbidden_val)}→{int(generated_val)})")  # Deviation
+                                deviations.append(f"t{t}")
+                    
+                    if comparison:  # Only show if there's overlap
+                        match_status = "IDENTICAL - REJECTED!" if not deviations else f"DEVIATES (at {', '.join(deviations)})"
+                        logger.print(f"      vs Cut #{cut_idx+1}: {match_status}")
+                        if len(comparison) <= 10:
+                            logger.print(f"        {' '.join(comparison)}")
+                        else:
+                            logger.print(f"        {' '.join(comparison[:5])} ... {' '.join(comparison[-5:])}")
+        else:
+            logger.print(f"\n  ⚠️  No columns generated for this recipient!")
+        
+        logger.print(f"\n{'='*100}\n")
+
+
     return best_columns
 
 
