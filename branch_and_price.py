@@ -1491,7 +1491,7 @@ class BranchAndPrice:
         
         # Use hierarchical pattern search
         pattern, beta_val, floor_val, ceil_val, profile = self._find_fractional_pattern(
-            node, lambdas, max_pattern_size=3
+            node, lambdas, max_pattern_size=10
         )
         
         if pattern is None:
