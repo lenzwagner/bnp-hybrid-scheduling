@@ -975,6 +975,38 @@ class BranchAndPrice:
 
                 print(f"  ✓ Master rebuilt for {current_node.node_id, current_node_id}: obj={rebuilt_obj:.6f}, lambda count={len(node_lambdas)}")
 
+                # Print active branching constraints with duals (since master is fresh)
+                if current_node.branching_constraints:
+                    print(f"\n   Active Branching Constraints ({len(current_node.branching_constraints)}):")
+                    for idx, c in enumerate(current_node.branching_constraints, 1):
+                        # Attempt to get dual
+                        dual_str = ""
+                        try:
+                            if c.master_constraint:
+                                dual_str = f" [Dual: {c.master_constraint.Pi:.4f}]"
+                        except:
+                            dual_str = " [Dual: N/A]"
+
+                        # Manual str representation for clear output
+                        if "SPVariableBranching" in str(type(c)):
+                            c_type = "SP Var"
+                            details = f"Worker {c.agent}, Time {c.period}, {c.dir.upper()} (Level {c.level})"
+                        elif "SPPatternBranching" in str(type(c)):
+                            c_type = "SP Pattern"
+                            pat_str = str(sorted(list(c.pattern)))
+                            details = f"Profile {c.profile}, Pattern {pat_str}, {c.direction.upper()} (Level {c.level})"
+                        elif "MPVariableBranching" in str(type(c)):
+                            c_type = "MP Var"
+                            details = f"Worker {c.agent}, Time {c.period}, {c.direction.upper()}"
+                        else:
+                            c_type = "Unknown"
+                            details = str(c)
+                        
+                        print(f"   {idx}. [{c_type}] {details}{dual_str}")
+                else:
+                    print("\n   Active Branching Constraints: None (Root Node)")
+                print("")
+
                 # Check if objective differs
                 if abs(rebuilt_obj - lp_bound) > 1e-4:
                     print(f"  ⚠️  WARNING: Rebuilt objective {rebuilt_obj:.6f} differs from stored bound {lp_bound:.6f}")
@@ -1309,41 +1341,38 @@ class BranchAndPrice:
 
         return 'mp', branching_info
 
-
     def _find_fractional_pattern(self, node, lambdas, max_pattern_size=5):
         """
         Hierarchical pattern search as described in paper.
-        
+
         Search for fractional beta_P(k) starting with singletons (|P(k)|=1),
         incrementally increasing pattern size until a fractional value is found.
-        
+
         Args:
             node: Current BnPNode
             lambdas: Current lambda values {(k,a): value}
-            max_pattern_size: Maximum pattern size to consider (default: 3)
-            
+            max_pattern_size: Maximum pattern size to consider
+
         Returns:
-            tuple: (pattern_set, beta_value, floor, ceil, profile) or (None, None, None, None, None)
+            tuple: (pattern_set, beta_value, floor, ceil, profile)
+            or (None, None, None, None, None)
         """
         self.logger.info(f"\n[Pattern Search] Starting hierarchical pattern search...")
         self.logger.info(f"  Max pattern size: {max_pattern_size}")
-        
-        # Try pattern sizes from 1 to max_pattern_size
+
+        # Loop over increasing pattern sizes
         for pattern_size in range(1, max_pattern_size + 1):
             self.logger.info(f"\n  Searching patterns of size {pattern_size}...")
-            
+
             pattern, beta_val, floor_val, ceil_val, profile = self._search_patterns_of_size(
                 node, lambdas, pattern_size
             )
-            
+
             if pattern is not None:
-                print(f"  ✅ Found fractional pattern of size {pattern_size}: {pattern}")
-                if pattern_size > 1:
-                    print("Find pattern greater than one")
                 return pattern, beta_val, floor_val, ceil_val, profile
-            
+
             self.logger.info(f"  → No fractional pattern of size {pattern_size}, trying larger...")
-        
+
         self.logger.warning(f"  ❌ No fractional pattern found up to size {max_pattern_size}")
         return None, None, None, None, None
     
@@ -1397,11 +1426,12 @@ class BranchAndPrice:
             for pattern_tuple in combinations(sorted(assignments), pattern_size):
                 pattern = frozenset(pattern_tuple)
                 
-                # Compute beta_P(k) for this pattern
+        # Compute beta_P(k) for this pattern
                 # beta_P(k) = sum_{a in A(k,P(k))} Lambda_{ka}
                 # where A(k,P(k)) = {a : chi^a_{kjt}=1 for all (j,t) in P(k)}
                 
                 beta_val = 0.0
+                contrib_count = 0
                 
                 for (k2, a), lambda_val in lambdas.items():
                     if k2 != profile_k or lambda_val < 1e-6:
@@ -1427,6 +1457,7 @@ class BranchAndPrice:
                     
                     if covers_all:
                         beta_val += lambda_val
+                        contrib_count += 1
                 
                 # Check fractionality
                 floor_val = int(beta_val)
@@ -1437,21 +1468,32 @@ class BranchAndPrice:
                 fractionality = min(dist_to_floor, dist_to_ceil)
                 
                 if fractionality > 1e-5:  # Fractional
+                    # Log candidate
+                    print(f"      Candidate: P={profile_k}, Pattern={pattern}, Beta={beta_val:.4f}, Count={contrib_count}, Frac={fractionality:.4f}")
+
                     is_better = False
+                    reason = ""
                     
                     if fractionality > max_fractionality + 1e-10:
                         is_better = True
+                        reason = f"Better fractionality ({fractionality:.6f} > {max_fractionality:.6f})"
                     elif abs(fractionality - max_fractionality) < 1e-10:
                         # Tie: prefer smaller profile, then lexicographically smaller pattern
                         if best_candidate is None:
                             is_better = True
+                            reason = "First valid candidate"
                         else:
                             current_key = (profile_k, sorted(pattern))
                             best_key = (best_candidate['profile'], sorted(best_candidate['pattern']))
                             if current_key < best_key:
                                 is_better = True
+                                reason = f"Tie-break: {current_key} < {best_key}"
+                            else:
+                                pass
+                                # reason = f"Tie-break lost: {current_key} >= {best_key}"
                     
                     if is_better:
+                        print(f"        -> NEW BEST: {reason}")
                         max_fractionality = fractionality
                         best_candidate = {
                             'profile': profile_k,
@@ -2026,6 +2068,40 @@ class BranchAndPrice:
             if self.branching_strategy == 'sp':
                 branching_duals = self._get_branching_constraint_duals(master, node)
 
+                # Print active branching constraints with duals (inside CG iteration)
+                if cg_iteration == 1 and node.branching_constraints:
+                    print(f"\n   Active Branching Constraints ({len(node.branching_constraints)}):")
+                    for idx, c in enumerate(node.branching_constraints, 1):
+                        # Attempt to get dual
+                        dual_str = ""
+                        try:
+                            # Re-fetch based on key match if possible, or try direct access
+                            dual_val = branching_duals.get(c.get_dual_key(), None)
+                            if dual_val is not None:
+                                dual_str = f" [Dual: {dual_val:.4f}]"
+                            elif c.master_constraint:
+                                dual_str = f" [Dual: {c.master_constraint.Pi:.4f}]"
+                        except:
+                            dual_str = " [Dual: N/A]"
+
+                        # Manual str representation for clear output
+                        if "SPVariableBranching" in str(type(c)):
+                            c_type = "SP Var"
+                            details = f"Worker {c.agent}, Time {c.period}, {c.dir.upper()} (Level {c.level})"
+                        elif "SPPatternBranching" in str(type(c)):
+                            c_type = "SP Pattern"
+                            pat_str = str(sorted(list(c.pattern)))
+                            details = f"Profile {c.profile}, Pattern {pat_str}, {c.direction.upper()} (Level {c.level})"
+                        elif "MPVariableBranching" in str(type(c)):
+                            c_type = "MP Var"
+                            details = f"Worker {c.agent}, Time {c.period}, {c.direction.upper()}"
+                        else:
+                            c_type = "Unknown"
+                            details = str(c)
+                        
+                        print(f"   {idx}. [{c_type}] {details}{dual_str}")
+                print("")
+
             # 3. Solve subproblems
             # Pricing Filter Logic
             patients_to_solve = []
@@ -2071,12 +2147,21 @@ class BranchAndPrice:
                 self.logger.info(f"    [Parallel Pricing] Solving {len(patients_to_solve)} profiles with {self.n_pricing_workers} workers")
                 
                 # Prepare node data (without Gurobi models which can't be pickled)
+                # CRITICAL: Deep copy branching constraints and remove 'master_constraint' attribute
+                sanitized_constraints = []
+                for c in node.branching_constraints:
+                    # Create a copy (shallow copy of object structure is enough if we unset the attribute)
+                    c_copy = copy.copy(c)
+                    if hasattr(c_copy, 'master_constraint'):
+                        c_copy.master_constraint = None
+                    sanitized_constraints.append(c_copy)
+
                 node_data = {
                     'node_id': node.node_id,
                     'parent_id': node.parent_id,
                     'depth': node.depth,
                     'path': node.path,
-                    'branching_constraints': node.branching_constraints
+                    'branching_constraints': sanitized_constraints
                 }
                 
                 # Prepare CG solver data (picklable data only)
@@ -2665,6 +2750,7 @@ class BranchAndPrice:
                 self.logger.warning(f"      ⚠️  Could not extract dual from constraint: {e}")
 
         self.logger.info(f"      Found {sp_constraints_found} SP branching duals\n")
+        print('Branching Duals', {k: v for k, v in branching_duals.items() if v != 0})
         return branching_duals
 
     def _build_subproblem_for_node(self, profile, node, duals_pi, duals_gamma, branching_duals=None):
@@ -2918,6 +3004,22 @@ class BranchAndPrice:
         x_list_full = col_data['x_vector']
         
         col_coefs = lambda_list + x_list_full
+        
+        # ========================================================================
+        # ADD SP-BRANCHING COEFFICIENTS IF NEEDED
+        # ========================================================================
+        sp_branching_constraints = [c for c in node.branching_constraints
+                                    if hasattr(c, 'master_constraint')
+                                    and c.master_constraint is not None]
+
+        if sp_branching_constraints:
+            branching_coefs = self._compute_branching_coefficients_for_column(
+                col_data, profile, col_id, node.branching_constraints
+            )
+            col_coefs = col_coefs + branching_coefs
+
+            self.logger.info(f"        [Labeling] Added {len(branching_coefs)} branching coefficients "
+                        f"for new column ({profile}, {col_id})")
 
         # DEBUG: Log array lengths before adding to master
         num_constraints = len(master.Model.getConstrs())

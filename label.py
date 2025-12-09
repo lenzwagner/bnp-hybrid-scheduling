@@ -45,8 +45,84 @@ def check_strict_feasibility(history, next_val, MS, MIN_MS):
         return True
 
 
+
+def _parse_branching_constraints(branch_constraints, recipient_id, branching_variant='mp'):
+    """
+    Parses branching constraints into efficient lookup structures.
+    
+    Args:
+        branch_constraints: List of constraint objects
+        recipient_id: Profile ID
+        branching_variant: 'mp' or 'sp'
+        
+    Returns:
+        tuple: (mp_cuts, left_patterns, right_patterns)
+    """
+    mp_cuts = []
+    left_patterns = []
+    right_patterns = []
+
+    if not branch_constraints:
+        return mp_cuts, left_patterns, right_patterns
+
+    # Handle list of constraint objects (preferred)
+    if isinstance(branch_constraints, list):
+        for constraint in branch_constraints:
+            if not hasattr(constraint, 'profile') or constraint.profile != recipient_id:
+                continue
+
+            # SP Branching (Pattern)
+            if hasattr(constraint, 'pattern'):
+                # SPPatternBranching
+                if constraint.direction == 'left':
+                    # Limit Usage: sum x <= |P| - 1
+                    # Store: (id, elements_set, limit)
+                    limit = len(constraint.pattern) - 1 # Prune if count > limit (i.e. count == len)
+                    left_patterns.append({
+                        'id': id(constraint),
+                        'elements': set(constraint.pattern), # Set of (j,t)
+                        'limit': limit
+                    })
+                elif constraint.direction == 'right':
+                    # All-or-Nothing: sum x = |P| * w
+                    # Store: (id, elements_sorted, first_element, dual)
+                    sorted_elements = sorted(list(constraint.pattern), key=lambda x: x[1]) # Sort by time
+                    first_element = sorted_elements[0] if sorted_elements else None
+                    right_patterns.append({
+                        'id': id(constraint),
+                        'elements': sorted_elements,
+                        'elements_set': set(constraint.pattern),
+                        'first_element': first_element,
+                        'dual': getattr(constraint, 'dual_var', 0.0)
+                    })
+
+            # MP Branching (No-Good Cuts)
+            elif hasattr(constraint, 'original_schedule') and branching_variant == 'mp':
+                if constraint.direction == 'left' and constraint.original_schedule:
+                    forbidden_schedule = {}
+                    for key, val in constraint.original_schedule.items():
+                        if len(key) >= 3 and val > 1e-6:
+                            j, t = key[1], key[2]
+                            forbidden_schedule[(j, t)] = val
+                    mp_cuts.append(forbidden_schedule)
+
+    # Debug Printing for SP Constraints
+    if left_patterns:
+        print(f"  [SP DEBUG] Recipient {recipient_id}: Found {len(left_patterns)} LEFT patterns")
+        for i, p in enumerate(left_patterns):
+            print(f"    Left #{i}: Limit {p['limit']}, Elements: {sorted(list(p['elements']))}")
+
+    if right_patterns:
+        print(f"  [SP DEBUG] Recipient {recipient_id}: Found {len(right_patterns)} RIGHT patterns")
+        for i, p in enumerate(right_patterns):
+            print(f"    Right #{i}: Elements: {p['elements']}, Dual: {p['dual']}")
+
+    return mp_cuts, left_patterns, right_patterns
+
+
 def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id, 
-                         pruning_stats, dominance_mode='bucket', zeta=None, epsilon=1e-9):
+                         pruning_stats, dominance_mode='bucket', 
+                         zeta=None, rho=None, mu=None, epsilon=1e-9):
     """
     Adds a state to buckets, applying dominance rules.
     
@@ -60,57 +136,29 @@ def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id
         recipient_id: Current recipient ID (for debug output)
         pruning_stats: Statistics dictionary
         dominance_mode: 'bucket' or 'global'
-        zeta: Branch constraint deviation vector (optional)
+        zeta: MP Branching deviation vector (optional)
+        rho: SP Branching Left-Counter vector (optional)
+        mu: SP Branching Right-Mode vector (optional)
         epsilon: Tolerance for float comparisons
     """
-    # Bucket key includes zeta if branch constraints are active
-    if zeta is not None:
-        bucket_key = (ai_count, hist, zeta)
-    else:
-        bucket_key = (ai_count, hist)
+    # Bucket Key Generation
+    # Standard: (ai_count, hist)
+    # With MP Branching: + zeta
+    # With SP Branching: + mu (Right Modes are incomparable)
     
-    # --- GLOBAL PRUNING CHECK (Only in Global Mode) ---
-    if dominance_mode == 'global':
-        is_dominated_globally = False
-        dominator_global = None
+    key_components = [ai_count, hist]
+    if zeta is not None:
+        key_components.append(zeta)
+    if mu is not None:
+        key_components.append(mu)
         
-        for (ai_other, hist_other), other_list in buckets.items():
-            # Another bucket can only dominate if it is "better/equal" in AI & Hist
-            if ai_other < ai_count:
-                continue
-                
-            # Hist Check (component-wise >=)
-            if len(hist_other) != len(hist):
-                continue
-            
-            hist_better = True
-            for h1, h2 in zip(hist_other, hist):
-                if h1 < h2:
-                    hist_better = False
-                    break
-            if not hist_better:
-                continue
-            
-            # Check Cost & Prog in this bucket
-            for c_old, p_old, _ in other_list:
-                if c_old <= cost + epsilon and p_old >= prog - epsilon:
-                    is_dominated_globally = True
-                    dominator_global = (c_old, p_old, ai_other, hist_other)
-                    break
-            
-            if is_dominated_globally:
-                break
-        
-        if is_dominated_globally:
-            pruning_stats['dominance'] += 1
-            logger.info(f"    [DOMINANCE GLOBAL] Recipient {recipient_id}: State DOMINATED")
-            logger.info(f"      Dominated state: Cost={cost:.4f}, Prog={prog:.4f}, AI={ai_count}, Hist={hist}")
-            logger.info(f"      Dominating state: Cost={dominator_global[0]:.4f}, Prog={dominator_global[1]:.4f}, AI={dominator_global[2]}, Hist={dominator_global[3]}")
-            logger.info(f"      Reason: Dominating state has Cost <= {cost:.4f} AND Prog >= {prog:.4f} with better/equal AI and History")
-            if not pruning_stats['printed_dominance'].get(recipient_id, False):
-                logger.print(f"    [DOMINANCE GLOBAL] Recipient {recipient_id}: First global dominance pruning occurred")
-                pruning_stats['printed_dominance'][recipient_id] = True
-            return
+    bucket_key = tuple(key_components)
+    
+    # Bucket Item Structure:
+    # Standard: (cost, prog, path)
+    # With SP Left Branching: (cost, prog, rho, path) -- rho is required for dominance
+    
+    has_rho = (rho is not None)
 
     # --- BUCKET MANAGEMENT ---
     if bucket_key not in buckets:
@@ -122,21 +170,44 @@ def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id
     is_dominated = False
     dominator = None
     
-    for c_old, p_old, _ in bucket_list:
+    for item in bucket_list:
+        # Unpack based on structure
+        if has_rho:
+            c_old, p_old, rho_old, _ = item
+        else:
+            c_old, p_old, _ = item
+            
+        # Basic Dominance: Cost' <= Cost AND Prog' >= Prog
         if c_old <= cost + epsilon and p_old >= prog - epsilon:
+            # Extended Dominance for rho: rho' <= rho (smaller usage is better/more flexible)
+            if has_rho:
+                # component-wise check: all rho_old[i] <= rho[i]
+                # Wait: IF rho_old <= rho, then old state used less/same of the pattern budget.
+                # That means old state is "less restricted" -> BETTER.
+                # So if rho_old <= rho, Old dominates New.
+                # CORRECT.
+                
+                # We need to check if rho_old <= rho
+                 # Optimization: check length first (should be same)
+                if len(rho_old) != len(rho):
+                    continue # Should not happen if consistent
+                
+                rho_better_or_equal = True
+                for r1, r2 in zip(rho_old, rho):
+                    if r1 > r2: # Old used MORE -> Old is worse
+                        rho_better_or_equal = False
+                        break
+                
+                if not rho_better_or_equal:
+                    continue
+            
+            # If we are here, Old dominates New
             is_dominated = True
             dominator = (c_old, p_old)
             break
     
     if is_dominated:
         pruning_stats['dominance'] += 1
-        logger.info(f"    [DOMINANCE BUCKET] Recipient {recipient_id}: State DOMINATED in same bucket")
-        logger.info(f"      Dominated state: Cost={cost:.4f}, Prog={prog:.4f}, Bucket_key={bucket_key}")
-        logger.info(f"      Dominating state: Cost={dominator[0]:.4f}, Prog={dominator[1]:.4f}")
-        logger.info(f"      Reason: Dominating state in same bucket has Cost <= {cost:.4f} AND Prog >= {prog:.4f}")
-        if not pruning_stats['printed_dominance'].get(recipient_id, False):
-            logger.print(f"    [DOMINANCE BUCKET] Recipient {recipient_id}: First bucket dominance pruning occurred")
-            pruning_stats['printed_dominance'][recipient_id] = True
         return 
     
     # --- CLEANUP ---
@@ -144,21 +215,41 @@ def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id
     new_bucket_list = []
     dominated_by_new = 0
     
-    for c_old, p_old, path_old in bucket_list:
+    for item in bucket_list:
+        if has_rho:
+            c_old, p_old, rho_old, path_old = item
+        else:
+            c_old, p_old, path_old = item
+            
+        # Check if New dominates Old
+        # Cost <= Cost' AND Prog >= Prog'
         if cost <= c_old + epsilon and prog >= p_old - epsilon:
+            # Check rho: New must have rho <= rho_old
+            if has_rho:
+                rho_better_or_equal = True
+                for r_new, r_old in zip(rho, rho_old):
+                    if r_new > r_old: # New used MORE -> New is worse
+                        rho_better_or_equal = False
+                        break
+                
+                if not rho_better_or_equal:
+                    # New does NOT dominate Old due to rho
+                    new_bucket_list.append(item)
+                    continue
+            
+            # New dominates Old
             pruning_stats['dominance'] += 1
             dominated_by_new += 1
-            logger.info(f"    [DOMINANCE CLEANUP] Recipient {recipient_id}: New state dominates existing state")
-            logger.info(f"      New (dominating) state: Cost={cost:.4f}, Prog={prog:.4f}")
-            logger.info(f"      Old (dominated) state: Cost={c_old:.4f}, Prog={p_old:.4f}")
-            logger.info(f"      Reason: New state has Cost <= {c_old:.4f} AND Prog >= {p_old:.4f}")
-            continue 
-        new_bucket_list.append((c_old, p_old, path_old))
+            continue
+            
+        new_bucket_list.append(item)
     
-    if dominated_by_new > 0:
-        logger.info(f"    [DOMINANCE CLEANUP] Recipient {recipient_id}: New state removed {dominated_by_new} dominated state(s) from bucket")
-    
-    new_bucket_list.append((cost, prog, path))
+    # Add new state
+    if has_rho:
+        new_bucket_list.append((cost, prog, rho, path))
+    else:
+        new_bucket_list.append((cost, prog, path))
+        
     buckets[bucket_key] = new_bucket_list
 
 
@@ -302,8 +393,6 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
     # Worker Dominance Pre-Elimination
     candidate_workers = compute_candidate_workers(workers, r_k, max_time, pi_dict)
-    if recipient_id == 22:
-        print('candidate_workers', candidate_workers)
     eliminated_workers = [w for w in workers if w not in candidate_workers]
 
     # Print for each Recipient
@@ -312,89 +401,30 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
     else:
         logger.info(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (no dominance)")
     
-    # --- Parse Branch Constraints (MP Branching) ---
-    forbidden_schedules = []
-    use_branch_constraints = False
+    # --- Parse Branch Constraints ---
+    mp_cuts, left_patterns, right_patterns = _parse_branching_constraints(branch_constraints, recipient_id, branching_variant)
 
+    # Setup MP Branching (No-Good Cuts)
+    forbidden_schedules = mp_cuts
+    use_branch_constraints = bool(forbidden_schedules)
     
-    # DEBUG: Print ALL branching constraints first
-    if branch_constraints:
-        logger.print(f"\n  [BRANCHING CONSTRAINTS DEBUG] Recipient {recipient_id}:")
-        logger.print(f"    Type of branch_constraints: {type(branch_constraints)}")
-        logger.print(f"    Length/Size: {len(branch_constraints) if hasattr(branch_constraints, '__len__') else 'N/A'}")
-        
-        if isinstance(branch_constraints, list):
-            for idx, constraint in enumerate(branch_constraints):
-                logger.print(f"    Constraint #{idx + 1}:")
-                logger.print(f"      Type: {type(constraint)}")
-                logger.print(f"      Has 'profile': {hasattr(constraint, 'profile')}")
-                if hasattr(constraint, 'profile'):
-                    logger.print(f"      Profile value: {constraint.profile}")
-                logger.print(f"      Has 'direction': {hasattr(constraint, 'direction')}")
-                if hasattr(constraint, 'direction'):
-                    logger.print(f"      Direction value: {constraint.direction}")
-                logger.print(f"      Has 'original_schedule': {hasattr(constraint, 'original_schedule')}")
+    # Setup SP Branching (Patterns)
+    use_sp_branching = bool(left_patterns) or bool(right_patterns)
 
-
-    if branch_constraints:
-        # Handle list of constraint objects (from Branch-and-Price)
-        if isinstance(branch_constraints, list):
-            for constraint in branch_constraints:
-                # Check if constraint applies to this profile
-                if not hasattr(constraint, 'profile') or constraint.profile != recipient_id:
-                    continue
-                
-                # We only care about LEFT branches for MP branching (no-good cuts)
-                if not hasattr(constraint, 'direction') or constraint.direction != 'left':
-                    continue
-                
-                if branching_variant == 'mp':
-                    # Check for MPVariableBranching with original_schedule
-                    if hasattr(constraint, 'original_schedule') and constraint.original_schedule:
-                        use_branch_constraints = True
-                        forbidden_schedule = {}
-                        # original_schedule keys are (p, j, t, col_id)
-                        for key, val in constraint.original_schedule.items():
-                            if len(key) >= 3 and val > 1e-6:
-                                j, t = key[1], key[2]
-                                forbidden_schedule[(j, t)] = val
-                        forbidden_schedules.append(forbidden_schedule)
-
-        # Handle dictionary (legacy format)
-        elif isinstance(branch_constraints, dict):
-            for constraint_key, constraint_data in branch_constraints.items():
-                if constraint_data.get("profile") != recipient_id:
-                    continue
-                
-                if constraint_data.get("direction") != "left":
-                    continue
-                
-                if branching_variant == 'mp':
-                    if "original_schedule" in constraint_data:
-                        use_branch_constraints = True
-                        forbidden_schedule = {}
-                        for key, val in constraint_data["original_schedule"].items():
-                            # key format might vary in dict, assume compatible
-                            if isinstance(key, tuple) and len(key) >= 3:
-                                j, t = key[1], key[2]
-                                forbidden_schedule[(j, t)] = val
-                        forbidden_schedules.append(forbidden_schedule)
-
-        if use_branch_constraints:
-            logger.print(f"\n  [MP BRANCHING] Recipient {recipient_id}: {len(forbidden_schedules)} no-good cut(s) active")
-            for cut_idx, cut in enumerate(forbidden_schedules):
-                logger.print(f"    No-Good Cut #{cut_idx + 1}:")
-                # Show pattern of forbidden schedule
-                schedule_pattern = sorted(cut.items(), key=lambda x: (x[0][0], x[0][1]))  # Sort by (worker, time)
-                logger.print(f"      Pattern: {len(schedule_pattern)} assignments")
-                # Show first few assignments as preview
-                preview = schedule_pattern[:5]
-                for (worker, time), val in preview:
-                    logger.print(f"        Worker {worker}, Time {time}: {val}")
-                if len(schedule_pattern) > 5:
-                    logger.print(f"        ... and {len(schedule_pattern) - 5} more assignments")
-        else:
-            logger.info(f"  [MP BRANCHING] No active constraints for recipient {recipient_id}")
+    # DEBUG: Print SP Branching Constraints
+    if use_sp_branching:
+        logger.info(f"  [SP BRANCHING] Recipient {recipient_id}: Active Pattern Constraints")
+        if left_patterns:
+            logger.info(f"    Left Patterns (Limit Usage): {len(left_patterns)}")
+        if right_patterns:
+            logger.info(f"    Right Patterns (All-or-Nothing): {len(right_patterns)}")
+            
+    if use_branch_constraints:
+        logger.print(f"\n  [MP BRANCHING] Recipient {recipient_id}: {len(forbidden_schedules)} no-good cut(s) active")
+        # (Optional: Print details skipped for brevity in production, can restore if needed)
+    else:
+        if not use_sp_branching:
+            logger.info(f"  [BRANCHING] No active constraints for recipient {recipient_id}")
 
     for j in candidate_workers:
         effective_min_duration = min(int(s_k), time_until_end)
@@ -408,23 +438,133 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
             initial_zeta = tuple([0] * num_cuts) if use_branch_constraints else None
 
+            # SP Branching Initialization
+            initial_rho = None
+            initial_mu = None
+            compatible_right_indices = set()
+
+            if use_sp_branching:
+                # Initialize vectors
+                if left_patterns:
+                    initial_rho = [0] * len(left_patterns)
+                if right_patterns:
+                    initial_mu = [0] * len(right_patterns) # 0: Exclude, 1: Cover
+                    
+                    # Pre-check compatibility: 
+                    # A pattern is compatible with worker j only if ALL its elements belong to j.
+                    # If incompatible, we can never Cover it, so Mode must be 0 (Exclude).
+                    for idx, pat in enumerate(right_patterns):
+                        is_compatible = True
+                        for (wj, wt) in pat['elements']:
+                            if wj != j:
+                                is_compatible = False
+                                break
+                        if is_compatible:
+                            compatible_right_indices.add(idx)
+
+                # Process state for Start Time (r_k) - Action 1 (Therapist) is assumed at start
+                # Left Patterns (Update Counts)
+                if initial_rho:
+                    for idx, pat in enumerate(left_patterns):
+                        if (j, r_k) in pat['elements']:
+                            initial_rho[idx] += 1
+                            # Immediate Pruning Check (Unlikely at start but possible if limit=0)
+                            if initial_rho[idx] > pat['limit']:
+                                # Start state is invalid!
+                                initial_rho = None # Signal to skip
+                                break
+                    if initial_rho:
+                        initial_rho = tuple(initial_rho)
+
+                # Right Patterns (Update Modes)
+                # Only iterate compatible patterns (others stay 0)
+                if initial_mu and (initial_rho is not None or not initial_rho):
+                    for idx in compatible_right_indices:
+                        pat = right_patterns[idx]
+                        first_elt = pat['first_element']
+                        if first_elt == (j, r_k):
+                            initial_mu[idx] = 1 # Start Covering
+                    initial_mu = tuple(initial_mu)
+
             # Show zeta initialization for recipients with active branching constraints
-            # Display once per recipient (when processing first candidate worker at start_tau)
             if use_branch_constraints and tau == start_tau:
-                # Check if this is the FIRST candidate worker (not necessarily worker ID 1!)
                 first_candidate = candidate_workers[0] if candidate_workers else None
                 if j == first_candidate:
                     logger.print(f"\n  [ZETA VECTOR] Recipient {recipient_id} (BRANCHING PROFILE): Initialized with {num_cuts} elements")
-                    logger.print(f"    Initial ζ = {initial_zeta} (all zeros = no deviations yet)")
-                    logger.print(f"    Terminal condition: All ζ elements must be 1 (deviated from all cuts)")
-                    logger.print(f"    This recipient has active MP branching constraints!")
-                    logger.print(f"    First candidate worker: {first_candidate}, All candidates: {candidate_workers}")
-            
+                    logger.print(f"    Initial ζ = {initial_zeta}")
+
             current_states = {}
-            # Initialize with start state
-            initial_history = (1,)  # First action is always 1 (Therapist)
-            add_state_to_buckets(current_states, start_cost, 1.0, 0, initial_history, [1], 
-                               recipient_id, pruning_stats, dominance_mode, initial_zeta, epsilon)
+            
+            # Only add start state if valid (rho check passed)
+            valid_start = True
+            if use_sp_branching and left_patterns and initial_rho is None:
+                valid_start = False
+            
+            if valid_start:
+                # Initialize with start state
+                initial_history = (1,)  # First action is always 1 (Therapist)
+                add_state_to_buckets(current_states, start_cost, 1.0, 0, initial_history, [1], 
+                                   recipient_id, pruning_stats, dominance_mode, 
+                                   initial_zeta, initial_rho, initial_mu, epsilon)
+
+            # Helper for SP State Update
+            def get_next_sp_state(rho, mu, is_therapist, time_t):
+                if not use_sp_branching:
+                    return rho, mu, False
+
+                next_rho = list(rho) if rho else None
+                next_mu = list(mu) if mu else None
+                
+                # 1. Update Left Patterns (Rho)
+                if next_rho:
+                    for idx, pat in enumerate(left_patterns):
+                        # Ensure limit check is robust
+                        if is_therapist and (j, time_t) in pat['elements']:
+                            next_rho[idx] += 1
+                            print(f"      [SP DEBUG] Worker {j} t={time_t}: Left Pattern #{idx} Hit! Count {next_rho[idx]}/{pat['limit']}")
+                            if next_rho[idx] > pat['limit']:
+                                print(f"      [SP DEBUG] Worker {j} t={time_t}: PRUNED (Left Pattern #{idx} limit exceeded)")
+                                return None, None, True # Pruned (Limit Reached)
+                
+                # 2. Update Right Patterns (Mu)
+                if next_mu:
+                    for idx, pat in enumerate(right_patterns):
+                        # Skip if not compatible (always 0)
+                        if idx not in compatible_right_indices:
+                            continue
+                            
+                        current_mode = mu[idx]
+                        t_start = pat['first_element'][1] if pat['first_element'] else 9999
+                        
+                        in_pattern = is_therapist and ((j, time_t) in pat['elements_set'])
+                        
+                        if time_t < t_start:
+                            continue # Wait for start
+                            
+                        if time_t == t_start:
+                            # Start of pattern window
+                            if in_pattern:
+                                next_mu[idx] = 1 # Enter Cover Mode
+                                print(f"      [SP DEBUG] Worker {j} t={time_t}: Right Pattern #{idx} ENTER COVER MODE")
+                            else:
+                                next_mu[idx] = 0 # Enter Exclude Mode
+                                print(f"      [SP DEBUG] Worker {j} t={time_t}: Right Pattern #{idx} ENTER EXCLUDE MODE")
+                                
+                        elif time_t > t_start:
+                            if current_mode == 0: # Exclude Mode
+                                if in_pattern:
+                                    print(f"      [SP DEBUG] Worker {j} t={time_t}: PRUNED (Right Pattern #{idx} forbidden pick in Exclude Mode)")
+                                    return None, None, True # Pruned (Forbidden pick)
+                            elif current_mode == 1: # Cover Mode
+                                # If pattern has requirement at this time, we MUST pick it
+                                elt_at_t = (j, time_t) in pat['elements_set']
+                                if elt_at_t and not in_pattern:
+                                    print(f"      [SP DEBUG] Worker {j} t={time_t}: PRUNED (Right Pattern #{idx} broken chain in Cover Mode)")
+                                    return None, None, True # Pruned (Broken chain)
+                
+                return (tuple(next_rho) if next_rho else None, 
+                        tuple(next_mu) if next_mu else None, 
+                        False)
 
             # DP Loop until just before Tau
             pruned_count_total = 0
@@ -436,14 +576,29 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                 # Iterate over all buckets
                 for bucket_key, bucket_list in current_states.items():
                     # Extract components from bucket key
+                    # Structure depends on what constraints are active
+                    # Key structure: (ai, hist, [zeta], [mu])
+                    key_idx = 0
+                    ai_count = bucket_key[key_idx]; key_idx += 1
+                    hist = bucket_key[key_idx]; key_idx += 1
+                    
+                    zeta = None
                     if use_branch_constraints:
-                        ai_count, hist, zeta = bucket_key
-                    else:
-                        ai_count, hist = bucket_key
-                        zeta = None
+                        zeta = bucket_key[key_idx]; key_idx += 1
+                        
+                    mu = None
+                    if use_sp_branching and right_patterns:
+                        mu = bucket_key[key_idx]; key_idx += 1
                     
                     # Iterate over all states in the bucket
-                    for cost, prog, path in bucket_list:
+                    for item in bucket_list:
+                        # Extract components from item
+                        # Structure: (cost, prog, [rho], path)
+                        if use_sp_branching and left_patterns:
+                             cost, prog, rho, path = item
+                        else:
+                             cost, prog, path = item
+                             rho = None
 
                         # BOUND PRUNING: Check if state is promising
                         if use_bound_pruning:
@@ -461,62 +616,67 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 if prog + remaining_steps * 1.0 < s_k - epsilon:
                                     continue
 
+                        # --- TRANSITIONS ---
+                        
+
+                        # Helper for SP State Update (Defined outside loop)
+                        # ...
+
+
+
                         # A: Therapist
                         if check_strict_feasibility(hist, 1, ms, min_ms):
-                            cost_ther = cost - pi_dict.get((j, t), 0)
-                            prog_ther = prog + 1.0
-                            new_hist_ther = (hist + (1,))
-                            if len(new_hist_ther) > ms - 1: 
-                                new_hist_ther = new_hist_ther[-(ms - 1):]
+                            new_rho, new_mu, pruned = get_next_sp_state(rho, mu, True, t)
                             
-                            # Update deviation vector ζ_t if branch constraints are active
-                            new_zeta_ther = zeta
-                            if use_branch_constraints:
-                                new_zeta_ther = list(zeta)
-                                for cut_idx, cut in enumerate(forbidden_schedules):
-                                    if new_zeta_ther[cut_idx] == 0:  # Not yet deviated
-                                        # Default to 0 if not present in sparse schedule
-                                        forbidden_val = cut.get((j, t), 0)
-                                        if forbidden_val != 1:
-                                            # DEVIATION DETECTED: 0 → 1 transition (if forbidden=0) or mismatch
-                                            new_zeta_ther[cut_idx] = 1
-                                            # logger.print(f"    [ZETA TRANSITION] Recipient {recipient_id}, Worker {j}, Time {t}:")
-                                            # logger.print(f"      Cut #{cut_idx + 1}: ζ[{cut_idx}]: 0 → 1 (Therapist action deviates from forbidden value {forbidden_val})")
-                                            # logger.print(f"      New ζ = {tuple(new_zeta_ther)}")
-                                new_zeta_ther = tuple(new_zeta_ther)
+                            if not pruned:
+                                cost_ther = cost - pi_dict.get((j, t), 0)
+                                prog_ther = prog + 1.0
+                                new_hist_ther = (hist + (1,))
+                                if len(new_hist_ther) > ms - 1: 
+                                    new_hist_ther = new_hist_ther[-(ms - 1):]
+                                
+                                # Update deviation vector ζ_t if branch constraints are active
+                                new_zeta_ther = zeta
+                                if use_branch_constraints:
+                                    new_zeta_list = list(zeta)
+                                    for cut_idx, cut in enumerate(forbidden_schedules):
+                                        if new_zeta_list[cut_idx] == 0:  # Not yet deviated
+                                            forbidden_val = cut.get((j, t), 0)
+                                            if forbidden_val != 1:
+                                                new_zeta_list[cut_idx] = 1
+                                    new_zeta_ther = tuple(new_zeta_list)
 
-                            add_state_to_buckets(next_states, cost_ther, prog_ther, ai_count, new_hist_ther, 
-                                               path + [1], recipient_id, pruning_stats, dominance_mode, 
-                                               new_zeta_ther, epsilon)
+                                add_state_to_buckets(next_states, cost_ther, prog_ther, ai_count, new_hist_ther, 
+                                                   path + [1], recipient_id, pruning_stats, dominance_mode, 
+                                                   new_zeta_ther, new_rho, new_mu, epsilon)
 
                         # B: AI
                         if check_strict_feasibility(hist, 0, ms, min_ms):
-                            cost_ai = cost
-                            efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
-                            prog_ai = prog + efficiency
-                            ai_count_new = ai_count + 1
-                            new_hist_ai = (hist + (0,))
-                            if len(new_hist_ai) > ms - 1: 
-                                new_hist_ai = new_hist_ai[-(ms - 1):]
+                            new_rho, new_mu, pruned = get_next_sp_state(rho, mu, False, t)
                             
-                            # Update deviation vector ζ_t if branch constraints are active
-                            new_zeta_ai = zeta
-                            if use_branch_constraints:
-                                new_zeta_ai = list(zeta)
-                                for cut_idx, cut in enumerate(forbidden_schedules):
-                                    if new_zeta_ai[cut_idx] == 0:  # Not yet deviated
-                                        forbidden_val = cut.get((j, t), None)
-                                        if forbidden_val is not None and forbidden_val != 0:
-                                            # DEVIATION DETECTED: 0 → 1 transition
-                                            new_zeta_ai[cut_idx] = 1
-                                            logger.print(f"    [ZETA TRANSITION] Recipient {recipient_id}, Worker {j}, Time {t}:")
-                                            logger.print(f"      Cut #{cut_idx + 1}: ζ[{cut_idx}]: 0 → 1 (AI action deviates from forbidden value {forbidden_val})")
-                                            logger.print(f"      New ζ = {tuple(new_zeta_ai)}")
-                                new_zeta_ai = tuple(new_zeta_ai)
+                            if not pruned:
+                                cost_ai = cost
+                                efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                                prog_ai = prog + efficiency
+                                ai_count_new = ai_count + 1
+                                new_hist_ai = (hist + (0,))
+                                if len(new_hist_ai) > ms - 1: 
+                                    new_hist_ai = new_hist_ai[-(ms - 1):]
+                                
+                                # Update deviation vector ζ_t if branch constraints are active
+                                new_zeta_ai = zeta
+                                if use_branch_constraints:
+                                    new_zeta_list = list(zeta)
+                                    for cut_idx, cut in enumerate(forbidden_schedules):
+                                        if new_zeta_list[cut_idx] == 0:  # Not yet deviated
+                                            forbidden_val = cut.get((j, t), None)
+                                            if forbidden_val is not None and forbidden_val != 0:
+                                                new_zeta_list[cut_idx] = 1
+                                    new_zeta_ai = tuple(new_zeta_list)
 
-                            add_state_to_buckets(next_states, cost_ai, prog_ai, ai_count_new, new_hist_ai, 
-                                               path + [0], recipient_id, pruning_stats, dominance_mode, 
-                                               new_zeta_ai, epsilon)
+                                add_state_to_buckets(next_states, cost_ai, prog_ai, ai_count_new, new_hist_ai, 
+                                                   path + [0], recipient_id, pruning_stats, dominance_mode, 
+                                                   new_zeta_ai, new_rho, new_mu, epsilon)
 
                 current_states = next_states
                 if not current_states: 
@@ -525,13 +685,25 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
             # Final Step (Transition to Tau)
             for bucket_key, bucket_list in current_states.items():
                 # Extract components from bucket key
+                # Structure: (ai, hist, [zeta], [mu])
+                key_idx = 0
+                ai_count = bucket_key[key_idx]; key_idx += 1
+                hist = bucket_key[key_idx]; key_idx += 1
+                
+                zeta = None
                 if use_branch_constraints:
-                    ai_count, hist, zeta = bucket_key
-                else:
-                    ai_count, hist = bucket_key
-                    zeta = None
+                    zeta = bucket_key[key_idx]; key_idx += 1
                     
-                for cost, prog, path in bucket_list:
+                mu = None
+                if use_sp_branching and right_patterns:
+                    mu = bucket_key[key_idx]; key_idx += 1
+                    
+                for item in bucket_list:
+                    if use_sp_branching and left_patterns:
+                         cost, prog, rho, path = item
+                    else:
+                         cost, prog, path = item
+                         rho = None
                     
                     # Collect possible end steps for this state
                     possible_moves = []
@@ -546,6 +718,11 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                             possible_moves.append(0)
 
                     for move in possible_moves:
+                        # 1. Update SP Branching State (Check Pruning)
+                        final_rho, final_mu, sp_pruned = get_next_sp_state(rho, mu, move == 1, tau)
+                        if sp_pruned:
+                            continue
+
                         # Calculate values based on Move type
                         if move == 1:
                             final_cost_accum = cost - pi_dict.get((j, tau), 0)
@@ -560,26 +737,19 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                         final_path = path + [move]
                         condition_met = (final_prog >= s_k - epsilon)
                         
-                        # Update final zeta for this move
+                        # 2. Update MP Branching State (Zeta)
                         final_zeta = zeta
                         if use_branch_constraints:
-                            final_zeta = list(zeta)
+                            final_zeta_list = list(zeta)
                             for cut_idx, cut in enumerate(forbidden_schedules):
-                                if final_zeta[cut_idx] == 0:  # Not yet deviated
+                                if final_zeta_list[cut_idx] == 0:  # Not yet deviated
                                     forbidden_val = cut.get((j, tau), None)
                                     if forbidden_val is not None and forbidden_val != move:
-                                        final_zeta[cut_idx] = 1  # Deviated!
-                            final_zeta = tuple(final_zeta)
+                                        final_zeta_list[cut_idx] = 1  # Deviated!
+                            final_zeta = tuple(final_zeta_list)
                         
-                        # TERMINAL FEASIBILITY CHECK: All deviation vector entries must equal 1
-                        if use_branch_constraints:
+                            # TERMINAL FEASIBILITY CHECK: All deviation vector entries must equal 1
                             if not all(z == 1 for z in final_zeta):
-                                # This path hasn't deviated from all forbidden schedules -> REJECT
-                                missing_deviations = [i for i, z in enumerate(final_zeta) if z == 0]
-                                logger.print(f"    [NO-GOOD CUT ACTIVE] Recipient {recipient_id}, Worker {j}:")
-                                logger.print(f"      Column REJECTED: ζ = {final_zeta}")
-                                logger.print(f"      Missing deviations from cuts: {[f'#{i+1}' for i in missing_deviations]}")
-                                logger.print(f"      → Column matches forbidden schedule(s), pruned by no-good cut")
                                 continue
 
                         is_focus_patient = (obj_mode > 0.5)
@@ -594,6 +764,15 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                         if is_valid_end:
                             duration = tau - r_k + 1
                             reduced_cost = (obj_mode * duration) + final_cost_accum - gamma_k
+                            
+                            # 3. Apply Duals for SP Right Branching (Rewards for covering patterns)
+                            if final_mu:
+                                for idx, mode in enumerate(final_mu):
+                                    if mode == 1: # Cover Mode
+                                        pat = right_patterns[idx]
+                                        reduced_cost -= pat['dual']
+                                        if pat['dual'] != 0:
+                                            print(f"      [SP DEBUG] Worker {j} END: Applied Dual {pat['dual']} for Right Pattern #{idx} (Covered)")
 
                             col_candidate = {
                                 'k': recipient_id,

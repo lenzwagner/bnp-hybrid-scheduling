@@ -28,7 +28,7 @@ def main():
     # ===========================
 
     # Random seed
-    seed = 12
+    seed = 13
 
     # Learning parameters
     app_data = {
@@ -66,7 +66,7 @@ def main():
 
     # Branch-and-Price settings
     use_branch_and_price = True  # Set to False for standard CG
-    branching_strategy = 'mp'  # 'mp' for MP variable branching, 'sp' for SP variable branching
+    branching_strategy = 'sp'  # 'mp' for MP variable branching, 'sp' for SP variable branching
     search_strategy = 'bfs' # 'dfs' for Depth-First, 'bfs' for Best-Fit-Search
     
     # Parallelization settings
