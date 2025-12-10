@@ -262,7 +262,7 @@ def main():
         else:
             print(f"  - Incumbent (UB): None")
         print(f"  - Integral: {results['is_integral']}")
-        print(f"  - CG iterations (root): {results['cg_iterations']}")
+        print(f"  - Total CG iterations (all nodes): {results['cg_iterations']}")
         print(f"  - IP solves: {results['ip_solves']}")
 
         # Convergence and optimal solution status
