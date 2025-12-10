@@ -523,7 +523,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                             next_rho[idx] += 1
                             print(f"      [SP DEBUG] Worker {j} t={time_t}: Left Pattern #{idx} Hit! Count {next_rho[idx]}/{pat['limit']}")
                             if next_rho[idx] > pat['limit']:
-                                print(f"      [SP DEBUG] Worker {j} t={time_t}: PRUNED (Left Pattern #{idx} limit exceeded)")
+                                print(f"      [SP DEBUG] Worker {j} t={time_t}: PRUNED (Left Pattern #{idx} limit exceeded: Count {next_rho[idx]} > Limit {pat['limit']}, Pattern Elements: {sorted(list(pat['elements']))})")
                                 return None, None, True # Pruned (Limit Reached)
                 
                 # 2. Update Right Patterns (Mu)
@@ -545,10 +545,11 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                             # Start of pattern window
                             if in_pattern:
                                 next_mu[idx] = 1 # Enter Cover Mode
-                                print(f"      [SP DEBUG] Worker {j} t={time_t}: Right Pattern #{idx} ENTER COVER MODE")
+                                remaining_elements = sorted([e for e in pat['elements'] if e[1] > time_t], key=lambda x: x[1])
+                                print(f"      [SP DEBUG] Worker {j} t={time_t}: Right Pattern #{idx} ENTER COVER MODE (Remaining: {len(remaining_elements)} elements: {remaining_elements})")
                             else:
                                 next_mu[idx] = 0 # Enter Exclude Mode
-                                print(f"      [SP DEBUG] Worker {j} t={time_t}: Right Pattern #{idx} ENTER EXCLUDE MODE")
+                                print(f"      [SP DEBUG] Worker {j} t={time_t}: Right Pattern #{idx} ENTER EXCLUDE MODE (Reason: Pattern starts here, but current action is NOT in_pattern (is_therapist={is_therapist}, in_pattern={in_pattern}))")
                                 
                         elif time_t > t_start:
                             if current_mode == 0: # Exclude Mode
@@ -770,9 +771,18 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 for idx, mode in enumerate(final_mu):
                                     if mode == 1: # Cover Mode
                                         pat = right_patterns[idx]
-                                        reduced_cost -= pat['dual']
-                                        if pat['dual'] != 0:
-                                            print(f"      [SP DEBUG] Worker {j} END: Applied Dual {pat['dual']} for Right Pattern #{idx} (Covered)")
+                                        
+                                        # Check if pattern is FULLY covered by this schedule ending at tau
+                                        # If pattern has any element with t > tau, it is NOT fully covered.
+                                        remaining_elements = [e for e in pat['elements'] if e[1] > tau]
+                                        
+                                        if not remaining_elements:
+                                            reduced_cost -= pat['dual']
+                                            if pat['dual'] != 0:
+                                                print(f"      [SP DEBUG] Worker {j} END: Applied Dual {pat['dual']} for Right Pattern #{idx} (Covered)")
+                                        else:
+                                            # Print unconditionally for debugging purposes
+                                            print(f"      [SP DEBUG] Worker {j} END t={tau}: Right Pattern #{idx} Incomplete! (Remaining: {remaining_elements}) - Dual NOT applied (Dual val: {pat['dual']})")
 
                             col_candidate = {
                                 'k': recipient_id,

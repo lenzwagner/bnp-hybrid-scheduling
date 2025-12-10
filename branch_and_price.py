@@ -902,6 +902,14 @@ class BranchAndPrice:
                 self.logger.info(f"  LP Bound: {node.lp_bound:.6f}")
                 self.logger.info(f"  Depth: {node.depth}, Path: '{node.path}'")
 
+            # Check if Node 3 and 4 are solved (meaning we are past the second branching)
+            # and we are about to process one of them or a subsequent node.
+            if 3 in self.nodes and 4 in self.nodes:
+                if self.nodes[3].status == 'solved' and self.nodes[4].status == 'solved':
+                     print(f"DEBUG EXIT: Node 3 and 4 solved. Next selected is Node {current_node_id}. Exiting.")
+                     import sys
+                     sys.exit()
+
             # Log the processing order for all strategies
             self.stats['node_processing_order'].append(current_node_id)
 
@@ -979,13 +987,6 @@ class BranchAndPrice:
                 if current_node.branching_constraints:
                     print(f"\n   Active Branching Constraints ({len(current_node.branching_constraints)}):")
                     for idx, c in enumerate(current_node.branching_constraints, 1):
-                        # Attempt to get dual
-                        dual_str = ""
-                        try:
-                            if c.master_constraint:
-                                dual_str = f" [Dual: {c.master_constraint.Pi:.4f}]"
-                        except:
-                            dual_str = " [Dual: N/A]"
 
                         # Manual str representation for clear output
                         if "SPVariableBranching" in str(type(c)):
@@ -1002,7 +1003,7 @@ class BranchAndPrice:
                             c_type = "Unknown"
                             details = str(c)
                         
-                        print(f"   {idx}. [{c_type}] {details}{dual_str}")
+                        print(f"   {idx}. [{c_type}] {details}")
                 else:
                     print("\n   Active Branching Constraints: None (Root Node)")
                 print("")
@@ -1361,7 +1362,7 @@ class BranchAndPrice:
         self.logger.info(f"  Max pattern size: {max_pattern_size}")
 
         # Loop over increasing pattern sizes
-        for pattern_size in range(1, max_pattern_size + 1):
+        for pattern_size in range(2, max_pattern_size + 1):
             self.logger.info(f"\n  Searching patterns of size {pattern_size}...")
 
             pattern, beta_val, floor_val, ceil_val, profile = self._search_patterns_of_size(
@@ -1432,6 +1433,7 @@ class BranchAndPrice:
                 
                 beta_val = 0.0
                 contrib_count = 0
+                contributing_lambdas = []
                 
                 for (k2, a), lambda_val in lambdas.items():
                     if k2 != profile_k or lambda_val < 1e-6:
@@ -1458,6 +1460,9 @@ class BranchAndPrice:
                     if covers_all:
                         beta_val += lambda_val
                         contrib_count += 1
+                        # Get original ID if possible, otherwise use 'a'
+                        col_id = col_data.get('original_id', f"a={a}")
+                        contributing_lambdas.append(f"Lambda[{k2},{col_id}]={lambda_val:.4f}")
                 
                 # Check fractionality
                 floor_val = int(beta_val)
@@ -1469,14 +1474,14 @@ class BranchAndPrice:
                 
                 if fractionality > 1e-5:  # Fractional
                     # Log candidate
-                    print(f"      Candidate: P={profile_k}, Pattern={pattern}, Beta={beta_val:.4f}, Count={contrib_count}, Frac={fractionality:.4f}")
+                   # print(f"      Candidate: P={profile_k}, Pattern={pattern}, Beta={beta_val:.4f}, Count={contrib_count}, Frac={fractionality:.4f}")
 
                     is_better = False
                     reason = ""
                     
                     if fractionality > max_fractionality + 1e-10:
                         is_better = True
-                        reason = f"Better fractionality ({fractionality:.6f} > {max_fractionality:.6f})"
+                        reason = f"Better fractionality ({fractionality:.6f} > {max_fractionality:.6f}) - Lambdas: {contributing_lambdas}"
                     elif abs(fractionality - max_fractionality) < 1e-10:
                         # Tie: prefer smaller profile, then lexicographically smaller pattern
                         if best_candidate is None:
@@ -2072,17 +2077,7 @@ class BranchAndPrice:
                 if cg_iteration == 1 and node.branching_constraints:
                     print(f"\n   Active Branching Constraints ({len(node.branching_constraints)}):")
                     for idx, c in enumerate(node.branching_constraints, 1):
-                        # Attempt to get dual
-                        dual_str = ""
-                        try:
-                            # Re-fetch based on key match if possible, or try direct access
-                            dual_val = branching_duals.get(c.get_dual_key(), None)
-                            if dual_val is not None:
-                                dual_str = f" [Dual: {dual_val:.4f}]"
-                            elif c.master_constraint:
-                                dual_str = f" [Dual: {c.master_constraint.Pi:.4f}]"
-                        except:
-                            dual_str = " [Dual: N/A]"
+
 
                         # Manual str representation for clear output
                         if "SPVariableBranching" in str(type(c)):
@@ -2099,7 +2094,7 @@ class BranchAndPrice:
                             c_type = "Unknown"
                             details = str(c)
                         
-                        print(f"   {idx}. [{c_type}] {details}{dual_str}")
+                        print(f"   {idx}. [{c_type}] {details}")
                 print("")
 
             # 3. Solve subproblems
