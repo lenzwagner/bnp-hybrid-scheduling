@@ -979,13 +979,6 @@ class BranchAndPrice:
                 if current_node.branching_constraints:
                     print(f"\n   Active Branching Constraints ({len(current_node.branching_constraints)}):")
                     for idx, c in enumerate(current_node.branching_constraints, 1):
-                        # Attempt to get dual
-                        dual_str = ""
-                        try:
-                            if c.master_constraint:
-                                dual_str = f" [Dual: {c.master_constraint.Pi:.4f}]"
-                        except:
-                            dual_str = " [Dual: N/A]"
 
                         # Manual str representation for clear output
                         if "SPVariableBranching" in str(type(c)):
@@ -1002,7 +995,7 @@ class BranchAndPrice:
                             c_type = "Unknown"
                             details = str(c)
                         
-                        print(f"   {idx}. [{c_type}] {details}{dual_str}")
+                        print(f"   {idx}. [{c_type}] {details}")
                 else:
                     print("\n   Active Branching Constraints: None (Root Node)")
                 print("")
@@ -2072,17 +2065,6 @@ class BranchAndPrice:
                 if cg_iteration == 1 and node.branching_constraints:
                     print(f"\n   Active Branching Constraints ({len(node.branching_constraints)}):")
                     for idx, c in enumerate(node.branching_constraints, 1):
-                        # Attempt to get dual
-                        dual_str = ""
-                        try:
-                            # Re-fetch based on key match if possible, or try direct access
-                            dual_val = branching_duals.get(c.get_dual_key(), None)
-                            if dual_val is not None:
-                                dual_str = f" [Dual: {dual_val:.4f}]"
-                            elif c.master_constraint:
-                                dual_str = f" [Dual: {c.master_constraint.Pi:.4f}]"
-                        except:
-                            dual_str = " [Dual: N/A]"
 
                         # Manual str representation for clear output
                         if "SPVariableBranching" in str(type(c)):
@@ -2099,7 +2081,7 @@ class BranchAndPrice:
                             c_type = "Unknown"
                             details = str(c)
                         
-                        print(f"   {idx}. [{c_type}] {details}{dual_str}")
+                        print(f"   {idx}. [{c_type}] {details}")
                 print("")
 
             # 3. Solve subproblems
