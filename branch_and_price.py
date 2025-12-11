@@ -2133,6 +2133,9 @@ class BranchAndPrice:
             new_columns_found = False
             columns_added_this_iter = 0
 
+            # Start timing SPs
+            sp_start_time = time.time()
+
             # ========================================================================
             # PARALLEL PRICING (only with labeling algorithm)
             # ========================================================================
@@ -2405,6 +2408,12 @@ class BranchAndPrice:
                                 'pi_td': duals_pi.copy()
                             }
 
+
+
+            # End timing SPs
+            sp_duration = time.time() - sp_start_time
+            print(f"    [Performance] All Subproblems solved in {sp_duration:.4f}s")
+            
             self.logger.info(f"    [CG Iter {cg_iteration}] Added {columns_added_this_iter} new columns")
 
             # Check convergence
@@ -2438,6 +2447,8 @@ class BranchAndPrice:
             lambda_list_cg = {}
 
         is_integral, lp_obj, most_frac_info = master.check_fractionality()
+
+        print('fLam', lambda_list_cg)
 
         if is_integral:
             self.logger.info(f"\n✅ INTEGRAL SOLUTION FOUND AT NODE {node.node_id}!")

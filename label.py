@@ -391,6 +391,16 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
     time_until_end = max_time - r_k + 1
 
+    # --- TIMING INSTRUMENTATION ---
+    timers = {
+        'init': 0.0,
+        'state_expansion': 0.0,
+        'final_step': 0.0,
+        'total': 0.0
+    }
+    t_start_total = time.time()
+    t_init_start = time.time()
+
     # Worker Dominance Pre-Elimination
     candidate_workers = compute_candidate_workers(workers, r_k, max_time, pi_dict)
     eliminated_workers = [w for w in workers if w not in candidate_workers]
@@ -425,6 +435,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
     else:
         if not use_sp_branching:
             logger.info(f"  [BRANCHING] No active constraints for recipient {recipient_id}")
+
+    timers['init'] += time.time() - t_init_start
 
     for j in candidate_workers:
         effective_min_duration = min(int(s_k), time_until_end)
@@ -570,6 +582,10 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
             # DP Loop until just before Tau
             pruned_count_total = 0
 
+            # DP Loop until just before Tau
+            pruned_count_total = 0
+
+            t_dp_start = time.time()
             for t in range(r_k + 1, tau):
                 next_states = {}
                 pruned_count_this_period = 0
@@ -682,8 +698,11 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                 current_states = next_states
                 if not current_states: 
                     break
+            timers['state_expansion'] += time.time() - t_dp_start
 
             # Final Step (Transition to Tau)
+            # Final Step (Transition to Tau)
+            t_final_start = time.time()
             for bucket_key, bucket_list in current_states.items():
                 # Extract components from bucket key
                 # Structure: (ai, hist, [zeta], [mu])
@@ -798,10 +817,17 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
                             if reduced_cost < -epsilon:
                                 best_columns.append(col_candidate)
+            timers['final_step'] += time.time() - t_final_start
             
             # Debug Output: Bound Pruning Statistics
             if pruned_count_total > 0:
                 logger.print(f"    Worker {j}, tau={tau}: Pruned {pruned_count_total} states by Lower Bound")
+
+    timers['total'] = time.time() - t_start_total
+    
+    # Print timing summary
+    if timers['total'] > 0.001:  # Only print if measurable time was spent
+        print(f"  [Timing] Recipient {recipient_id}: Init: {timers['init']:.4f}s | Expansion: {timers['state_expansion']:.4f}s | Final: {timers['final_step']:.4f}s | Total: {timers['total']:.4f}s")
 
     # Sort columns by reduced cost (ascending, most negative first)
     best_columns.sort(key=lambda x: x['reduced_cost'])
@@ -836,10 +862,10 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
             logger.print(f"\n  Forbidden Schedule #{cut_idx+1}:")
             # Group by worker
             workers_in_cut = {}
-            for (worker, time), val in sorted(cut.items()):
+            for (worker, t_val), val in sorted(cut.items()):
                 if worker not in workers_in_cut:
                     workers_in_cut[worker] = []
-                workers_in_cut[worker].append((time, val))
+                workers_in_cut[worker].append((t_val, val))
             
             for worker in sorted(workers_in_cut.keys()):
                 times_vals = workers_in_cut[worker]
