@@ -2448,7 +2448,9 @@ class BranchAndPrice:
 
         is_integral, lp_obj, most_frac_info = master.check_fractionality()
 
-        print('fLam', lambda_list_cg)
+        # Filter lambda values > 0 for n=79
+        filtered_lambda = {key: val for key, val in lambda_list_cg.items() if key[0] == 30 and val > 0}
+        print('Frac. Lambda (n=79, λ>0):', filtered_lambda)
 
         if is_integral:
             self.logger.info(f"\n✅ INTEGRAL SOLUTION FOUND AT NODE {node.node_id}!")
