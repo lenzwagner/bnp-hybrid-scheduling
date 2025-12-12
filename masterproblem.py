@@ -69,6 +69,7 @@ class MasterProblem_d:
         self.Model.setObjective(gu.quicksum(self.lmbda[p, a] for p in self.P_Focus for a in self.A), sense=gu.GRB.MINIMIZE)
 
     def getDuals(self):
+        print(f'Duals', {(t, d): self.cons_p_max[t, d].Pi for t in self.T for d in self.D}, {p: self.cons_lmbda[p].Pi for p in self.P_Join}, sep="\n")
         return {(t, d): self.cons_p_max[t, d].Pi for t in self.T for d in self.D}, {p: self.cons_lmbda[p].Pi for p in self.P_Join}
 
     def addSchedule(self, schedule):

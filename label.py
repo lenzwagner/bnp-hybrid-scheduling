@@ -438,6 +438,181 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
     timers['init'] += time.time() - t_init_start
 
+    # --- OPTIMIZED FAST PATH (Inner Function) ---
+    def run_fast_path():
+        """
+        Optimized DP loop that skips all SP Branching overhead (rho, mu checks).
+        Used when use_sp_branching is False.
+        """
+        for j in candidate_workers:
+            effective_min_duration = min(int(s_k), time_until_end)
+            start_tau = r_k + effective_min_duration - 1
+
+            for tau in range(start_tau, max_time + 1):
+                is_timeout_scenario = (tau == max_time)
+                start_cost = -pi_dict.get((j, r_k), 0)
+                num_cuts = len(forbidden_schedules)
+                initial_zeta = tuple([0] * num_cuts) if use_branch_constraints else None
+
+                current_states = {}
+                initial_history = (1,)
+                # Optimization: Explicitly pass None for rho/mu to allow add_state_to_buckets to skip them
+                add_state_to_buckets(current_states, start_cost, 1.0, 0, initial_history, [1], 
+                                     recipient_id, pruning_stats, dominance_mode, 
+                                     initial_zeta, None, None, epsilon)
+                
+                # Show zeta initialization
+                if use_branch_constraints and tau == start_tau:
+                    first_candidate = candidate_workers[0] if candidate_workers else None
+                    if j == first_candidate:
+                         logger.print(f"\n  [ZETA VECTOR] Recipient {recipient_id} (BRANCHING PROFILE): Initialized with {num_cuts} elements")
+                         logger.print(f"    Initial ζ = {initial_zeta}")
+
+                t_dp_start = time.time()
+                for t in range(r_k + 1, tau):
+                    next_states = {}
+                    
+                    # Iterate over all buckets
+                    for bucket_key, bucket_list in current_states.items():
+                        # Extract components from bucket key (Simple unpacking)
+                        if use_branch_constraints:
+                            ai_count, hist, zeta = bucket_key
+                        else:
+                            ai_count, hist = bucket_key
+                            zeta = None
+                        
+                        for item in bucket_list:
+                            # Extract components from item (No rho)
+                            cost, prog, path = item
+
+                            if use_bound_pruning:
+                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+                                if lb >= 0:
+                                    pruning_stats['lb'] += 1
+                                    continue
+
+                            remaining_steps = tau - t + 1
+                            if not is_timeout_scenario:
+                                if obj_mode > 0.5:
+                                    if prog + remaining_steps * 1.0 < s_k - epsilon:
+                                        continue
+
+                            # A: Therapist
+                            if check_strict_feasibility(hist, 1, ms, min_ms):
+                                cost_ther = cost - pi_dict.get((j, t), 0)
+                                prog_ther = prog + 1.0
+                                new_hist_ther = (hist + (1,))
+                                if len(new_hist_ther) > ms - 1: new_hist_ther = new_hist_ther[-(ms - 1):]
+                                
+                                new_zeta_ther = zeta
+                                if use_branch_constraints:
+                                    new_zeta_list = list(zeta)
+                                    for cut_idx, cut in enumerate(forbidden_schedules):
+                                        if new_zeta_list[cut_idx] == 0:
+                                            forbidden_val = cut.get((j, t), 0)
+                                            if forbidden_val != 1:
+                                                new_zeta_list[cut_idx] = 1
+                                    new_zeta_ther = tuple(new_zeta_list)
+
+                                add_state_to_buckets(next_states, cost_ther, prog_ther, ai_count, new_hist_ther, 
+                                                   path + [1], recipient_id, pruning_stats, dominance_mode, 
+                                                   new_zeta_ther, None, None, epsilon)
+
+                            # B: AI
+                            if check_strict_feasibility(hist, 0, ms, min_ms):
+                                cost_ai = cost
+                                efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                                prog_ai = prog + efficiency
+                                ai_count_new = ai_count + 1
+                                new_hist_ai = (hist + (0,))
+                                if len(new_hist_ai) > ms - 1: new_hist_ai = new_hist_ai[-(ms - 1):]
+                                
+                                new_zeta_ai = zeta
+                                if use_branch_constraints:
+                                    new_zeta_list = list(zeta)
+                                    for cut_idx, cut in enumerate(forbidden_schedules):
+                                        if new_zeta_list[cut_idx] == 0:
+                                            forbidden_val = cut.get((j, t), None)
+                                            if forbidden_val is not None and forbidden_val != 0:
+                                                new_zeta_list[cut_idx] = 1
+                                    new_zeta_ai = tuple(new_zeta_list)
+
+                                add_state_to_buckets(next_states, cost_ai, prog_ai, ai_count_new, new_hist_ai, 
+                                                   path + [0], recipient_id, pruning_stats, dominance_mode, 
+                                                   new_zeta_ai, None, None, epsilon)
+
+                    current_states = next_states
+                    if not current_states: break
+                timers['state_expansion'] += time.time() - t_dp_start
+
+                # Final Step
+                t_final_start = time.time()
+                for bucket_key, bucket_list in current_states.items():
+                    if use_branch_constraints:
+                        ai_count, hist, zeta = bucket_key
+                    else:
+                        ai_count, hist = bucket_key
+                        zeta = None
+
+                    for item in bucket_list:
+                         cost, prog, path = item
+                         
+                         possible_moves = []
+                         if check_strict_feasibility(hist, 1, ms, min_ms): possible_moves.append(1)
+                         if is_timeout_scenario and check_strict_feasibility(hist, 0, ms, min_ms): possible_moves.append(0)
+
+                         for move in possible_moves:
+                             if move == 1:
+                                 final_cost_accum = cost - pi_dict.get((j, tau), 0)
+                                 final_prog = prog + 1.0
+                             else:
+                                 final_cost_accum = cost
+                                 efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                                 final_prog = prog + efficiency
+
+                             final_path = path + [move]
+                             condition_met = (final_prog >= s_k - epsilon)
+                             
+                             if use_branch_constraints:
+                                 final_zeta_list = list(zeta)
+                                 for cut_idx, cut in enumerate(forbidden_schedules):
+                                     if final_zeta_list[cut_idx] == 0:
+                                         forbidden_val = cut.get((j, tau), None)
+                                         if forbidden_val is not None and forbidden_val != move:
+                                             final_zeta_list[cut_idx] = 1
+                                 final_zeta = tuple(final_zeta_list)
+                                 if not all(z == 1 for z in final_zeta):
+                                    continue
+
+                             is_focus_patient = (obj_mode > 0.5)
+                             if is_focus_patient: is_valid_end = condition_met
+                             else: is_valid_end = condition_met or is_timeout_scenario
+
+                             if is_valid_end:
+                                 duration = tau - r_k + 1
+                                 reduced_cost = (obj_mode * duration) + final_cost_accum - gamma_k
+                                 
+                                 if reduced_cost < -epsilon:
+                                     col_candidate = {
+                                         'k': recipient_id,
+                                         'worker': j,
+                                         'start': r_k,
+                                         'end': tau,
+                                         'duration': duration,
+                                         'reduced_cost': reduced_cost,
+                                         'final_progress': final_prog,
+                                         'x_vector': generate_full_column_vector(j, final_path, r_k, tau, max_time, len(workers)),
+                                         'path_pattern': final_path
+                                     }
+                                     best_columns.append(col_candidate)
+                timers['final_step'] += time.time() - t_final_start
+
+    # Trigger Fast Path if applicable
+    if not use_sp_branching:
+        run_fast_path()
+        # SKIP the sequential loop by clearing the list (logic preserved for fallback/SP)
+        candidate_workers = []
+
     for j in candidate_workers:
         effective_min_duration = min(int(s_k), time_until_end)
         start_tau = r_k + effective_min_duration - 1

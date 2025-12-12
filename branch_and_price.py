@@ -735,6 +735,21 @@ class BranchAndPrice:
         # ========================================
         # PHASE 1: CREATE AND SOLVE ROOT NODE
         # ========================================
+        
+        # --- PRINT P_JOIN DATA (User Request) ---
+        r_entry_filtered = {p: self.cg_solver.Entry_agg[p] for p in self.cg_solver.P_Join}
+        req_filtered = {p: self.cg_solver.Req_agg[p] for p in self.cg_solver.P_Join}
+        E_filtered = {p: self.cg_solver.E_dict[p] for p in self.cg_solver.P_Join}
+        
+        print(f"\n[P_Join Data] rEntry (filtered):")
+        print(r_entry_filtered)
+        print(f"\n[P_Join Data] Rre_ (filtered):")
+        print(req_filtered)
+        print(f"\n[P_Join Data] E_ (filtered):")
+        print(E_filtered)
+        print("\n")
+        # ----------------------------------------
+
         root_node = self.create_root_node()
         # For 'bfs', open_nodes contains a tuple, so we extract the ID
         if self.search_strategy == 'bfs':
@@ -2243,10 +2258,12 @@ class BranchAndPrice:
                     current_max_col_id = max(profile_columns) if profile_columns else 0
                     
                     columns_added_for_profile = 0
+                    negative_printed = False
                     for col_idx, col_data in enumerate(col_data_list):
                         # Print reduced cost if negative
-                        if col_data['reduced_cost'] < 0:
-                            self.logger.info(f'    [Parallel] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
+                        if col_data['reduced_cost'] < 0 and not negative_printed:
+                            print(f'    [Parallel] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
+                            negative_printed = True
                         
                         # Check if column has negative reduced cost below threshold
                         if col_data['reduced_cost'] < -threshold:
@@ -2329,10 +2346,12 @@ class BranchAndPrice:
                             current_max_col_id = max(profile_columns) if profile_columns else 0
                                 
                             columns_added_for_profile = 0
+                            negative_printed = False
                             for col_idx, col_data in enumerate(col_data_list):
                                 # Print reduced cost if negative
-                                if col_data['reduced_cost'] < 0:
-                                    self.logger.info(f'    [Labeling] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
+                                if col_data['reduced_cost'] < 0 and not negative_printed:
+                                    print(f'    [Labeling] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
+                                    negative_printed = True
                                 
                                 # Check if column has negative reduced cost below threshold
                                 if col_data['reduced_cost'] < -threshold:
