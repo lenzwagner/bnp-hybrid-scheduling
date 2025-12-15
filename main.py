@@ -7,6 +7,41 @@ logger = get_logger(__name__)
 def main():
     """
     Main function to run Column Generation or Branch-and-Price algorithm.
+
+    TODOs:
+    1. Bitmasking for History Tracking
+       What changed: Instead of using Python tuples (e.g., (0, 1, 0)) to track the recent schedule history for the rolling window constraints, I implemented Integer Bitmasking.
+       How it works: The history is now stored as a single integer. We use bitwise operations (left shift <<, bitwise AND &, bitwise OR |) to update the history and check for feasibility.
+       Benefit:
+       - Speed: Bitwise operations are natively supported by the CPU and are extremely fast compared to creating, slicing, and concatenating tuple objects.
+       - Memory: Storing a single integer is much more memory-efficient than storing tuple objects, reducing overhead.
+       - Hashing: Integers can be hashed and compared much faster than tuples, speeding up the dominance checks in the dynamic programming buckets.
+
+    2. Transposed Constraint Lookup (Hashing)
+       What changed: I optimized how the algorithm checks for "forbidden" moves (branching constraints). Previously, the algorithm scanned the entire list of constraints linearly (O(N)) for every single step. I replaced this with a Hash Map (Dictionary) lookup.
+       How it works: Before running the labeling algorithm, we pre-process the constraints into a "transposed" lookup table: map[(worker, time)] -> [list of specific constraints].
+       Benefit:
+       - O(1) Complexity: Instead of checking every constraint, the algorithm now performs a single hash lookup to find only the constraints that apply to the current worker and time step.
+       - Scalability: This guarantees that the algorithm does not slow down significantly even as the number of branching constraints grows large deep in the search tree.
+
+    3. Persistent Multiprocessing Pool
+       Problem: Currently, a new multiprocessing.Pool is created in every iteration of the CG loop inside 'solve_node_with_cg'. This creates significant overhead.
+       Solution: The Pool should only be created once at the beginning of the class or program and reused.
+
+    4. A Priori Bound (Pricing Filter)
+       Idea: Check if a negative reduced cost is even theoretically possible for a profile BEFORE running the labeling algorithm.
+       Logic: The Reduced Cost = (Cost - Sum(Pi*Use)) - Gamma.
+       Since Pi <= 0 (capacity constraints) and Use >= 0, the term -Sum(Pi*Use) is always >= 0 (it represents a penalty).
+       Therefore, the Minimum Possible Reduced Cost = Cost - Gamma (assuming we pick a schedule with 0 capacity violations cost).
+       Formula: LowerBound = (s_k * obj_multiplier) - gamma_k
+       If LowerBound > 0, then Reduced Cost > 0 is guaranteed. We can safeley prune this profile.
+
+    5. Constraint-Free Fast Path
+       Idea: Current 'run_fast_path' skips SP constraints but still checks 'if use_branch_constraints' (MP constraints) inside every inner loop iteration.
+       Optimization: Implement a dedicated "Pure DP" function that assumes NO constraints at all.
+       Why: In the early stages of Branch-and-Price (root node) and for many profiles deep in the tree, there are ZERO active constraints.
+       Removing the 'if' checks inside the tightest loops will improve CPU branch prediction and raw throughput.
+       Safety: This path must ONLY be entered if `not use_branch_constraints` AND `not use_sp_branching` (i.e., strict check that list of constraints is empty).
     """
     # ===========================
     # LOGGING CONFIGURATION
