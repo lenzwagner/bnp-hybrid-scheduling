@@ -56,28 +56,28 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
                         if k[0] == profile and len(k) == 4 and k[1] != 'pattern'}
         if variable_duals:
             duals_delta = sum(variable_duals.values())
-    
     # --- EARLY PRUNING CHECK (A Priori Bound) ---
-    # Logic: Reduced Cost = (Cost - Sum(Pi*Use)) - Gamma
-    # Since Pi <= 0 and Use >= 0, the term -Sum(Pi*Use) is always >= 0.
-    # Therefore, Min Possible RC >= Min Possible Cost - Gamma.
-    # For a valid column, Cost = Duration * obj_multiplier.
-    # Min Duration is approx s_k (if efficiency=1.0).
-    # So, LowerBound = (s_k * obj_multiplier) - gamma - duals_delta
-    # Note: duals_delta comes from MP branching (no-good cuts). If positive, they reduce RC?
-    # Wait, duals_delta is added to RC in the labeling: rc = real_rc - delta.
-    # Let's verify signs.
-    # But conservatively:
-    # LowerBound = (s_k * obj_multiplier) - duals_gamma
-    # If this is > 0, we generally can't find a negative RC.
-    
-    # Safe check:
-    lb_pruning = (s_k * obj_multiplier) - duals_gamma - duals_delta
-    # Safety margin
-    if lb_pruning > -1e-9:
-        # Prune this profile! No negative reduced cost possible.
-        print(f"    [Pruning] Profile {profile} skipped (A Priori Bound: {lb_pruning:.4f} > 0)")
-        return (profile, [])
+    if cg_solver_data.get('use_apriori_pruning', True):
+        # Logic: Reduced Cost = (Cost - Sum(Pi*Use)) - Gamma
+        # Since Pi <= 0 and Use >= 0, the term -Sum(Pi*Use) is always >= 0.
+        # Therefore, Min Possible RC >= Min Possible Cost - Gamma.
+        # For a valid column, Cost = Duration * obj_multiplier.
+        # Min Duration is approx s_k (if efficiency=1.0).
+        # So, LowerBound = (s_k * obj_multiplier) - gamma - duals_delta
+        # Note: duals_delta comes from MP branching (no-good cuts). If positive, they reduce RC?
+        # Wait, duals_delta is added to RC in the labeling: rc = real_rc - delta.
+        # Let's verify signs.
+        # But conservatively:
+        # LowerBound = (s_k * obj_multiplier) - duals_gamma
+        # If this is > 0, we generally can't find a negative RC.
+        
+        # Safe check:
+        lb_pruning = (s_k * obj_multiplier) - duals_gamma - duals_delta
+        # Safety margin
+        if lb_pruning > -1e-9:
+            # Prune this profile! No negative reduced cost possible.
+            print(f"    [Pruning] Profile {profile} skipped (A Priori Bound: {lb_pruning:.4f} > 0)")
+            return (profile, [])
 
     # Call labeling algorithm
     col_data_list = solve_pricing_for_profile_bnp(
@@ -118,7 +118,7 @@ class BranchAndPrice:
     def __init__(self, cg_solver, branching_strategy='mp', search_strategy='dfs', verbose=True,
                  ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True,
                  use_labeling=False, max_columns_per_iter=10, use_parallel_pricing=False, 
-                 n_pricing_workers=4, debug_mode=True):
+                 n_pricing_workers=4, debug_mode=True, use_apriori_pruning=True):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -138,6 +138,7 @@ class BranchAndPrice:
             use_parallel_pricing: If True, solve pricing problems in parallel (only with use_labeling=True)
             n_pricing_workers: Number of parallel workers for pricing (only if use_parallel_pricing=True)
             debug_mode: If True, exceptions are re-raised instead of being caught (for debugging)
+            use_apriori_pruning: If True, use A Priori Bound to skip unpromising profiles
         """
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -171,6 +172,7 @@ class BranchAndPrice:
         # Parallelization Configuration
         self.use_parallel_pricing = use_parallel_pricing and use_labeling  # Only works with labeling
         self.n_pricing_workers = n_pricing_workers
+        self.use_apriori_pruning = use_apriori_pruning  # Default: True
         
         if self.use_parallel_pricing and not self.use_labeling:
             self.logger.warning("⚠️  Parallel pricing requires use_labeling=True. Disabling parallelization.")
@@ -2214,7 +2216,8 @@ class BranchAndPrice:
                     'theta_lookup': theta_lookup,
                     'MS': self.cg_solver.app_data['MS'][0],
                     'MIN_MS': self.cg_solver.app_data['MS_min'][0],
-                    'max_columns_per_iter': self.max_columns_per_iter
+                    'max_columns_per_iter': self.max_columns_per_iter,
+                    'use_apriori_pruning': self.use_apriori_pruning
                 }
                 
                 # Prepare arguments for each profile

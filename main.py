@@ -190,7 +190,8 @@ def main():
                                     use_labeling=True,
                                     max_columns_per_iter=50,
                                     use_parallel_pricing=use_parallel_pricing,
-                                    n_pricing_workers=n_pricing_workers)
+                                    n_pricing_workers=n_pricing_workers,
+                                    use_apriori_pruning=True)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)
 
         # Extract optimal schedules
