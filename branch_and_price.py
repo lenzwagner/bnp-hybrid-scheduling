@@ -735,20 +735,6 @@ class BranchAndPrice:
         # ========================================
         # PHASE 1: CREATE AND SOLVE ROOT NODE
         # ========================================
-        
-        # --- PRINT P_JOIN DATA (User Request) ---
-        r_entry_filtered = {p: self.cg_solver.Entry_agg[p] for p in self.cg_solver.P_Join}
-        req_filtered = {p: self.cg_solver.Req_agg[p] for p in self.cg_solver.P_Join}
-        E_filtered = {p: self.cg_solver.E_dict[p] for p in self.cg_solver.P_Join}
-        
-        print(f"\n[P_Join Data] rEntry (filtered):")
-        print(r_entry_filtered)
-        print(f"\n[P_Join Data] Rre_ (filtered):")
-        print(req_filtered)
-        print(f"\n[P_Join Data] E_ (filtered):")
-        print(E_filtered)
-        print("\n")
-        # ----------------------------------------
 
         root_node = self.create_root_node()
         # For 'bfs', open_nodes contains a tuple, so we extract the ID
@@ -917,14 +903,6 @@ class BranchAndPrice:
                 self.logger.info(f"  LP Bound: {node.lp_bound:.6f}")
                 self.logger.info(f"  Depth: {node.depth}, Path: '{node.path}'")
 
-            # Check if Node 3 and 4 are solved (meaning we are past the second branching)
-            # and we are about to process one of them or a subsequent node.
-            if 3 in self.nodes and 4 in self.nodes:
-                if self.nodes[3].status == 'solved' and self.nodes[4].status == 'solved':
-                     print(f"DEBUG EXIT: Node 3 and 4 solved. Next selected is Node {current_node_id}. Exiting.")
-                     import sys
-                     sys.exit()
-
             # Log the processing order for all strategies
             self.stats['node_processing_order'].append(current_node_id)
 
@@ -1013,7 +991,7 @@ class BranchAndPrice:
                             details = f"Profile {c.profile}, Pattern {pat_str}, {c.direction.upper()} (Level {c.level})"
                         elif "MPVariableBranching" in str(type(c)):
                             c_type = "MP Var"
-                            details = f"Worker {c.agent}, Time {c.period}, {c.direction.upper()}"
+                            details = f"Profile {c.profile}, Column {c.column}, {c.direction.upper()} (Bound {c.bound})"
                         else:
                             c_type = "Unknown"
                             details = str(c)
@@ -1377,7 +1355,7 @@ class BranchAndPrice:
         self.logger.info(f"  Max pattern size: {max_pattern_size}")
 
         # Loop over increasing pattern sizes
-        for pattern_size in range(2, max_pattern_size + 1):
+        for pattern_size in range(1, max_pattern_size + 1):
             self.logger.info(f"\n  Searching patterns of size {pattern_size}...")
 
             pattern, beta_val, floor_val, ceil_val, profile = self._search_patterns_of_size(
@@ -2466,10 +2444,6 @@ class BranchAndPrice:
             lambda_list_cg = {}
 
         is_integral, lp_obj, most_frac_info = master.check_fractionality()
-
-        # Filter lambda values > 0 for n=79
-        filtered_lambda = {key: val for key, val in lambda_list_cg.items() if key[0] == 30 and val > 0}
-        print('Frac. Lambda (n=79, λ>0):', filtered_lambda)
 
         if is_integral:
             self.logger.info(f"\n✅ INTEGRAL SOLUTION FOUND AT NODE {node.node_id}!")
