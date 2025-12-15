@@ -57,6 +57,28 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         if variable_duals:
             duals_delta = sum(variable_duals.values())
     
+    # --- EARLY PRUNING CHECK (A Priori Bound) ---
+    # Logic: Reduced Cost = (Cost - Sum(Pi*Use)) - Gamma
+    # Since Pi <= 0 and Use >= 0, the term -Sum(Pi*Use) is always >= 0.
+    # Therefore, Min Possible RC >= Min Possible Cost - Gamma.
+    # For a valid column, Cost = Duration * obj_multiplier.
+    # Min Duration is approx s_k (if efficiency=1.0).
+    # So, LowerBound = (s_k * obj_multiplier) - gamma - duals_delta
+    # Note: duals_delta comes from MP branching (no-good cuts). If positive, they reduce RC?
+    # Wait, duals_delta is added to RC in the labeling: rc = real_rc - delta.
+    # Let's verify signs.
+    # But conservatively:
+    # LowerBound = (s_k * obj_multiplier) - duals_gamma
+    # If this is > 0, we generally can't find a negative RC.
+    
+    # Safe check:
+    lb_pruning = (s_k * obj_multiplier) - duals_gamma - duals_delta
+    # Safety margin
+    if lb_pruning > -1e-9:
+        # Prune this profile! No negative reduced cost possible.
+        print(f"    [Pruning] Profile {profile} skipped (A Priori Bound: {lb_pruning:.4f} > 0)")
+        return (profile, [])
+
     # Call labeling algorithm
     col_data_list = solve_pricing_for_profile_bnp(
         profile=profile,

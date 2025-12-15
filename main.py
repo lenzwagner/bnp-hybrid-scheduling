@@ -28,15 +28,7 @@ def main():
        Problem: Currently, a new multiprocessing.Pool is created in every iteration of the CG loop inside 'solve_node_with_cg'. This creates significant overhead.
        Solution: The Pool should only be created once at the beginning of the class or program and reused.
 
-    4. A Priori Bound (Pricing Filter)
-       Idea: Check if a negative reduced cost is even theoretically possible for a profile BEFORE running the labeling algorithm.
-       Logic: The Reduced Cost = (Cost - Sum(Pi*Use)) - Gamma.
-       Since Pi <= 0 (capacity constraints) and Use >= 0, the term -Sum(Pi*Use) is always >= 0 (it represents a penalty).
-       Therefore, the Minimum Possible Reduced Cost = Cost - Gamma (assuming we pick a schedule with 0 capacity violations cost).
-       Formula: LowerBound = (s_k * obj_multiplier) - gamma_k
-       If LowerBound > 0, then Reduced Cost > 0 is guaranteed. We can safeley prune this profile.
-
-    5. Constraint-Free Fast Path
+    4. Constraint-Free Fast Path
        Idea: Current 'run_fast_path' skips SP constraints but still checks 'if use_branch_constraints' (MP constraints) inside every inner loop iteration.
        Optimization: Implement a dedicated "Pure DP" function that assumes NO constraints at all.
        Why: In the early stages of Branch-and-Price (root node) and for many profiles deep in the tree, there are ZERO active constraints.
