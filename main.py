@@ -24,23 +24,14 @@ def main():
        - O(1) Complexity: Instead of checking every constraint, the algorithm now performs a single hash lookup to find only the constraints that apply to the current worker and time step.
        - Scalability: This guarantees that the algorithm does not slow down significantly even as the number of branching constraints grows large deep in the search tree.
 
-    3. Unified Labeling Configuration
-       Problem: The labeling algorithm ('solve_pricing_for_profile_bnp' and 'run_labeling_algorithm') currently accepts 15+ individual arguments. This makes the signature brittle and hard to extend.
-       Solution: Encapsulate all static configuration (workers, max_time, ms, theta_lookup, etc.) into a single `LabelingConfig` object or dictionary.
-       Implementation:
-       - Define a config structure (dataclass or dict).
-       - Create this config ONCE in `BranchAndPrice.__init__`.
-       - Pass this single object to `_parallel_pricing_worker` and then to the labeling function.
-       - Unpack it inside the labeling algorithm.
-
-    4. Heuristic Pricing (Multi-Phase Pricing)
+    3. Heuristic Pricing (Multi-Phase Pricing)
        Problem: The exact labeling algorithm always finds the optimal column (most negative reduced cost), but this is expensive. In Column Generation, ANY column with negative reduced cost is sufficient to improve the master.
        Solution: Implement a two-phase pricing approach:
        - Phase 1 (Heuristic): Run labeling with aggressive pruning (e.g., keep max 10-20 labels per bucket, relaxed dominance). If rc < 0 found, add and stop.
        - Phase 2 (Exact): Only if heuristic fails, run full exact labeling to prove optimality or find hard-to-reach columns.
        Benefit: Massively speeds up early CG iterations. Most columns can be found heuristically.
 
-    5. A* Search with Backward Heuristic
+    4. A* Search with Backward Heuristic
        Problem: Current bound pruning uses a simple "fastest completion" estimate. This can be significantly tightened.
        Solution: Compute a backward heuristic h(state_t) that estimates the MINIMUM possible cost from time t to the end, assuming ideal conditions (max AI efficiency, no capacity conflicts).
        Implementation:
@@ -49,7 +40,7 @@ def main():
        - The tighter h(state), the more labels can be pruned early.
        Benefit: Reduces the number of states explored by orders of magnitude in deep trees.
 
-    6. State-Space Relaxation (ng-route inspired)
+    5. State-Space Relaxation (ng-route inspired)
        Problem: The rolling window history vector (h_t) causes exponential state space growth (2^(MS-1) states).
        Solution: In heuristic pricing phase, partially or fully relax the rolling window constraint:
        - Solve without tracking h_t (or with reduced MS).
@@ -57,13 +48,6 @@ def main():
        - If violated: discard or attempt local repair.
        Benefit: Dramatically reduces state space in heuristic phase. Most feasible columns will naturally satisfy the constraint.
        Note: This is experimental and requires careful validation.
-
-    7. Bucket Refinement by Progress
-       Problem: Current bucketing groups states by (ai_count, hist, zeta). If buckets are too large, pairwise dominance checks become O(N^2) expensive within each bucket.
-       Solution: Subdivide buckets by discretized progress omega_t (e.g., round to nearest 0.1).
-       - Only check dominance between labels with similar progress.
-       - Labels far apart in progress rarely dominate each other anyway.
-       Benefit: Reduces dominance check overhead in buckets with many labels.
     """
     # ===========================
     # LOGGING CONFIGURATION
@@ -223,7 +207,7 @@ def main():
                                     n_pricing_workers=n_pricing_workers,
                                     use_apriori_pruning=True,
                                     use_pure_dp_optimization=True,
-                                    use_persistent_pool=False)
+                                    use_persistent_pool=True)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)
 
         # Extract optimal schedules
