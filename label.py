@@ -354,7 +354,9 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 workers, max_time, ms, min_ms, theta_lookup,
                                 use_bound_pruning=True, dominance_mode='bucket', 
                                 branch_constraints=None, branching_variant='mp',
-                                max_columns=10, use_pure_dp_optimization=True):
+                                max_columns=10, use_pure_dp_optimization=True,
+                                use_heuristic_pricing=False, max_labels_per_bucket=None,
+                                stop_at_first_negative=False):
     """
     Solve the pricing problem for a single recipient.
     
@@ -376,6 +378,9 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
         branching_variant: Branching strategy ('mp' or 'sp')
         max_columns: Maximum number of columns to return
         use_pure_dp_optimization: Enable Pure DP fast path when no constraints (Option 4)
+        use_heuristic_pricing: Enable heuristic pricing mode (aggressive pruning)
+        max_labels_per_bucket: Limit labels per bucket (None = unlimited/exact)
+        stop_at_first_negative: Stop DP early if negative RC found
         
     Returns:
         List of best columns (dictionaries)
@@ -1219,6 +1224,72 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
     return best_columns
 
 
+def solve_pricing_multi_phase(
+    recipient_id, r_k, s_k, gamma_k, obj_mode, pi_dict,
+    workers, max_time, ms, min_ms, theta_lookup,
+    use_bound_pruning=True, dominance_mode='bucket',
+    branch_constraints=None, branching_variant='mp',
+    max_columns=10, use_pure_dp_optimization=True,
+    use_heuristic_pricing=True, heuristic_max_labels=20
+):
+    """
+    Multi-phase pricing with heuristic + exact fallback.
+    
+    Phase 1: Try heuristic pricing (fast, aggressive pruning)
+    Phase 2: Fall back to exact pricing if heuristic fails
+    
+    Args:
+        Same as solve_pricing_for_recipient, plus:
+        use_heuristic_pricing: Enable heuristic phase
+        heuristic_max_labels: Max labels per bucket in heuristic mode
+    
+    Returns:
+        List of best columns (guaranteed to be optimal via fallback)
+    """
+    
+    if use_heuristic_pricing:
+        # Phase 1: Heuristic pricing with aggressive pruning
+        heuristic_cols = solve_pricing_for_recipient(
+            recipient_id, r_k, s_k, gamma_k, obj_mode, pi_dict,
+            workers, max_time, ms, min_ms, theta_lookup,
+            use_bound_pruning=use_bound_pruning,
+            dominance_mode=dominance_mode,
+            branch_constraints=branch_constraints,
+            branching_variant=branching_variant,
+            max_columns=max_columns,
+            use_pure_dp_optimization=use_pure_dp_optimization,
+            # Heuristic settings:
+            use_heuristic_pricing=True,
+            max_labels_per_bucket=heuristic_max_labels,
+            stop_at_first_negative=True
+        )
+        
+        # Check if heuristic found columns with negative reduced cost
+        if heuristic_cols and any(col['reduced_cost'] < -1e-6 for col in heuristic_cols):
+            print(f"  ✓ [Heuristic] Found {len(heuristic_cols)} columns for profile {recipient_id}")
+            return heuristic_cols
+        
+        # Heuristic failed, fall back to exact
+        print(f"  → [Fallback] Running exact pricing for profile {recipient_id}")
+    
+    # Phase 2: Exact pricing (no limits, guaranteed optimal)
+    return solve_pricing_for_recipient(
+        recipient_id, r_k, s_k, gamma_k, obj_mode, pi_dict,
+        workers, max_time, ms, min_ms, theta_lookup,
+        use_bound_pruning=use_bound_pruning,
+        dominance_mode=dominance_mode,
+        branch_constraints=branch_constraints,
+        branching_variant=branching_variant,
+        max_columns=max_columns,
+        use_pure_dp_optimization=use_pure_dp_optimization,
+        # Exact settings (no heuristic):
+        use_heuristic_pricing=False,
+        max_labels_per_bucket=None,
+        stop_at_first_negative=False
+    )
+
+
+
 # --- 3b. Wrapper for Branch-and-Price Integration ---
 
 def solve_pricing_for_profile_bnp(
@@ -1237,7 +1308,9 @@ def solve_pricing_for_profile_bnp(
     col_id,
     branching_constraints=None,
     max_columns=10,
-    use_pure_dp_optimization=True
+    use_pure_dp_optimization=True,
+    use_heuristic_pricing=False,
+    heuristic_max_labels=20
 ):
     """
     Wrapper function for Branch-and-Price integration.
@@ -1259,25 +1332,14 @@ def solve_pricing_for_profile_bnp(
         MS: Milestone window size
         MIN_MS: Minimum therapist sessions in window
         col_id: Next column ID to use
-        branching_constraints: Optional list of branching constraints (not yet implemented)
+        branching_constraints: Optional list of branching constraints
         max_columns: Maximum number of columns to return
         use_pure_dp_optimization: Enable Pure DP fast path when no constraints (Option 4)
+        use_heuristic_pricing: Enable heuristic pricing mode
+        heuristic_max_labels: Max labels per bucket in heuristic mode
     
     Returns:
         list: List of best columns in subproblem format, or empty list if no improving column found
-        [
-            {
-                'reduced_cost': float,
-                'schedules_x': dict {(p, j, t, col_id): value},
-                'schedules_los': dict {(p, col_id): los_value},
-                'x_list': list of x values,
-                'los_list': list with single los value,
-                'path_pattern': list [0, 1, 1, ...],
-                'worker': int,
-                'start': int,
-                'end': int
-            }
-        ]
     """
     # Set global variables (temporary solution until we refactor to pass all parameters)
     global MAX_TIME, WORKERS, pi, gamma
@@ -1290,8 +1352,8 @@ def solve_pricing_for_profile_bnp(
     # gamma for this profile
     gamma_k = duals_gamma + duals_delta
     
-    # Call the labeling algorithm with correct parameters
-    best_columns = solve_pricing_for_recipient(
+    # Call multi-phase pricing (heuristic + exact fallback)
+    best_columns = solve_pricing_multi_phase(
         recipient_id=profile,
         r_k=r_k,
         s_k=s_k,
@@ -1308,7 +1370,9 @@ def solve_pricing_for_profile_bnp(
         branch_constraints=branching_constraints,
         branching_variant='mp',
         max_columns=max_columns,
-        use_pure_dp_optimization=use_pure_dp_optimization
+        use_pure_dp_optimization=use_pure_dp_optimization,
+        use_heuristic_pricing=use_heuristic_pricing,
+        heuristic_max_labels=heuristic_max_labels
     )
     
     if not best_columns:

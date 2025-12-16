@@ -96,7 +96,9 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         col_id=next_col_id,
         branching_constraints=node.branching_constraints,
         max_columns=cg_solver_data['max_columns_per_iter'],
-        use_pure_dp_optimization=cg_solver_data.get('use_pure_dp_optimization', True)
+        use_pure_dp_optimization=cg_solver_data.get('use_pure_dp_optimization', True),
+        use_heuristic_pricing=cg_solver_data.get('use_heuristic_pricing', False),
+        heuristic_max_labels=cg_solver_data.get('heuristic_max_labels', 20)
     )
     
     return (profile, col_data_list)
@@ -120,7 +122,8 @@ class BranchAndPrice:
                  ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True,
                  use_labeling=False, max_columns_per_iter=10, use_parallel_pricing=False, 
                  n_pricing_workers=4, debug_mode=True, use_apriori_pruning=True, 
-                 use_pure_dp_optimization=True, use_persistent_pool=True):
+                 use_pure_dp_optimization=True, use_persistent_pool=True,
+                 use_heuristic_pricing=True, heuristic_max_labels=20):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -178,7 +181,9 @@ class BranchAndPrice:
         self.n_pricing_workers = n_pricing_workers
         self.use_apriori_pruning = use_apriori_pruning  # Default: True
         self.use_pure_dp_optimization = use_pure_dp_optimization  # Option 4: Pure DP fast path
-        self.use_persistent_pool = use_persistent_pool  # TODO #3: Persistent pool
+        self.use_persistent_pool = use_persistent_pool
+        self.use_heuristic_pricing = use_heuristic_pricing
+        self.heuristic_max_labels = heuristic_max_labels
         
         # Create persistent multiprocessing pool
         self.pricing_pool = None
@@ -2242,7 +2247,9 @@ class BranchAndPrice:
                     'MIN_MS': self.cg_solver.app_data['MS_min'][0],
                     'max_columns_per_iter': self.max_columns_per_iter,
                     'use_apriori_pruning': self.use_apriori_pruning,
-                    'use_pure_dp_optimization': self.use_pure_dp_optimization
+                    'use_pure_dp_optimization': self.use_pure_dp_optimization,
+                    'use_heuristic_pricing': self.use_heuristic_pricing,
+                    'heuristic_max_labels': self.heuristic_max_labels
                 }
                 
                 # Prepare arguments for each profile
