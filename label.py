@@ -56,14 +56,15 @@ def _parse_branching_constraints(branch_constraints, recipient_id, branching_var
         branching_variant: 'mp' or 'sp'
         
     Returns:
-        tuple: (mp_cuts, left_patterns, right_patterns)
+        tuple: (mp_cuts, left_patterns, right_patterns, forbidden_lookup)
     """
     mp_cuts = []
     left_patterns = []
     right_patterns = []
+    forbidden_lookup = {}  # NEW: (worker, time) -> True for O(1) lookup
 
     if not branch_constraints:
-        return mp_cuts, left_patterns, right_patterns
+        return mp_cuts, left_patterns, right_patterns, forbidden_lookup
 
     # Handle list of constraint objects (preferred)
     if isinstance(branch_constraints, list):
@@ -104,6 +105,8 @@ def _parse_branching_constraints(branch_constraints, recipient_id, branching_var
                         if len(key) >= 3 and val > 1e-6:
                             j, t = key[1], key[2]
                             forbidden_schedule[(j, t)] = val
+                            # NEW: Build transposed lookup for O(1) access
+                            forbidden_lookup[(j, t)] = True
                     mp_cuts.append(forbidden_schedule)
 
     # Debug Printing for SP Constraints
@@ -117,7 +120,7 @@ def _parse_branching_constraints(branch_constraints, recipient_id, branching_var
         for i, p in enumerate(right_patterns):
             print(f"    Right #{i}: Elements: {p['elements']}, Dual: {p['dual']}")
 
-    return mp_cuts, left_patterns, right_patterns
+    return mp_cuts, left_patterns, right_patterns, forbidden_lookup
 
 
 def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id, 
@@ -417,11 +420,9 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
     else:
         logger.info(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (no dominance)")
     
-    # --- Parse Branch Constraints ---
-    mp_cuts, left_patterns, right_patterns = _parse_branching_constraints(branch_constraints, recipient_id, branching_variant)
-
-    # Setup MP Branching (No-Good Cuts)
-    forbidden_schedules = mp_cuts
+    # Pre-build constraint lookup structures for efficient access
+    mp_cuts, left_patterns, right_patterns, forbidden_lookup = _parse_branching_constraints(branch_constraints, recipient_id, branching_variant)
+    forbidden_schedules = mp_cuts  # Kept for backward compat
     use_branch_constraints = bool(forbidden_schedules)
     
     # Setup SP Branching (Patterns)

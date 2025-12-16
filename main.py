@@ -17,14 +17,7 @@ def main():
        - Memory: Storing a single integer is much more memory-efficient than storing tuple objects, reducing overhead.
        - Hashing: Integers can be hashed and compared much faster than tuples, speeding up the dominance checks in the dynamic programming buckets.
 
-    2. Transposed Constraint Lookup (Hashing)
-       What changed: I optimized how the algorithm checks for "forbidden" moves (branching constraints). Previously, the algorithm scanned the entire list of constraints linearly (O(N)) for every single step. I replaced this with a Hash Map (Dictionary) lookup.
-       How it works: Before running the labeling algorithm, we pre-process the constraints into a "transposed" lookup table: map[(worker, time)] -> [list of specific constraints].
-       Benefit:
-       - O(1) Complexity: Instead of checking every constraint, the algorithm now performs a single hash lookup to find only the constraints that apply to the current worker and time step.
-       - Scalability: This guarantees that the algorithm does not slow down significantly even as the number of branching constraints grows large deep in the search tree.
-
-    3. A* Search with Backward Heuristic
+    2. A* Search with Backward Heuristic
        Problem: Current bound pruning uses a simple "fastest completion" estimate. This can be significantly tightened.
        Solution: Compute a backward heuristic h(state_t) that estimates the MINIMUM possible cost from time t to the end, assuming ideal conditions (max AI efficiency, no capacity conflicts).
        Implementation:
@@ -33,7 +26,7 @@ def main():
        - The tighter h(state), the more labels can be pruned early.
        Benefit: Reduces the number of states explored by orders of magnitude in deep trees.
 
-    4. State-Space Relaxation (ng-route inspired)
+    3. State-Space Relaxation (ng-route inspired)
        Problem: The rolling window history vector (h_t) causes exponential state space growth (2^(MS-1) states).
        Solution: In heuristic pricing phase, partially or fully relax the rolling window constraint:
        - Solve without tracking h_t (or with reduced MS).
