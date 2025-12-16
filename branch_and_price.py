@@ -120,7 +120,7 @@ class BranchAndPrice:
                  ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True,
                  use_labeling=False, max_columns_per_iter=10, use_parallel_pricing=False, 
                  n_pricing_workers=4, debug_mode=True, use_apriori_pruning=True, 
-                 use_pure_dp_optimization=True):
+                 use_pure_dp_optimization=True, use_persistent_pool=True):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -142,6 +142,7 @@ class BranchAndPrice:
             debug_mode: If True, exceptions are re-raised instead of being caught (for debugging)
             use_apriori_pruning: If True, use A Priori Bound to skip unpromising profiles
             use_pure_dp_optimization: If True, enable Pure DP fast path when no constraints (Option 4)
+            use_persistent_pool: If True, create persistent multiprocessing pool (TODO #3)
         """
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -177,6 +178,14 @@ class BranchAndPrice:
         self.n_pricing_workers = n_pricing_workers
         self.use_apriori_pruning = use_apriori_pruning  # Default: True
         self.use_pure_dp_optimization = use_pure_dp_optimization  # Option 4: Pure DP fast path
+        self.use_persistent_pool = use_persistent_pool  # TODO #3: Persistent pool
+        
+        # Create persistent multiprocessing pool
+        self.pricing_pool = None
+        if self.use_parallel_pricing and self.use_persistent_pool:
+            from multiprocessing import Pool
+            self.pricing_pool = Pool(processes=self.n_pricing_workers)
+            self.logger.info(f"✓ Created persistent pricing pool with {self.n_pricing_workers} workers")
         
         if self.use_parallel_pricing and not self.use_labeling:
             self.logger.warning("⚠️  Parallel pricing requires use_labeling=True. Disabling parallelization.")
@@ -789,6 +798,7 @@ class BranchAndPrice:
             if self.open_nodes:
                 self.open_nodes.pop()
             self._finalize_and_print_results()
+            self._cleanup_pricing_pool()
             return self._get_results_dict()
 
         # Root needs branching
@@ -808,6 +818,7 @@ class BranchAndPrice:
         if not branching_type:
             self.logger.warning(f"⚠️  Could not find branching candidate despite fractional solution!")
             self._finalize_and_print_results()
+            self._cleanup_pricing_pool()
             return self._get_results_dict()
 
         # Create child nodes
@@ -1239,7 +1250,16 @@ class BranchAndPrice:
             self.logger.info(f"   {len(self.open_nodes)} nodes remain open")
 
         self._finalize_and_print_results()
+        self._cleanup_pricing_pool()
         return self._get_results_dict()
+
+    def _cleanup_pricing_pool(self):
+        """Cleanup persistent multiprocessing pool if it exists."""
+        if self.pricing_pool is not None:
+            self.pricing_pool.close()
+            self.pricing_pool.join()
+            self.logger.info("✓ Closed persistent pricing pool")
+            self.pricing_pool = None
 
     def _print_final_results(self):
         """Print final results."""
@@ -2239,8 +2259,14 @@ class BranchAndPrice:
                 
                 
                 # Solve all pricing problems in parallel using the GLOBAL function
-                with Pool(processes=self.n_pricing_workers) as pool:
-                    pricing_results = pool.starmap(_parallel_pricing_worker, profile_args)
+                if self.use_persistent_pool and self.pricing_pool:
+                    # Use persistent pool (TODO #3)
+                    pricing_results = self.pricing_pool.starmap(_parallel_pricing_worker, profile_args)
+                else:
+                    # Fallback: create temporary pool (backward compatibility)
+                    from multiprocessing import Pool
+                    with Pool(processes=self.n_pricing_workers) as pool:
+                        pricing_results = pool.starmap(_parallel_pricing_worker, profile_args)
                 
                 # Now add all columns sequentially (to avoid race conditions)
                 for profile, col_data_list in pricing_results:
