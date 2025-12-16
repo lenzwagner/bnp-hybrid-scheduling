@@ -354,7 +354,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 workers, max_time, ms, min_ms, theta_lookup,
                                 use_bound_pruning=True, dominance_mode='bucket', 
                                 branch_constraints=None, branching_variant='mp',
-                                max_columns=10):
+                                max_columns=10, use_pure_dp_optimization=True):
     """
     Solve the pricing problem for a single recipient.
     
@@ -375,6 +375,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
         branch_constraints: Optional branch constraints
         branching_variant: Branching strategy ('mp' or 'sp')
         max_columns: Maximum number of columns to return
+        use_pure_dp_optimization: Enable Pure DP fast path when no constraints (Option 4)
         
     Returns:
         List of best columns (dictionaries)
@@ -607,11 +608,139 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                      best_columns.append(col_candidate)
                 timers['final_step'] += time.time() - t_final_start
 
-    # Trigger Fast Path if applicable
-    if not use_sp_branching:
+    # --- PURE DP FAST PATH (Option 4) ---
+    def run_pure_dp():
+        """
+        Pure DP loop with ZERO constraint overhead.
+        Used when use_sp_branching is False AND use_branch_constraints is False.
+        
+        This is the fastest path - no zeta, rho, or mu tracking.
+        Maximum performance for root node and constraint-free profiles.
+        """
+        for j in candidate_workers:
+            effective_min_duration = min(int(s_k), time_until_end)
+            start_tau = r_k + effective_min_duration - 1
+
+            for tau in range(start_tau, max_time + 1):
+                is_timeout_scenario = (tau == max_time)
+                start_cost = -pi_dict.get((j, r_k), 0)
+
+                current_states = {}
+                initial_history = (1,)
+                # Pure DP: All constraint parameters are None
+                add_state_to_buckets(current_states, start_cost, 1.0, 0, initial_history, [1], 
+                                     recipient_id, pruning_stats, dominance_mode, 
+                                     None, None, None, epsilon)
+
+                t_dp_start = time.time()
+                for t in range(r_k + 1, tau):
+                    next_states = {}
+                    
+                    # Iterate over all buckets - Simple structure: (ai_count, hist)
+                    for bucket_key, bucket_list in current_states.items():
+                        ai_count, hist = bucket_key  # Always 2 elements
+                        
+                        for item in bucket_list:
+                            cost, prog, path = item  # Always 3 elements
+
+                            if use_bound_pruning:
+                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+                                if lb >= 0:
+                                    pruning_stats['lb'] += 1
+                                    continue
+
+                            remaining_steps = tau - t + 1
+                            if not is_timeout_scenario:
+                                if obj_mode > 0.5:
+                                    if prog + remaining_steps * 1.0 < s_k - epsilon:
+                                        continue
+
+                            # A: Therapist
+                            if check_strict_feasibility(hist, 1, ms, min_ms):
+                                cost_ther = cost - pi_dict.get((j, t), 0)
+                                prog_ther = prog + 1.0
+                                new_hist_ther = (hist + (1,))
+                                if len(new_hist_ther) > ms - 1: new_hist_ther = new_hist_ther[-(ms - 1):]
+
+                                add_state_to_buckets(next_states, cost_ther, prog_ther, ai_count, new_hist_ther, 
+                                                   path + [1], recipient_id, pruning_stats, dominance_mode, 
+                                                   None, None, None, epsilon)
+
+                            # B: AI
+                            if check_strict_feasibility(hist, 0, ms, min_ms):
+                                cost_ai = cost
+                                efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                                prog_ai = prog + efficiency
+                                ai_count_new = ai_count + 1
+                                new_hist_ai = (hist + (0,))
+                                if len(new_hist_ai) > ms - 1: new_hist_ai = new_hist_ai[-(ms - 1):]
+
+                                add_state_to_buckets(next_states, cost_ai, prog_ai, ai_count_new, new_hist_ai, 
+                                                   path + [0], recipient_id, pruning_stats, dominance_mode, 
+                                                   None, None, None, epsilon)
+
+                    current_states = next_states
+                    if not current_states: break
+                timers['state_expansion'] += time.time() - t_dp_start
+
+                # Final Step
+                t_final_start = time.time()
+                for bucket_key, bucket_list in current_states.items():
+                    ai_count, hist = bucket_key  # Simple unpacking
+
+                    for item in bucket_list:
+                         cost, prog, path = item
+                         
+                         possible_moves = []
+                         if check_strict_feasibility(hist, 1, ms, min_ms): possible_moves.append(1)
+                         if is_timeout_scenario and check_strict_feasibility(hist, 0, ms, min_ms): possible_moves.append(0)
+
+                         for move in possible_moves:
+                             if move == 1:
+                                 final_cost_accum = cost - pi_dict.get((j, tau), 0)
+                                 final_prog = prog + 1.0
+                             else:
+                                 final_cost_accum = cost
+                                 efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                                 final_prog = prog + efficiency
+
+                             final_path = path + [move]
+                             condition_met = (final_prog >= s_k - epsilon)
+
+                             is_focus_patient = (obj_mode > 0.5)
+                             if is_focus_patient: is_valid_end = condition_met
+                             else: is_valid_end = condition_met or is_timeout_scenario
+
+                             if is_valid_end:
+                                 duration = tau - r_k + 1
+                                 reduced_cost = (obj_mode * duration) + final_cost_accum - gamma_k
+                                 
+                                 if reduced_cost < -epsilon:
+                                     col_candidate = {
+                                         'k': recipient_id,
+                                         'worker': j,
+                                         'start': r_k,
+                                         'end': tau,
+                                         'duration': duration,
+                                         'reduced_cost': reduced_cost,
+                                         'final_progress': final_prog,
+                                         'x_vector': generate_full_column_vector(j, final_path, r_k, tau, max_time, len(workers)),
+                                         'path_pattern': final_path
+                                     }
+                                     best_columns.append(col_candidate)
+                timers['final_step'] += time.time() - t_final_start
+
+    # --- EXECUTION CONTROL: Choose the fastest applicable path ---
+    if use_pure_dp_optimization and not use_sp_branching and not use_branch_constraints:
+        # Path 1: PURE DP (Fastest - No constraints at all)
+        run_pure_dp()
+        candidate_workers = []  # Skip sequential loop
+    elif not use_sp_branching:
+        # Path 2: FAST PATH (MP Constraints only)
         run_fast_path()
-        # SKIP the sequential loop by clearing the list (logic preserved for fallback/SP)
-        candidate_workers = []
+        candidate_workers = []  # Skip sequential loop
+    # else: Path 3: FULL SP PATH (Fall through to sequential loop below)
+
 
     for j in candidate_workers:
         effective_min_duration = min(int(s_k), time_until_end)
@@ -1107,7 +1236,8 @@ def solve_pricing_for_profile_bnp(
     MIN_MS,
     col_id,
     branching_constraints=None,
-    max_columns=10
+    max_columns=10,
+    use_pure_dp_optimization=True
 ):
     """
     Wrapper function for Branch-and-Price integration.
@@ -1131,6 +1261,7 @@ def solve_pricing_for_profile_bnp(
         col_id: Next column ID to use
         branching_constraints: Optional list of branching constraints (not yet implemented)
         max_columns: Maximum number of columns to return
+        use_pure_dp_optimization: Enable Pure DP fast path when no constraints (Option 4)
     
     Returns:
         list: List of best columns in subproblem format, or empty list if no improving column found
@@ -1176,7 +1307,8 @@ def solve_pricing_for_profile_bnp(
         dominance_mode='bucket',
         branch_constraints=branching_constraints,
         branching_variant='mp',
-        max_columns=max_columns
+        max_columns=max_columns,
+        use_pure_dp_optimization=use_pure_dp_optimization
     )
     
     if not best_columns:

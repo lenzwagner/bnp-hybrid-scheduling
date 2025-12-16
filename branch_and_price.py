@@ -95,7 +95,8 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         MIN_MS=cg_solver_data['MIN_MS'],
         col_id=next_col_id,
         branching_constraints=node.branching_constraints,
-        max_columns=cg_solver_data['max_columns_per_iter']
+        max_columns=cg_solver_data['max_columns_per_iter'],
+        use_pure_dp_optimization=cg_solver_data.get('use_pure_dp_optimization', True)
     )
     
     return (profile, col_data_list)
@@ -118,7 +119,8 @@ class BranchAndPrice:
     def __init__(self, cg_solver, branching_strategy='mp', search_strategy='dfs', verbose=True,
                  ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True,
                  use_labeling=False, max_columns_per_iter=10, use_parallel_pricing=False, 
-                 n_pricing_workers=4, debug_mode=True, use_apriori_pruning=True):
+                 n_pricing_workers=4, debug_mode=True, use_apriori_pruning=True, 
+                 use_pure_dp_optimization=True):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -139,6 +141,7 @@ class BranchAndPrice:
             n_pricing_workers: Number of parallel workers for pricing (only if use_parallel_pricing=True)
             debug_mode: If True, exceptions are re-raised instead of being caught (for debugging)
             use_apriori_pruning: If True, use A Priori Bound to skip unpromising profiles
+            use_pure_dp_optimization: If True, enable Pure DP fast path when no constraints (Option 4)
         """
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -173,6 +176,7 @@ class BranchAndPrice:
         self.use_parallel_pricing = use_parallel_pricing and use_labeling  # Only works with labeling
         self.n_pricing_workers = n_pricing_workers
         self.use_apriori_pruning = use_apriori_pruning  # Default: True
+        self.use_pure_dp_optimization = use_pure_dp_optimization  # Option 4: Pure DP fast path
         
         if self.use_parallel_pricing and not self.use_labeling:
             self.logger.warning("⚠️  Parallel pricing requires use_labeling=True. Disabling parallelization.")
@@ -2217,7 +2221,8 @@ class BranchAndPrice:
                     'MS': self.cg_solver.app_data['MS'][0],
                     'MIN_MS': self.cg_solver.app_data['MS_min'][0],
                     'max_columns_per_iter': self.max_columns_per_iter,
-                    'use_apriori_pruning': self.use_apriori_pruning
+                    'use_apriori_pruning': self.use_apriori_pruning,
+                    'use_pure_dp_optimization': self.use_pure_dp_optimization
                 }
                 
                 # Prepare arguments for each profile
@@ -2991,7 +2996,8 @@ class BranchAndPrice:
             MIN_MS=MIN_MS,
             col_id=next_col_id,
             branching_constraints=node.branching_constraints,
-            max_columns=self.max_columns_per_iter  # Return up to N columns
+            max_columns=self.max_columns_per_iter,  # Return up to N columns
+            use_pure_dp_optimization=self.use_pure_dp_optimization
         )
         
         return col_data_list

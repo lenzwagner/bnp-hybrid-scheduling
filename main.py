@@ -28,12 +28,46 @@ def main():
        Problem: Currently, a new multiprocessing.Pool is created in every iteration of the CG loop inside 'solve_node_with_cg'. This creates significant overhead.
        Solution: The Pool should only be created once at the beginning of the class or program and reused.
 
-    4. Constraint-Free Fast Path
-       Idea: Current 'run_fast_path' skips SP constraints but still checks 'if use_branch_constraints' (MP constraints) inside every inner loop iteration.
-       Optimization: Implement a dedicated "Pure DP" function that assumes NO constraints at all.
-       Why: In the early stages of Branch-and-Price (root node) and for many profiles deep in the tree, there are ZERO active constraints.
-       Removing the 'if' checks inside the tightest loops will improve CPU branch prediction and raw throughput.
-       Safety: This path must ONLY be entered if `not use_branch_constraints` AND `not use_sp_branching` (i.e., strict check that list of constraints is empty).
+    4. Unified Labeling Configuration
+       Problem: The labeling algorithm ('solve_pricing_for_profile_bnp' and 'run_labeling_algorithm') currently accepts 15+ individual arguments. This makes the signature brittle and hard to extend.
+       Solution: Encapsulate all static configuration (workers, max_time, ms, theta_lookup, etc.) into a single `LabelingConfig` object or dictionary.
+       Implementation:
+       - Define a config structure (dataclass or dict).
+       - Create this config ONCE in `BranchAndPrice.__init__`.
+       - Pass this single object to `_parallel_pricing_worker` and then to the labeling function.
+       - Unpack it inside the labeling algorithm.
+
+    5. Heuristic Pricing (Multi-Phase Pricing)
+       Problem: The exact labeling algorithm always finds the optimal column (most negative reduced cost), but this is expensive. In Column Generation, ANY column with negative reduced cost is sufficient to improve the master.
+       Solution: Implement a two-phase pricing approach:
+       - Phase 1 (Heuristic): Run labeling with aggressive pruning (e.g., keep max 10-20 labels per bucket, relaxed dominance). If rc < 0 found, add and stop.
+       - Phase 2 (Exact): Only if heuristic fails, run full exact labeling to prove optimality or find hard-to-reach columns.
+       Benefit: Massively speeds up early CG iterations. Most columns can be found heuristically.
+
+    6. A* Search with Backward Heuristic
+       Problem: Current bound pruning uses a simple "fastest completion" estimate. This can be significantly tightened.
+       Solution: Compute a backward heuristic h(state_t) that estimates the MINIMUM possible cost from time t to the end, assuming ideal conditions (max AI efficiency, no capacity conflicts).
+       Implementation:
+       - Precompute or dynamically calculate h(state_t) based on remaining required progress and theta lookup.
+       - In dominance: if Cost(state) + h(state) - gamma >= 0, prune immediately.
+       - The tighter h(state), the more labels can be pruned early.
+       Benefit: Reduces the number of states explored by orders of magnitude in deep trees.
+
+    7. State-Space Relaxation (ng-route inspired)
+       Problem: The rolling window history vector (h_t) causes exponential state space growth (2^(MS-1) states).
+       Solution: In heuristic pricing phase, partially or fully relax the rolling window constraint:
+       - Solve without tracking h_t (or with reduced MS).
+       - If found column happens to satisfy constraint (1p): add it.
+       - If violated: discard or attempt local repair.
+       Benefit: Dramatically reduces state space in heuristic phase. Most feasible columns will naturally satisfy the constraint.
+       Note: This is experimental and requires careful validation.
+
+    8. Bucket Refinement by Progress
+       Problem: Current bucketing groups states by (ai_count, hist, zeta). If buckets are too large, pairwise dominance checks become O(N^2) expensive within each bucket.
+       Solution: Subdivide buckets by discretized progress omega_t (e.g., round to nearest 0.1).
+       - Only check dominance between labels with similar progress.
+       - Labels far apart in progress rarely dominate each other anyway.
+       Benefit: Reduces dominance check overhead in buckets with many labels.
     """
     # ===========================
     # LOGGING CONFIGURATION
@@ -191,7 +225,8 @@ def main():
                                     max_columns_per_iter=50,
                                     use_parallel_pricing=use_parallel_pricing,
                                     n_pricing_workers=n_pricing_workers,
-                                    use_apriori_pruning=True)
+                                    use_apriori_pruning=True,
+                                    use_pure_dp_optimization=False)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)
 
         # Extract optimal schedules
