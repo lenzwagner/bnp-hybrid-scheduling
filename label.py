@@ -45,6 +45,42 @@ def check_strict_feasibility(history, next_val, MS, MIN_MS):
         return True
 
 
+def validate_column_history(path_pattern, MS, MIN_MS):
+    """
+    Validate that a complete column satisfies rolling window constraints.
+    
+    Used for post-validation of columns generated with relaxed history tracking.
+    
+    Args:
+        path_pattern: List of 0s and 1s representing the schedule
+        MS: Rolling window size
+        MIN_MS: Minimum human services required in window
+    
+    Returns:
+        bool: True if column satisfies all rolling window constraints, False otherwise
+    """
+    path_len = len(path_pattern)
+    
+    # Check every position in the schedule
+    for i in range(path_len):
+        # Determine the window to check
+        if i + 1 < MS:
+            # Not enough history yet - check if remaining slots can satisfy MIN_MS
+            current_sum = sum(path_pattern[:i+1])
+            remaining_slots = MS - (i + 1)
+            max_possible = current_sum + remaining_slots
+            if max_possible < MIN_MS:
+                return False
+        else:
+            #Complete window exists
+            window_start = i + 1 - MS
+            window = path_pattern[window_start:i+1]
+            if sum(window) < MIN_MS:
+                return False
+    
+    return True
+
+
 
 def _parse_branching_constraints(branch_constraints, recipient_id, branching_variant='mp'):
     """
@@ -359,7 +395,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 branch_constraints=None, branching_variant='mp',
                                 max_columns=10, use_pure_dp_optimization=True,
                                 use_heuristic_pricing=False, max_labels_per_bucket=None,
-                                stop_at_first_negative=False):
+                                stop_at_first_negative=False, use_relaxed_history=False):
     """
     Solve the pricing problem for a single recipient.
     
@@ -384,6 +420,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
         use_heuristic_pricing: Enable heuristic pricing mode (aggressive pruning)
         max_labels_per_bucket: Limit labels per bucket (None = unlimited/exact)
         stop_at_first_negative: Stop DP early if negative RC found
+        use_relaxed_history: Skip history tracking in DP (experimental, requires validation)
         
     Returns:
         List of best columns (dictionaries)
@@ -394,7 +431,9 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
     pruning_stats = {
         'lb': 0,
         'dominance': 0,
-        'printed_dominance': {}
+        'printed_dominance': {},
+        'relaxation_generated': 0,
+        'relaxation_rejected': 0
     }
 
 
@@ -736,8 +775,117 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                      best_columns.append(col_candidate)
                 timers['final_step'] += time.time() - t_final_start
 
+    # --- RELAXED DP PATH (State-Space Relaxation) ---
+    def run_relaxed_dp():
+        """
+        Relaxed DP WITHOUT history tracking - experimental optimization.
+        Bucket key: (ai_count,) only - NO hist component!
+        Validates columns afterward with validate_column_history().
+        """
+        for j in candidate_workers:
+            effective_min_duration = min(int(s_k), time_until_end)
+            start_tau = r_k + effective_min_duration - 1
+
+
+            for tau in range(start_tau, max_time + 1):
+                is_timeout_scenario = (tau == max_time)
+                start_cost = -pi_dict.get((j, r_k), 0)
+
+                current_states = {(0,): [(start_cost, 1.0, [1])]}  # Bucket: (ai_count,)
+
+                t_dp_start = time.time()
+                for t in range(r_k + 1, tau):
+                    next_states = {}
+                    
+                    for bucket_key, bucket_list in current_states.items():
+                        ai_count = bucket_key[0]
+                        
+                        for cost, prog, path in bucket_list:
+                            if use_bound_pruning:
+                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+                                if lb >= 0:
+                                    pruning_stats['lb'] += 1
+                                    continue
+
+                            remaining_steps = tau - t + 1
+                            if not is_timeout_scenario and obj_mode > 0.5:
+                                if prog + remaining_steps * 1.0 < s_k - epsilon:
+                                    continue
+
+                            # Therapist (NO history check!)
+                            cost_ther = cost - pi_dict.get((j, t), 0)
+                            prog_ther = prog + 1.0
+                            bucket_key_ther = (ai_count,)
+                            if bucket_key_ther not in next_states:
+                                next_states[bucket_key_ther] = []
+                            next_states[bucket_key_ther].append((cost_ther, prog_ther, path + [1]))
+
+                            # AI (NO history check!)
+                            efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                            cost_ai = cost
+                            prog_ai = prog + efficiency
+                            bucket_key_ai = (ai_count + 1,)
+                            if bucket_key_ai not in next_states:
+                                next_states[bucket_key_ai] = []
+                            next_states[bucket_key_ai].append((cost_ai, prog_ai, path + [0]))
+
+                    current_states = next_states
+                    if not current_states: break
+                timers['state_expansion'] += time.time() - t_dp_start
+
+                # Final Step with validation
+                t_final_start = time.time()
+                for bucket_key, bucket_list in current_states.items():
+                    ai_count = bucket_key[0]
+
+                    for cost, prog, path in bucket_list:
+                        possible_moves = [1]
+                        if is_timeout_scenario: possible_moves.append(0)
+
+                        for move in possible_moves:
+                            if move == 1:
+                                final_cost = cost - pi_dict.get((j, tau), 0)
+                                final_prog = prog + 1.0
+                            else:
+                                eff = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                                final_cost = cost
+                                final_prog = prog + eff
+
+                            final_path = path + [move]
+                            condition_met = (final_prog >= s_k - epsilon)
+                            is_valid_end = condition_met if obj_mode > 0.5 else (condition_met or is_timeout_scenario)
+
+                            if is_valid_end:
+                                duration = tau - r_k + 1
+                                reduced_cost = (obj_mode * duration) + final_cost - gamma_k
+                                
+                                if reduced_cost < -epsilon:
+                                    pruning_stats['relaxation_generated'] += 1
+                                    
+                                    # POST-VALIDATION
+                                    if validate_column_history(final_path, ms, min_ms):
+                                        col_candidate = {
+                                            'k': recipient_id,
+                                            'worker': j,
+                                            'start': r_k,
+                                            'end': tau,
+                                            'duration': duration,
+                                            'reduced_cost': reduced_cost,
+                                            'final_progress': final_prog,
+                                            'x_vector': generate_full_column_vector(j, final_path, r_k, tau, max_time, len(workers)),
+                                            'path_pattern': final_path
+                                        }
+                                        best_columns.append(col_candidate)
+                                    else:
+                                        pruning_stats['relaxation_rejected'] += 1
+                timers['final_step'] += time.time() - t_final_start
+
     # --- EXECUTION CONTROL: Choose the fastest applicable path ---
-    if use_pure_dp_optimization and not use_sp_branching and not use_branch_constraints:
+    if use_pure_dp_optimization and use_relaxed_history and not use_sp_branching and not use_branch_constraints:
+        # Path 0: RELAXED DP (Fastest, but experimental - no history tracking!)
+        run_relaxed_dp()
+        candidate_workers = []  # Skip sequential loop
+    elif use_pure_dp_optimization and not use_sp_branching and not use_branch_constraints:
         # Path 1: PURE DP (Fastest - No constraints at all)
         run_pure_dp()
         candidate_workers = []  # Skip sequential loop
@@ -1231,7 +1379,8 @@ def solve_pricing_multi_phase(
     use_bound_pruning=True, dominance_mode='bucket',
     branch_constraints=None, branching_variant='mp',
     max_columns=10, use_pure_dp_optimization=True,
-    use_heuristic_pricing=True, heuristic_max_labels=20
+    use_heuristic_pricing=True, heuristic_max_labels=20,
+    use_relaxed_history=False
 ):
     """
     Multi-phase pricing with heuristic + exact fallback.
@@ -1262,7 +1411,8 @@ def solve_pricing_multi_phase(
             # Heuristic settings:
             use_heuristic_pricing=True,
             max_labels_per_bucket=heuristic_max_labels,
-            stop_at_first_negative=True
+            stop_at_first_negative=True,
+            use_relaxed_history=use_relaxed_history
         )
         
         # Check if heuristic found columns with negative reduced cost
@@ -1286,7 +1436,8 @@ def solve_pricing_multi_phase(
         # Exact settings (no heuristic):
         use_heuristic_pricing=False,
         max_labels_per_bucket=None,
-        stop_at_first_negative=False
+        stop_at_first_negative=False,
+        use_relaxed_history=use_relaxed_history
     )
 
 
@@ -1311,7 +1462,8 @@ def solve_pricing_for_profile_bnp(
     max_columns=10,
     use_pure_dp_optimization=True,
     use_heuristic_pricing=False,
-    heuristic_max_labels=20
+    heuristic_max_labels=20,
+    use_relaxed_history=False
 ):
     """
     Wrapper function for Branch-and-Price integration.
@@ -1373,7 +1525,8 @@ def solve_pricing_for_profile_bnp(
         max_columns=max_columns,
         use_pure_dp_optimization=use_pure_dp_optimization,
         use_heuristic_pricing=use_heuristic_pricing,
-        heuristic_max_labels=heuristic_max_labels
+        heuristic_max_labels=heuristic_max_labels,
+        use_relaxed_history=use_relaxed_history
     )
     
     if not best_columns:

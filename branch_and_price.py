@@ -98,7 +98,8 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         max_columns=cg_solver_data['max_columns_per_iter'],
         use_pure_dp_optimization=cg_solver_data.get('use_pure_dp_optimization', True),
         use_heuristic_pricing=cg_solver_data.get('use_heuristic_pricing', False),
-        heuristic_max_labels=cg_solver_data.get('heuristic_max_labels', 20)
+        heuristic_max_labels=cg_solver_data.get('heuristic_max_labels', 20),
+        use_relaxed_history=cg_solver_data.get('use_relaxed_history', False)
     )
     
     return (profile, col_data_list)
@@ -123,7 +124,7 @@ class BranchAndPrice:
                  use_labeling=False, max_columns_per_iter=10, use_parallel_pricing=False, 
                  n_pricing_workers=4, debug_mode=True, use_apriori_pruning=True, 
                  use_pure_dp_optimization=True, use_persistent_pool=True,
-                 use_heuristic_pricing=True, heuristic_max_labels=20):
+                 use_heuristic_pricing=True, heuristic_max_labels=20, use_relaxed_history=False):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -145,7 +146,8 @@ class BranchAndPrice:
             debug_mode: If True, exceptions are re-raised instead of being caught (for debugging)
             use_apriori_pruning: If True, use A Priori Bound to skip unpromising profiles
             use_pure_dp_optimization: If True, enable Pure DP fast path when no constraints (Option 4)
-            use_persistent_pool: If True, create persistent multiprocessing pool (TODO #3)
+            use_persistent_pool: If True, create persistent multiprocessing pool
+            use_relaxed_history: If True, relax history tracking in heuristic pricing
         """
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -184,6 +186,7 @@ class BranchAndPrice:
         self.use_persistent_pool = use_persistent_pool
         self.use_heuristic_pricing = use_heuristic_pricing
         self.heuristic_max_labels = heuristic_max_labels
+        self.use_relaxed_history = use_relaxed_history
         
         # Create persistent multiprocessing pool
         self.pricing_pool = None
@@ -2249,7 +2252,8 @@ class BranchAndPrice:
                     'use_apriori_pruning': self.use_apriori_pruning,
                     'use_pure_dp_optimization': self.use_pure_dp_optimization,
                     'use_heuristic_pricing': self.use_heuristic_pricing,
-                    'heuristic_max_labels': self.heuristic_max_labels
+                    'heuristic_max_labels': self.heuristic_max_labels,
+                    'use_relaxed_history': self.use_relaxed_history
                 }
                 
                 # Prepare arguments for each profile

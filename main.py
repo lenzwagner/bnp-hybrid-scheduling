@@ -9,16 +9,7 @@ def main():
     Main function to run Column Generation or Branch-and-Price algorithm.
 
     TODOs:
-    1. A* Search with Backward Heuristic
-       Problem: Current bound pruning uses a simple "fastest completion" estimate. This can be significantly tightened.
-       Solution: Compute a backward heuristic h(state_t) that estimates the MINIMUM possible cost from time t to the end, assuming ideal conditions (max AI efficiency, no capacity conflicts).
-       Implementation:
-       - Precompute or dynamically calculate h(state_t) based on remaining required progress and theta lookup.
-       - In dominance: if Cost(state) + h(state) - gamma >= 0, prune immediately.
-       - The tighter h(state), the more labels can be pruned early.
-       Benefit: Reduces the number of states explored by orders of magnitude in deep trees.
-
-    2. State-Space Relaxation (ng-route inspired)
+    1. State-Space Relaxation (ng-route inspired)
        Problem: The rolling window history vector (h_t) causes exponential state space growth (2^(MS-1) states).
        Solution: In heuristic pricing phase, partially or fully relax the rolling window constraint:
        - Solve without tracking h_t (or with reduced MS).
@@ -187,7 +178,8 @@ def main():
                                     use_pure_dp_optimization=True,
                                     use_persistent_pool=True,
                                     use_heuristic_pricing=False,
-                                    heuristic_max_labels=20)
+                                    heuristic_max_labels=20,
+                                    use_relaxed_history=False)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)
 
         # Extract optimal schedules
