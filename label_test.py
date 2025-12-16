@@ -56,13 +56,6 @@ def add_state_to_buckets(buckets, cost, prog, ai_count, hist, path, recipient_id
 
     zeta: Tuple of binary deviation indicators for branch constraints (None if no constraints)
     epsilon: Tolerance for float comparisons (default 1e-9)
-
-    TODO: Performance Optimization - Hash-based Deduplication
-          Current complexity is O(bucket_size) for dominance checks.
-          Consider implementing hash-based deduplication before bucket insertion:
-          - state_hash = hash((ai_count, hist, round(cost, 6), round(prog, 6)))
-          - Check if state_hash in seen_states -> O(1) lookup
-          - Benefits: Faster duplicate detection, reduces bucket iterations
     """
     # Bucket key includes zeta if branch constraints are active
     if zeta is not None:

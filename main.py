@@ -66,7 +66,7 @@ def main():
 
     # Learning parameters
     app_data = {
-        'learn_type': ['lin'],  # Learning curve type: 'exp', 'sigmoid', 'lin', or numeric value
+        'learn_type': ['sigmoid'],  # Learning curve type: 'exp', 'sigmoid', 'lin', or numeric value
         'theta_base': [0.02],  # Base effectiveness
         'lin_increase': [0.01],  # Linear increase rate (for 'lin' type)
         'k_learn': [0.01],  # Learning rate (for 'exp' and 'sigmoid')
