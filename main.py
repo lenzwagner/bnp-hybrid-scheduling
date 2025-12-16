@@ -10,55 +10,15 @@ def main():
 
     Labeling Algorithm Performance Optimizations:
     
-    1. State-Space Relaxation (ng-route inspired)
-       Problem: Rolling window history vector causes exponential state space growth (2^(MS-1) states).
-       Solution: Relax history tracking during DP expansion, validate columns afterward.
-       Status: ✅ IMPLEMENTED but DISABLED (use_relaxed_history=False)
-       Result: ❌ UNFAVORABLE - High rejection rate negates state space reduction benefits
-       
-    2. A* Backward Heuristic
-       Problem: Simple bound pruning misses tighter estimates based on remaining work.
-       Solution: Compute h(state) = minimum cost-to-completion assuming best case.
-       - Prune states where current_cost + h(state) - gamma >= 0
-       - Uses maximum AI efficiency and zero future pi values
-       Status: ⏸️ NOT IMPLEMENTED
-       Benefit: Earlier state pruning, reduced DP tree depth
-       
-    3. Bitmasking for History Representation
-       Problem: Tuple-based history (0,1,0,1,...) is memory-inefficient.
-       Solution: Use integer bitmask to represent history:
-       - History as single integer instead of tuple
-       - Bitwise operations for updates (left shift + OR)
-       - Faster comparisons and lower memory footprint
-       Status: ⏸️ NOT IMPLEMENTED
-       Benefit: Reduced memory usage, faster history operations
-       
-    4. Enhanced Dominance Rules
-       Problem: Current dominance only checks (cost, prog) within buckets.
-       Solution: More aggressive dominance:
-       - Cross-bucket dominance (compare across different histories)
-       - Backward dominance (check if state can lead to better solutions)
-       - Pareto-optimal frontier tracking
-       Status: ✅ PARTIALLY IMPLEMENTED (bucket-based dominance)
-       Enhancement: Add cross-bucket and bidirectional checks
-       
-    5. State Caching / Memoization
-       Problem: Similar subproblems solved multiple times across workers/time steps.
-       Solution: Cache DP results for (r_k, s_k, tau, constraints) combinations:
-       - Store best costs for state signatures
-       - Reuse across similar profiles
-       - Clear cache between CG iterations
-       Status: ⏸️ NOT IMPLEMENTED
-       Benefit: Avoid redundant DP solves, faster pricing
-       
-    6. Incremental DP Updates
-       Problem: Branching changes constraints, but most DP work is identical.
-       Solution: Reuse DP states from parent node:
-       - Identify which states remain valid under new constraints
-       - Only re-expand invalidated portions of state graph
-       - Warm-start from parent solution
-       Status: ⏸️ NOT IMPLEMENTED
-       Benefit: Faster child node pricing, reduced branching overhead
+    1 JIT Compilation (Cython / Numba)
+       Problem: Pure Python is slow for tight DP loops with millions of iterations.
+       Solution: Compile performance-critical functions with Cython or Numba:
+       - Target: check_strict_feasibility, compute_lower_bound, inner DP loops
+       - Requires refactoring to use NumPy arrays instead of tuples/dicts
+       - Alternative: Cython for entire DP module with C-level performance
+       Status: NOT IMPLEMENTED
+       Benefit: 10-100x speedup for DP expansion, but high refactoring effort
+       Challenge: Current code uses dynamic structures (dicts, tuples) incompatible with Numba
     """
     # ===========================
     # LOGGING CONFIGURATION
