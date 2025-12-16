@@ -9,15 +9,7 @@ def main():
     Main function to run Column Generation or Branch-and-Price algorithm.
 
     TODOs:
-    1. Bitmasking for History Tracking
-       What changed: Instead of using Python tuples (e.g., (0, 1, 0)) to track the recent schedule history for the rolling window constraints, I implemented Integer Bitmasking.
-       How it works: The history is now stored as a single integer. We use bitwise operations (left shift <<, bitwise AND &, bitwise OR |) to update the history and check for feasibility.
-       Benefit:
-       - Speed: Bitwise operations are natively supported by the CPU and are extremely fast compared to creating, slicing, and concatenating tuple objects.
-       - Memory: Storing a single integer is much more memory-efficient than storing tuple objects, reducing overhead.
-       - Hashing: Integers can be hashed and compared much faster than tuples, speeding up the dominance checks in the dynamic programming buckets.
-
-    2. A* Search with Backward Heuristic
+    1. A* Search with Backward Heuristic
        Problem: Current bound pruning uses a simple "fastest completion" estimate. This can be significantly tightened.
        Solution: Compute a backward heuristic h(state_t) that estimates the MINIMUM possible cost from time t to the end, assuming ideal conditions (max AI efficiency, no capacity conflicts).
        Implementation:
@@ -26,7 +18,7 @@ def main():
        - The tighter h(state), the more labels can be pruned early.
        Benefit: Reduces the number of states explored by orders of magnitude in deep trees.
 
-    3. State-Space Relaxation (ng-route inspired)
+    2. State-Space Relaxation (ng-route inspired)
        Problem: The rolling window history vector (h_t) causes exponential state space growth (2^(MS-1) states).
        Solution: In heuristic pricing phase, partially or fully relax the rolling window constraint:
        - Solve without tracking h_t (or with reduced MS).
