@@ -99,7 +99,8 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         use_pure_dp_optimization=cg_solver_data.get('use_pure_dp_optimization', True),
         use_heuristic_pricing=cg_solver_data.get('use_heuristic_pricing', False),
         heuristic_max_labels=cg_solver_data.get('heuristic_max_labels', 20),
-        use_relaxed_history=cg_solver_data.get('use_relaxed_history', False)
+        use_relaxed_history=cg_solver_data.get('use_relaxed_history', False),
+        use_numba_labeling=cg_solver_data.get('use_numba_labeling', False)
     )
     
     return (profile, col_data_list)
@@ -175,6 +176,7 @@ class BranchAndPrice:
         self.use_heuristic_pricing = label_dict['use_heuristic_pricing'] if label_dict is not None else False
         self.heuristic_max_labels = label_dict['heuristic_max_labels'] if label_dict is not None else 20
         self.use_relaxed_history = label_dict['use_relaxed_history'] if label_dict is not None else True
+        self.use_numba_labeling = label_dict['use_numba_labeling'] if label_dict is not None else False
         
         # Create persistent multiprocessing pool
         self.pricing_pool = None
@@ -2241,7 +2243,8 @@ class BranchAndPrice:
                     'use_pure_dp_optimization': self.use_pure_dp_optimization,
                     'use_heuristic_pricing': self.use_heuristic_pricing,
                     'heuristic_max_labels': self.heuristic_max_labels,
-                    'use_relaxed_history': self.use_relaxed_history
+                    'use_relaxed_history': self.use_relaxed_history,
+                    'use_numba_labeling': self.use_numba_labeling
                 }
                 
                 # Prepare arguments for each profile
@@ -3022,7 +3025,8 @@ class BranchAndPrice:
             col_id=next_col_id,
             branching_constraints=node.branching_constraints,
             max_columns=self.max_columns_per_iter,  # Return up to N columns
-            use_pure_dp_optimization=self.use_pure_dp_optimization
+            use_pure_dp_optimization=self.use_pure_dp_optimization,
+            use_numba_labeling=self.use_numba_labeling
         )
         
         return col_data_list

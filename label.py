@@ -6,7 +6,18 @@ the pricing problem in column generation, without validation, testing,
 or comparison utilities.
 """
 import sys
+import heapq
 import time
+import math
+import logging
+
+try:
+    import numpy as np
+    import label_numba
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+    print("Warning: Numba not found, falling back to Python labeling.")
 from logging_config import get_logger
 
 # Initialize logger
@@ -436,9 +447,6 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
         'relaxation_rejected': 0
     }
 
-
-    time_until_end = max_time - r_k + 1
-
     # --- TIMING INSTRUMENTATION ---
     timers = {
         'init': 0.0,
@@ -458,7 +466,9 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
         logger.info(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (eliminated {eliminated_workers})")
     else:
         logger.info(f"Recipient with entry {r_k} and req {s_k} {recipient_id:2d}: Candidate workers = {candidate_workers} (no dominance)")
-    
+  
+    time_until_end = max_time - r_k + 1
+
     # Pre-build constraint lookup structures for efficient access
     mp_cuts, left_patterns, right_patterns, forbidden_lookup = _parse_branching_constraints(branch_constraints, recipient_id, branching_variant)
     forbidden_schedules = mp_cuts  # Kept for backward compat
@@ -1370,6 +1380,7 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
         logger.print(f"\n{'='*100}\n")
 
 
+    
     return best_columns
 
 
@@ -1463,7 +1474,8 @@ def solve_pricing_for_profile_bnp(
     use_pure_dp_optimization=True,
     use_heuristic_pricing=False,
     heuristic_max_labels=20,
-    use_relaxed_history=False
+    use_relaxed_history=False,
+    use_numba_labeling=False
 ):
     """
     Wrapper function for Branch-and-Price integration.
@@ -1527,7 +1539,74 @@ def solve_pricing_for_profile_bnp(
         use_heuristic_pricing=use_heuristic_pricing,
         heuristic_max_labels=heuristic_max_labels,
         use_relaxed_history=use_relaxed_history
-    )
+    ) if not (use_numba_labeling and HAS_NUMBA) else []
+    
+    # === NUMBA OPTIMIZATION ===
+    if use_numba_labeling and HAS_NUMBA:
+        # Prepare data for Numba
+        # Convert pi_dict to matrix
+        max_worker_id = max(workers) if workers else 0
+        pi_matrix = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.float64)
+        for (w, t), val in duals_pi.items():
+            if w <= max_worker_id and t <= max_time:
+                pi_matrix[w, t] = val
+
+        # Arrays
+        workers_arr = np.array(workers, dtype=np.int64)
+        theta_arr = np.array(theta_lookup, dtype=np.float64)
+        
+        # Call Numba
+        # returns List of (j, rc, r_k, tau, path_mask, prog)
+        raw_cols = label_numba.run_fast_path_numba(
+            int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
+            pi_matrix, workers_arr, int(max_time), 
+            int(MS), int(MIN_MS), theta_arr, 1e-6
+        )
+        
+        # Convert to best_columns format
+        for col_tuple in raw_cols:
+            w_id = int(col_tuple[0])
+            rc = float(col_tuple[1])
+            start_t = int(col_tuple[2])
+            end_t = int(col_tuple[3])
+            path_mask = int(col_tuple[4])
+            final_prog = float(col_tuple[5])
+            
+            # Reconstruct path pattern
+            # Duration is end_t - start_t
+            # Wait, end_t in Numba was 'tau', and loop was range(r_k+1, tau).
+            # Duration was calculated as tau - r_k.
+            # So start=r_k, end=tau-1?
+            # Original code: start=r_k.
+            # If path has length D. t goes from r_k to r_k + D - 1.
+            # My Numba code shifts: (1 << (t - r_k)).
+            # If t = r_k, shift 0.
+            # If t = tau - 1, shift tau - 1 - r_k.
+            # So bitmask covers bits 0 to duration-1.
+            
+            duration = end_t - start_t + 1
+            path_pattern = []
+            for i in range(duration):
+                if (path_mask >> i) & 1:
+                    path_pattern.append(1)
+                else:
+                    path_pattern.append(0)
+            
+            best_columns.append({
+                'worker': w_id,
+                'reduced_cost': rc,
+                'start': start_t,
+                'end': end_t, # Inclusive end
+                'path_pattern': path_pattern,
+                'final_progress': final_prog,
+                'duration': duration,
+                'x_vector': generate_full_column_vector(w_id, path_pattern, start_t, end_t, max_time, len(workers))
+            })
+        
+        # Sort by RC, then Duration, then Start
+        best_columns.sort(key=lambda x: (x['reduced_cost'], x['duration'], x['start'], x['worker']))
+        if len(best_columns) > max_columns:
+            best_columns = best_columns[:max_columns]
     
     if not best_columns:
         return []

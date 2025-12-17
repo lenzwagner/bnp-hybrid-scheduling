@@ -104,7 +104,11 @@ def main():
                      'n_pricing_workers': n_pricing_workers,
                      'debug_mode': True, 'use_apriori_pruning': True, 'use_pure_dp_optimization': True,
                      'use_persistent_pool': True,
-                     'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False}
+                     'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
+                     'use_numba_labeling': True}
+    
+    # TODO: Perform Numba vs Non-Numba comparison for various seeds to verify stability
+    # TODO: Compare final solutions (lambda values and schedules) between Numba and Python versions
 
     # ===========================
     # CONFIGURATION SUMMARY
