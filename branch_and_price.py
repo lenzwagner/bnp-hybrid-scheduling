@@ -120,11 +120,7 @@ class BranchAndPrice:
     """
 
     def __init__(self, cg_solver, branching_strategy='mp', search_strategy='dfs', verbose=True,
-                 ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True,
-                 use_labeling=False, max_columns_per_iter=10, use_parallel_pricing=False, 
-                 n_pricing_workers=4, debug_mode=True, use_apriori_pruning=True, 
-                 use_pure_dp_optimization=True, use_persistent_pool=True,
-                 use_heuristic_pricing=True, heuristic_max_labels=20, use_relaxed_history=False):
+                 ip_heuristic_frequency=10, early_incumbent_iteration=0, save_lps=True, label_dict=None):
         """
         Initialize Branch-and-Price with existing CG solver.
 
@@ -139,15 +135,7 @@ class BranchAndPrice:
                                       - If > 0: solve RMP as IP after this iteration,
                                                then continue CG without further IP solves
             save_lps: If True, save LP and SOL files during solving
-            use_labeling: If True, use labeling algorithm for pricing instead of Gurobi
-            max_columns_per_iter: Maximum number of columns to return per recipient per iteration
-            use_parallel_pricing: If True, solve pricing problems in parallel (only with use_labeling=True)
-            n_pricing_workers: Number of parallel workers for pricing (only if use_parallel_pricing=True)
-            debug_mode: If True, exceptions are re-raised instead of being caught (for debugging)
-            use_apriori_pruning: If True, use A Priori Bound to skip unpromising profiles
-            use_pure_dp_optimization: If True, enable Pure DP fast path when no constraints (Option 4)
-            use_persistent_pool: If True, create persistent multiprocessing pool
-            use_relaxed_history: If True, relax history tracking in heuristic pricing
+            label_dict: Dictionary of labels configurations
         """
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -160,7 +148,7 @@ class BranchAndPrice:
         # Output control
         self.verbose = verbose
         self.save_lps = save_lps
-        self.debug_mode = debug_mode  # DEBUG MODE: If True, re-raise exceptions
+        self.debug_mode = label_dict['debug_mode']  if label_dict is not None else True # DEBUG MODE: If True, re-raise exceptions
 
         # Global bounds
         self.incumbent = float('inf')  # Best IP solution (upper bound)
@@ -175,18 +163,18 @@ class BranchAndPrice:
         # Search and Branching Configuration
         self.branching_strategy = branching_strategy
         self.search_strategy = search_strategy
-        self.use_labeling = use_labeling  # Use labeling algorithm for pricing
-        self.max_columns_per_iter = max_columns_per_iter
+        self.use_labeling = label_dict['use_labeling'] if label_dict is not None else False # Use labeling algorithm for pricing
+        self.max_columns_per_iter = label_dict['max_columns_per_iter'] if label_dict is not None else 5
         
         # Parallelization Configuration
-        self.use_parallel_pricing = use_parallel_pricing and use_labeling  # Only works with labeling
-        self.n_pricing_workers = n_pricing_workers
-        self.use_apriori_pruning = use_apriori_pruning  # Default: True
-        self.use_pure_dp_optimization = use_pure_dp_optimization  # Option 4: Pure DP fast path
-        self.use_persistent_pool = use_persistent_pool
-        self.use_heuristic_pricing = use_heuristic_pricing
-        self.heuristic_max_labels = heuristic_max_labels
-        self.use_relaxed_history = use_relaxed_history
+        self.use_parallel_pricing = label_dict['use_parallel_pricing'] and label_dict['use_labeling'] if label_dict is not None else False # Only works with labeling
+        self.n_pricing_workers = label_dict['n_pricing_workers']if label_dict is not None else 1
+        self.use_apriori_pruning = label_dict['use_apriori_pruning'] if label_dict is not None else True # Default: True
+        self.use_pure_dp_optimization = label_dict['use_pure_dp_optimization'] if label_dict is not None else True # Option 4: Pure DP fast path
+        self.use_persistent_pool = label_dict['use_persistent_pool'] if label_dict is not None else True
+        self.use_heuristic_pricing = label_dict['use_heuristic_pricing'] if label_dict is not None else False
+        self.heuristic_max_labels = label_dict['heuristic_max_labels'] if label_dict is not None else 20
+        self.use_relaxed_history = label_dict['use_relaxed_history'] if label_dict is not None else True
         
         # Create persistent multiprocessing pool
         self.pricing_pool = None

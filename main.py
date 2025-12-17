@@ -99,6 +99,13 @@ def main():
     detailed_tree = False  # Show detailed info on nodes
     save_tree_path = 'bnp_tree.png'  # Path to save (None to not save)
 
+    # Define labeling specs
+    labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 'use_parallel_pricing': use_parallel_pricing,
+                     'n_pricing_workers': n_pricing_workers,
+                     'debug_mode': True, 'use_apriori_pruning': True, 'use_pure_dp_optimization': True,
+                     'use_persistent_pool': True,
+                     'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False}
+
     # ===========================
     # CONFIGURATION SUMMARY
     # ===========================
@@ -172,16 +179,7 @@ def main():
                                     ip_heuristic_frequency=5,
                                     early_incumbent_iteration=1,
                                     save_lps=save_lps,
-                                    use_labeling=True,
-                                    max_columns_per_iter=50,
-                                    use_parallel_pricing=use_parallel_pricing,
-                                    n_pricing_workers=n_pricing_workers,
-                                    use_apriori_pruning=True,
-                                    use_pure_dp_optimization=True,
-                                    use_persistent_pool=True,
-                                    use_heuristic_pricing=False,
-                                    heuristic_max_labels=20,
-                                    use_relaxed_history=False)
+                                    label_dict=labeling_spec)
         results = bnp_solver.solve(time_limit=3600, max_nodes=300)
 
         # Extract optimal schedules
