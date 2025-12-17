@@ -106,10 +106,15 @@ def main():
                      'debug_mode': True, 'use_apriori_pruning': True, 'use_pure_dp_optimization': True,
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
-                     'use_numba_labeling': True}
+                     'use_numba_labeling': False}
     
     # TODO: Perform Numba vs Non-Numba comparison for various seeds to verify stability
-    # TODO: Test branching constraints compliance with Numba implementation
+    # TODO: Test branching constraints compliance with Numba implementation.
+    #       Currently missing: 
+    #       1) Variable Fixing (SP-Branching) via mask arrays
+    #       2) No-Good Cuts (MP-Branching) via Zeta-vectors/bitmasks
+    #       3) Pattern-Branching via Rho/Mu-vectors
+    #       4) Flattening of BranchingConstraint objects into Numba-compatible NumPy structures
 
     # ===========================
     # CONFIGURATION SUMMARY
