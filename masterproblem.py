@@ -246,7 +246,7 @@ class MasterProblem_d:
                                 #print(f'{v.VarName} = {v.X}, Obj-Coefficient: {round(v.Obj, 2)}')
 
         else:
-            active_keys = [k for k, v in lambda_list_cg.items() if v > 0]
+            active_keys = [k for k, v in lambda_list_cg.items() if (v['value'] if isinstance(v, dict) else v) > 1e-6]
 
         if isinstance(app_data, (int, float)):
             active_solutions = {'x': {}, 'LOS': {}, 'y': {}, 'z': {}, 'S': {}, 'l': {}}
@@ -254,14 +254,14 @@ class MasterProblem_d:
             active_solutions = {'x': {}, 'LOS': {}, 'y': {}, 'z': {}, 'App': {}, 'S': {}, 'l': {}}
         for key in active_keys:
             if key in sols_dict['x']:
-                active_solutions['x'].update(sols_dict['x'][key])
-                active_solutions['LOS'].update(sols_dict['LOS'][key])
-                active_solutions['y'].update(sols_dict['y'][key])
-                active_solutions['z'].update(sols_dict['z'][key])
-                active_solutions['S'].update(sols_dict['S'][key])
-                active_solutions['l'].update(sols_dict['l'][key])
+                active_solutions['x'].update(sols_dict['x'].get(key, {}))
+                active_solutions['LOS'].update(sols_dict['LOS'].get(key, {}))
+                active_solutions['y'].update(sols_dict['y'].get(key, {}))
+                active_solutions['z'].update(sols_dict['z'].get(key, {}))
+                active_solutions['S'].update(sols_dict['S'].get(key, {}))
+                active_solutions['l'].update(sols_dict['l'].get(key, {}))
                 if not isinstance(app_data, (int, float)):
-                    active_solutions['App'].update(sols_dict['App'][key])
+                    active_solutions['App'].update(sols_dict['App'].get(key, {}))
         return active_solutions
 
     def set_branching_bound(self, var, bound_type, value):

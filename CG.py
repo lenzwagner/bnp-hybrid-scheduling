@@ -610,7 +610,8 @@ class ColumnGeneration:
             'is_integral': self.is_integral,
             'num_iterations': self.num_iterations,
             'total_time': self.total_time,
-            'compact_obj': self.problem.Model.objVal
+            'compact_obj': self.problem.Model.objVal,
+            'lambdas': {(p, a): {'value': var.X, 'obj': var.Obj} for (p, a), var in self.master.lmbda.items() if var.X > 1e-6}
         }
 
 def solve_subproblem_for_patient(args):

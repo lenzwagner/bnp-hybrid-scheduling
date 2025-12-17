@@ -5,6 +5,7 @@ from bnp_node import BnPNode
 import gurobipy as gu
 import copy
 import logging
+import os
 
 
 # ============================================================================
@@ -140,6 +141,9 @@ class BranchAndPrice:
         """
         # Logger
         self.logger = logging.getLogger(__name__)
+        
+        # Create Sols/Integral directory
+        os.makedirs('Sols/Integral', exist_ok=True)
 
         # Node management
         self.nodes = {}  # {node_id -> BnPNode}
@@ -231,7 +235,6 @@ class BranchAndPrice:
         self.logger.info("=" * 100 + "\n")
 
         # Initialize LP-folder
-        import os
         os.makedirs("results", exist_ok=True)
         os.makedirs("LPs/MP/LPs", exist_ok=True)
         os.makedirs("LPs/MP/Root", exist_ok=True)
@@ -282,7 +285,7 @@ class BranchAndPrice:
         self.logger.info(f"Solving RMP as IP with columns generated so far...")
         self.logger.info(f"CG will continue afterwards until convergence.\n")
 
-        success = self._solve_rmp_as_ip(cg_solver.master, context="Early Incumbent")
+        success = self._solve_rmp_as_ip(cg_solver.master, context="Early Incumbent", node_id=0)
 
         if success:
             self.incumbent_computed_early = True
@@ -476,7 +479,7 @@ class BranchAndPrice:
             self.logger.debug("\n[Root] Final LP relaxation check...")
             self.cg_solver.master.solRelModel()
 
-            lambda_list_root = {key: var.X for key, var in self.cg_solver.master.lmbda.items()}
+            lambda_list_root = {key: {'value': var.X, 'obj': var.Obj} for key, var in self.cg_solver.master.lmbda.items() if var.X > 1e-6}
 
             is_integral, lp_bound, most_frac_info = self.cg_solver.master.check_fractionality()
 
@@ -528,7 +531,7 @@ class BranchAndPrice:
         This is the default behavior (when early_incumbent_iteration = 0).
         """
         master = self.cg_solver.master
-        success = self._solve_rmp_as_ip(master, context="Final Incumbent")
+        success = self._solve_rmp_as_ip(master, context="Final Incumbent", node_id=0)
 
         if success:
             self.logger.info(f"\n{'=' * 100}")
@@ -541,7 +544,7 @@ class BranchAndPrice:
         else:
             self.logger.warning(f"\n⚠️  Could not compute final incumbent")
 
-    def _solve_rmp_as_ip(self, master, context="IP Solve"):
+    def _solve_rmp_as_ip(self, master, context="IP Solve", node_id=None):
         """
         Solve the Restricted Master Problem as Integer Program.
 
@@ -590,8 +593,8 @@ class BranchAndPrice:
                     )
                     lambda_assignments = {}
                     for (p, a), var in master.lmbda.items():
-                        if var.X > 0:
-                            lambda_assignments[(p, a)] = var.X
+                        if var.X > 1e-6:
+                            lambda_assignments[(p, a)] = {'value': var.X, 'obj': var.Obj}
 
                     self.incumbent_lambdas = lambda_assignments
 
@@ -600,6 +603,13 @@ class BranchAndPrice:
 
                     self.logger.info(f"\n✅ New incumbent found: {self.incumbent:.6f}")
                     self.logger.info(f"   Gap: {self.gap:.4%}\n")
+                    
+                    # Save solution file
+                    if master.Model.SolCount > 0:
+                        sol_name = f"Node_{node_id if node_id is not None else 'root'}.sol"
+                        sol_path = os.path.join('Sols/Integral', sol_name)
+                        master.Model.write(sol_path)
+                        self.logger.info(f"   [IP Save] Solution saved to {sol_path}")
 
                     success = True
                     result_obj = ip_obj
@@ -623,13 +633,20 @@ class BranchAndPrice:
                         )
                         lambda_assignments = {}
                         for (p, a), var in master.lmbda.items():
-                            if var.X > 0:
-                                lambda_assignments[(p, a)] = int(round(var.X))
+                            if var.X > 1e-6:
+                                lambda_assignments[(p, a)] = {'value': float(round(var.X)), 'obj': var.Obj}
                         self.incumbent_lambdas = lambda_assignments
 
                         self.stats['incumbent_updates'] += 1
                         self.update_gap()
                         self.logger.info(f"   Updated incumbent: {self.incumbent:.6f}\n")
+                        
+                        # Save solution file
+                        if master.Model.SolCount > 0:
+                            sol_name = f"Node_{node_id if node_id is not None else 'root'}.sol"
+                            sol_path = os.path.join('Sols/Integral', sol_name)
+                            master.Model.write(sol_path)
+                            self.logger.info(f"   [IP Save] Solution (Time Limit) saved to {sol_path}")
                         success = True
                         result_obj = ip_obj
                     else:
@@ -705,7 +722,7 @@ class BranchAndPrice:
                     self.cg_solver.app_data, lambdas_dict
                 )
 
-                self.incumbent_lambdas = {k: int(v) for k, v in lambdas_dict.items() if v > 0}
+                self.incumbent_lambdas = {k: v for k, v in lambdas_dict.items() if v['value'] > 1e-6}
                 self.stats['incumbent_updates'] += 1
                 self.update_gap()
 
@@ -1307,7 +1324,8 @@ class BranchAndPrice:
             'incumbent_updates': self.stats['incumbent_updates'],
             'total_time': self.stats['total_time'],
             'root_node': self.nodes[0],
-            'tree_complete': self.stats['tree_complete']
+            'tree_complete': self.stats['tree_complete'],
+            'incumbent_lambdas': self.incumbent_lambdas
         }
 
     # ============================================================================
@@ -2496,7 +2514,7 @@ class BranchAndPrice:
 
         if master.Model.status == 2:
             lambda_list_cg = {
-                key: var.X for key, var in master.lmbda.items()
+                key: {'value': var.X, 'obj': var.Obj} for key, var in master.lmbda.items() if var.X > 1e-6
             }
         else:
             lambda_list_cg = {}
@@ -2506,6 +2524,13 @@ class BranchAndPrice:
         if is_integral:
             self.logger.info(f"\n✅ INTEGRAL SOLUTION FOUND AT NODE {node.node_id}!")
             self.logger.info(f"   LP Bound: {lp_obj:.6f}")
+            
+            # Save solution file
+            if master.Model.SolCount > 0:
+                sol_name = f"Node_{node.node_id}.sol"
+                sol_path = os.path.join('Sols/Integral', sol_name)
+                master.Model.write(sol_path)
+                self.logger.info(f"   [IP Save] Integral node solution saved to {sol_path}")
 
         # Store results in node
         node.lp_bound = lp_obj
@@ -3053,6 +3078,17 @@ class BranchAndPrice:
             'los_list': col_data['los_list'],
         }
         
+        # Update cg_solver.global_solutions
+        solution_key = (profile, col_id)
+        if 'solution_vars' in col_data:
+            for var_name, var_value in col_data['solution_vars'].items():
+                if solution_key not in self.cg_solver.global_solutions[var_name]:
+                    self.cg_solver.global_solutions[var_name][solution_key] = var_value
+        else:
+            # Fallback for labeling which doesn't provide solution_vars
+            self.cg_solver.global_solutions['x'][solution_key] = col_data['schedules_x']
+            self.cg_solver.global_solutions['LOS'][solution_key] = col_data['schedules_los']
+        
         # Add to master
         master.addSchedule(col_data['schedules_x'])
         master.addLOS(col_data['schedules_los'])
@@ -3137,6 +3173,19 @@ class BranchAndPrice:
         # Add to master
         master.addSchedule(schedules_x)
         master.addLOS(schedules_los)
+
+        # Update cg_solver.global_solutions
+        solution_vars = {
+            var: subproblem.getVarSol(var, col_id)
+            for var in ['x', 'LOS', 'y', 'z', 'S', 'l']
+        }
+        if self.cg_solver.app_data["learn_type"][0] in ['exp', 'sigmoid', 'lin']:
+            solution_vars['App'] = subproblem.getVarSol('App', col_id)
+            
+        solution_key = (profile, col_id)
+        for var_name, var_value in solution_vars.items():
+            if solution_key not in self.cg_solver.global_solutions[var_name]:
+                self.cg_solver.global_solutions[var_name][solution_key] = var_value
 
         # Create coefficient lists
         lambda_list = self._create_lambda_list(profile)
@@ -3886,8 +3935,8 @@ class BranchAndPrice:
                     )
                     lambda_assignments = {}
                     for (p, a), var in master.lmbda.items():
-                        if var.X > 0:
-                            lambda_assignments[(p, a)] = int(round(var.X))
+                        if var.X > 1e-6:
+                            lambda_assignments[(p, a)] = {'value': float(round(var.X)), 'obj': var.Obj}
                     self.incumbent_lambdas = lambda_assignments
                     self.stats['incumbent_updates'] += 1
                     self.update_gap()
@@ -3897,6 +3946,13 @@ class BranchAndPrice:
                     self.logger.info(f"     New incumbent: {self.incumbent:.6f}")
                     self.logger.info(f"     Improvement:   {old_incumbent - self.incumbent:.6f}")
                     self.logger.info(f"     New gap:       {self.gap:.4%}\n")
+                    
+                    # Save solution file
+                    if master.Model.SolCount > 0:
+                        sol_name = f"Node_{current_node_count}_heuristic.sol"
+                        sol_path = os.path.join('Sols/Integral', sol_name)
+                        master.Model.write(sol_path)
+                        self.logger.info(f"   [IP Save] Heuristic solution saved to {sol_path}")
 
                     print("\n" + "╔" + "═" * 98 + "╗")
                     print("║" + " IP HEURISTIC: IMPROVED INCUMBENT FOUND! ".center(98) + "║")
@@ -3946,9 +4002,16 @@ class BranchAndPrice:
                         )
                         lambda_assignments = {}
                         for (p, a), var in master.lmbda.items():
-                            if var.X > 0:
-                                lambda_assignments[(p, a)] = int(round(var.X))
+                            if var.X > 1e-6:
+                                lambda_assignments[(p, a)] = {'value': float(round(var.X)), 'obj': var.Obj}
                         self.incumbent_lambdas = lambda_assignments
+                        
+                        # Save solution file
+                        if master.Model.SolCount > 0:
+                            sol_name = f"Node_{current_node_count}_heuristic_timeout.sol"
+                            sol_path = os.path.join('Sols/Integral', sol_name)
+                            master.Model.write(sol_path)
+                            self.logger.info(f"   [IP Save] Heuristic solution (Time Limit) saved to {sol_path}")
                         self.stats['incumbent_updates'] += 1
                         self.update_gap()
 
@@ -4139,6 +4202,10 @@ class BranchAndPrice:
 
         node = self.nodes[incumbent_node]
         lambda_assignments = self.incumbent_lambdas
+
+        # Filter out zero values and extract value
+        if lambda_assignments:
+            lambda_assignments = {k: v['value'] for k, v in lambda_assignments.items() if v['value'] > 1e-6}
 
         if self.verbose:
             print(f"\nExtracting from Node {incumbent_node}")

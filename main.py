@@ -89,6 +89,7 @@ def main():
     # Output settings
     save_lps = True # Set to True to save LP and SOL files
     verbose_output = False # Set to False to suppress all non-final output
+    print_solutions = True # Set to True to print coefficients of relevant lambdas in P_Focus
 
     # Solver settings
     deterministic = False  # Set to True for deterministic solver behavior (single-threaded, barrier method)
@@ -108,7 +109,7 @@ def main():
                      'use_numba_labeling': True}
     
     # TODO: Perform Numba vs Non-Numba comparison for various seeds to verify stability
-    # TODO: Compare final solutions (lambda values and schedules) between Numba and Python versions
+    # TODO: Test branching constraints compliance with Numba implementation
 
     # ===========================
     # CONFIGURATION SUMMARY
@@ -326,6 +327,34 @@ def main():
             print(f"  ! LP relaxation: {results['lp_obj']:.5f}")
 
     print("=" * 100 + "\n")
+
+    # Print focus patient lambdas if requested
+    if print_solutions:
+        print("\n" + "=" * 100)
+        print(" FOCUS PATIENT LAMBDA COEFFICIENTS (>0) ".center(100, "="))
+        print("=" * 100)
+        
+        lambdas = results.get('incumbent_lambdas') if use_branch_and_price else results.get('lambdas')
+        
+        if lambdas:
+            # Filter for focus patients and print
+            focus_lambdas = {k: v for k, v in lambdas.items() if k[0] in cg_solver.P_F}
+            if focus_lambdas:
+                print(f"{'Patient Profile':<20} {'Column ID':<15} {'Obj Coeff':<15} {'Schedule':<30}")
+                print("-" * 85)
+                for (p, a), val in sorted(focus_lambdas.items()):
+                    # Extract (t, d) pairs from global_solutions['x']
+                    x_sol = cg_solver.global_solutions['x'].get((p, a), {})
+                    # Key format: (p, t, d, a)
+                    active_days = sorted([(t, d) for (p_val, t, d, a_val), v in x_sol.items() if v > 0.5])
+                    schedule_str = ", ".join([f"({t},{d})" for t, d in active_days])
+                    print(f"{p:<20} {a:<15} {int(round(val['obj'])):<15} {schedule_str}")
+            else:
+                print("No active lambdas found for focus patients.")
+        else:
+            print("No lambda solution available.")
+        print("=" * 100 + "\n")
+
     return results
 
 if __name__ == "__main__":
