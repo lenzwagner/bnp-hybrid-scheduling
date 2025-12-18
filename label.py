@@ -1555,13 +1555,93 @@ def solve_pricing_for_profile_bnp(
         workers_arr = np.array(workers, dtype=np.int64)
         theta_arr = np.array(theta_lookup, dtype=np.float64)
         
-        # Call Numba
-        # returns List of (j, rc, r_k, tau, path_mask, prog)
-        raw_cols = label_numba.run_fast_path_numba(
-            int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
-            pi_matrix, workers_arr, int(max_time), 
-            int(MS), int(MIN_MS), theta_arr, 1e-6
-        )
+        # === FLATTEN BRANCHING CONSTRAINTS FOR NUMBA ===
+        has_sp_fixing = False
+        has_nogood_cuts = False
+        has_left_patterns = False
+        
+        # Default empty arrays (will be passed even if not used)
+        forbidden_mask = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.bool_)
+        required_mask = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.bool_)
+        nogood_patterns = np.zeros((1, max_worker_id + 1, max_time + 1), dtype=np.int64)
+        num_nogood_cuts = 0
+        left_pattern_elements = np.full((1, 1), -1, dtype=np.int64)
+        left_pattern_limits = np.zeros(1, dtype=np.int64)
+        num_left_patterns = 0
+        
+        if branching_constraints:
+            from branching_constraints import SPVariableBranching, MPVariableBranching, SPPatternBranching
+            
+            # B.1: SP Variable Fixing
+            sp_var_constraints = [c for c in branching_constraints 
+                                  if isinstance(c, SPVariableBranching) and c.profile == profile]
+            if sp_var_constraints:
+                has_sp_fixing = True
+                for c in sp_var_constraints:
+                    j, t = c.agent, c.period
+                    if j <= max_worker_id and t <= max_time:
+                        if c.dir == 'left':  # Fix to 0
+                            forbidden_mask[j, t] = True
+                        else:  # Fix to 1
+                            required_mask[j, t] = True
+            
+            # B.2: MP No-Good Cuts
+            mp_nogood_constraints = [c for c in branching_constraints 
+                                     if isinstance(c, MPVariableBranching) and c.profile == profile 
+                                     and c.direction == 'left' and c.original_schedule]
+            if mp_nogood_constraints:
+                has_nogood_cuts = True
+                num_nogood_cuts = len(mp_nogood_constraints)
+                nogood_patterns = np.zeros((num_nogood_cuts, max_worker_id + 1, max_time + 1), dtype=np.int64)
+                
+                for cut_idx, c in enumerate(mp_nogood_constraints):
+                    for key, val in c.original_schedule.items():
+                        if len(key) >= 3 and val > 0.5:
+                            j, t = key[1], key[2]
+                            if j <= max_worker_id and t <= max_time:
+                                nogood_patterns[cut_idx, j, t] = 1
+            
+            # B.3: SP Left Pattern Branching
+            sp_left_patterns = [c for c in branching_constraints 
+                                if isinstance(c, SPPatternBranching) and c.profile == profile 
+                                and c.direction == 'left']
+            if sp_left_patterns:
+                has_left_patterns = True
+                num_left_patterns = len(sp_left_patterns)
+                max_pattern_size = max(len(c.pattern) for c in sp_left_patterns)
+                left_pattern_elements = np.full((num_left_patterns, max_pattern_size), -1, dtype=np.int64)
+                left_pattern_limits = np.zeros(num_left_patterns, dtype=np.int64)
+                
+                for pat_idx, c in enumerate(sp_left_patterns):
+                    left_pattern_limits[pat_idx] = len(c.pattern) - 1  # limit = |P| - 1
+                    for elem_idx, (j, t) in enumerate(sorted(c.pattern)):
+                        # Encode (j, t) as j*1000 + t
+                        left_pattern_elements[pat_idx, elem_idx] = j * 1000 + t
+        
+        # Decide which Numba function to call
+        use_branching_numba = has_sp_fixing or has_nogood_cuts or has_left_patterns
+        
+        if use_branching_numba:
+            # Call extended Numba function with branching support
+            raw_cols = label_numba.run_with_branching_constraints_numba(
+                int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
+                pi_matrix, workers_arr, int(max_time),
+                int(MS), int(MIN_MS), theta_arr, 1e-6,
+                # SP Variable Fixing
+                forbidden_mask, required_mask, has_sp_fixing,
+                # MP No-Good Cuts
+                nogood_patterns, num_nogood_cuts, has_nogood_cuts,
+                # SP Left Patterns
+                left_pattern_elements, left_pattern_limits, num_left_patterns, has_left_patterns
+            )
+        else:
+            # Call original fast path (no constraints)
+            raw_cols = label_numba.run_fast_path_numba(
+                int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
+                pi_matrix, workers_arr, int(max_time), 
+                int(MS), int(MIN_MS), theta_arr, 1e-6
+            )
+
         
         # Convert to best_columns format
         for col_tuple in raw_cols:
