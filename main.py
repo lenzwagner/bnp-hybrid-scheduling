@@ -78,7 +78,7 @@ def main():
 
     # Branch-and-Price settings
     use_branch_and_price = True  # Set to False for standard CG
-    branching_strategy = 'mp'  # 'mp' for MP variable branching, 'sp' for SP variable branching
+    branching_strategy = 'sp'  # 'mp' for MP variable branching, 'sp' for SP variable branching
     search_strategy = 'bfs' # 'dfs' for Depth-First, 'bfs' for Best-Fit-Search
     
     # Parallelization settings
@@ -103,19 +103,19 @@ def main():
     # Define labeling specs
     labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 'use_parallel_pricing': use_parallel_pricing,
                      'n_pricing_workers': n_pricing_workers,
-                     'debug_mode': True, 'use_apriori_pruning': True, 'use_pure_dp_optimization': True,
+                     'debug_mode': True, 'use_apriori_pruning': False, 'use_pure_dp_optimization': True,
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
-                     'use_numba_labeling': True}
+                     'use_numba_labeling': False}
     
     # TODO: Perform Numba vs Non-Numba comparison for various seeds to verify stability
-    # TODO: Branching constraints compliance with Numba implementation.
-    #       Implemented in run_with_branching_constraints_numba():
+    # DONE: Branching constraints compliance with Numba implementation.
+    #       Fully implemented in run_with_branching_constraints_numba():
     #       1) Variable Fixing (SP-Branching) via forbidden_mask/required_mask arrays
     #       2) No-Good Cuts (MP-Branching) via Zeta-bitmasks
     #       3) Left Pattern-Branching via Rho-counters (encoded in int64)
-    #       4) Flattening in label.py wrapper function
-    #       Note: Right patterns (mu modes) fall back to Python due to complexity
+    #       4) Right Pattern-Branching via Mu-modes (0=Exclude, 1=Cover) with dual extraction
+    #       5) Flattening in label.py wrapper function (solve_pricing_for_profile_bnp)
 
 
     # ===========================

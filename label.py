@@ -136,12 +136,23 @@ def _parse_branching_constraints(branch_constraints, recipient_id, branching_var
                     # Store: (id, elements_sorted, first_element, dual)
                     sorted_elements = sorted(list(constraint.pattern), key=lambda x: x[1]) # Sort by time
                     first_element = sorted_elements[0] if sorted_elements else None
+                    
+                    # Extract dual from master_constraint (like Numba path)
+                    dual_val = 0.0
+                    if hasattr(constraint, 'master_constraint') and constraint.master_constraint is not None:
+                        try:
+                            dual_val = constraint.master_constraint.Pi
+                        except:
+                            dual_val = getattr(constraint, 'dual_var', 0.0)
+                    else:
+                        dual_val = getattr(constraint, 'dual_var', 0.0)
+                    
                     right_patterns.append({
                         'id': id(constraint),
                         'elements': sorted_elements,
                         'elements_set': set(constraint.pattern),
                         'first_element': first_element,
-                        'dual': getattr(constraint, 'dual_var', 0.0)
+                        'dual': dual_val
                     })
 
             # MP Branching (No-Good Cuts)
@@ -1515,10 +1526,9 @@ def solve_pricing_for_profile_bnp(
     # Convert duals_pi to global pi format expected by labeling algorithm
     pi = duals_pi
     # gamma for this profile
-    gamma_k = duals_gamma + duals_delta
+    gamma_k = duals_gamma
     
 
-    
     # Call multi-phase pricing (heuristic + exact fallback)
     best_columns = solve_pricing_multi_phase(
         recipient_id=profile,
@@ -1641,14 +1651,29 @@ def solve_pricing_for_profile_bnp(
                 right_pattern_duals = np.zeros(num_right_patterns, dtype=np.float64)
                 right_pattern_counts = np.zeros(num_right_patterns, dtype=np.int64)
                 
+                # Collect info for printing
+                pattern_info_list = []
+                
                 for pat_idx, c in enumerate(sp_right_patterns):
                     # Sort pattern elements by time
                     sorted_pat = sorted(c.pattern, key=lambda x: x[1])
                     right_pattern_counts[pat_idx] = len(sorted_pat)
-                    # Note: We assume duals are 0.0 for now, as typical BNPH logic applies duals
-                    # at master level or via flow balance, but specific branching duals need careful handling.
-                    # Current architecture might need specific dual passing if branching adds constraints to RMP.
-                    right_pattern_duals[pat_idx] = 0.0 
+                    
+                    # Extract dual from master_constraint if available
+                    # Right branch (>=) should have dual >= 0
+                    # If column covers pattern, RC is reduced by this dual
+                    dual_val = 0.0
+                    if hasattr(c, 'master_constraint') and c.master_constraint is not None:
+                        try:
+                            dual_val = c.master_constraint.Pi
+                        except Exception as e:
+                            logger.warning(f"  [Numba] Could not extract dual for Right Pattern {pat_idx}: {e}")
+                            dual_val = 0.0
+                    right_pattern_duals[pat_idx] = dual_val
+                    
+                    # Store pattern info for printing
+                    pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted_pat) + "}"
+                    pattern_info_list.append((pat_idx, pattern_str, dual_val))
                     
                     if sorted_pat:
                          _, first_t = sorted_pat[0]
@@ -1656,6 +1681,12 @@ def solve_pricing_for_profile_bnp(
                     
                     for elem_idx, (j, t) in enumerate(sorted_pat):
                          right_pattern_elements[pat_idx, elem_idx] = j * 1000000 + t
+                
+                # Print all Right Pattern Duals for this profile
+                print(f"\n  [NUMBA RIGHT PATTERNS] Profile {profile}: {num_right_patterns} Right Pattern(s)")
+                for pat_idx, pattern_str, dual_val in pattern_info_list:
+                    dual_status = f"δ = {dual_val:+.6f}" if dual_val != 0.0 else "δ = 0.0 (inactive)"
+                    print(f"    Pattern #{pat_idx}: {pattern_str} → {dual_status} and original dual {dual_val}")
         
         # Decide which Numba function to call
         use_branching_numba = has_sp_fixing or has_nogood_cuts or has_left_patterns or has_right_patterns

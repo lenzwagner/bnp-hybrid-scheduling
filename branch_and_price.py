@@ -50,30 +50,37 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
     s_k = cg_solver_data['Req_agg'][profile]
     obj_multiplier = cg_solver_data['E_dict'].get(profile, 1)
     
-    # Extract duals_delta from branching constraints
+    # Extract duals_delta from branching constraints (variable branching only)
     duals_delta = 0.0
+    pattern_dual_sum = 0.0
     if branching_duals:
         variable_duals = {k: v for k, v in branching_duals.items() 
                         if k[0] == profile and len(k) == 4 and k[1] != 'pattern'}
         if variable_duals:
             duals_delta = sum(variable_duals.values())
+            print('Error with dual handling!')
+            sys.exit()
+        
+        # Extract pattern duals for this profile (Right-Pattern duals are >= 0, reduce RC when covered)
+        pattern_duals = {k: v for k, v in branching_duals.items() 
+                        if k[0] == profile and len(k) == 4 and k[1] == 'pattern'}
+        if pattern_duals:
+            # Right-branch pattern duals are >= 0 and reduce RC when pattern is covered
+            # For conservative bound, assume all patterns COULD be covered
+            pattern_dual_sum = sum(pattern_duals.values())
+    
     # --- EARLY PRUNING CHECK (A Priori Bound) ---
     if cg_solver_data.get('use_apriori_pruning', True):
-        # Logic: Reduced Cost = (Cost - Sum(Pi*Use)) - Gamma
+        # Logic: Reduced Cost = (Cost - Sum(Pi*Use)) - Gamma - Pattern_Duals
         # Since Pi <= 0 and Use >= 0, the term -Sum(Pi*Use) is always >= 0.
-        # Therefore, Min Possible RC >= Min Possible Cost - Gamma.
+        # Therefore, Min Possible RC >= Min Possible Cost - Gamma - Pattern_Duals.
         # For a valid column, Cost = Duration * obj_multiplier.
         # Min Duration is approx s_k (if efficiency=1.0).
-        # So, LowerBound = (s_k * obj_multiplier) - gamma - duals_delta
-        # Note: duals_delta comes from MP branching (no-good cuts). If positive, they reduce RC?
-        # Wait, duals_delta is added to RC in the labeling: rc = real_rc - delta.
-        # Let's verify signs.
-        # But conservatively:
-        # LowerBound = (s_k * obj_multiplier) - duals_gamma
-        # If this is > 0, we generally can't find a negative RC.
+        # Pattern duals (right-branch, >= 0) reduce RC when pattern is covered.
+        # For conservative bound, assume patterns could be covered.
         
-        # Safe check:
-        lb_pruning = (s_k * obj_multiplier) - duals_gamma - duals_delta
+        # Safe check (includes pattern duals):
+        lb_pruning = (s_k * obj_multiplier) - duals_gamma - duals_delta - pattern_dual_sum
         # Safety margin
         if lb_pruning > -1e-9:
             # Prune this profile! No negative reduced cost possible.
@@ -1455,7 +1462,12 @@ class BranchAndPrice:
         profile_assignments = {}  # profile -> set of (j,t) tuples
         
         for (k, a), lambda_val in lambdas.items():
-            if lambda_val < 1e-6:
+            # Handle both dict format {'value': ..., 'obj': ...} and direct float
+            if isinstance(lambda_val, dict):
+                val = lambda_val.get('value', 0.0)
+            else:
+                val = lambda_val
+            if val < 1e-6:
                 continue
             
             if (k, a) not in node.column_pool:
@@ -1493,7 +1505,9 @@ class BranchAndPrice:
                 contributing_lambdas = []
                 
                 for (k2, a), lambda_val in lambdas.items():
-                    if k2 != profile_k or lambda_val < 1e-6:
+                    # Handle both dict format and direct float
+                    lval = lambda_val.get('value', 0.0) if isinstance(lambda_val, dict) else lambda_val
+                    if k2 != profile_k or lval < 1e-6:
                         continue
                     
                     if (k2, a) not in node.column_pool:
@@ -1515,11 +1529,11 @@ class BranchAndPrice:
                             break
                     
                     if covers_all:
-                        beta_val += lambda_val
+                        beta_val += lval
                         contrib_count += 1
                         # Get original ID if possible, otherwise use 'a'
                         col_id = col_data.get('original_id', f"a={a}")
-                        contributing_lambdas.append(f"Lambda[{k2},{col_id}]={lambda_val:.4f}")
+                        contributing_lambdas.append(f"Lambda[{k2},{col_id}]={lval:.4f}")
                 
                 # Check fractionality
                 floor_val = int(beta_val)
@@ -1643,7 +1657,9 @@ class BranchAndPrice:
         beta_values = {}  # (n, j, t) -> beta value
         
         for (n, a), lambda_val in lambdas.items():
-            if lambda_val < 1e-6:
+            # Handle both dict format and direct float
+            lval = lambda_val.get('value', 0.0) if isinstance(lambda_val, dict) else lambda_val
+            if lval < 1e-6:
                 continue
             
             if (n, a) not in node.column_pool:
@@ -1658,7 +1674,7 @@ class BranchAndPrice:
                     key = (n, j, t)
                     if key not in beta_values:
                         beta_values[key] = 0.0
-                    beta_values[key] += lambda_val
+                    beta_values[key] += lval
         
         # Find most fractional beta_{njt}
         best_candidate = None
