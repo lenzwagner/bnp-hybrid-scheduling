@@ -278,8 +278,8 @@ def run_fast_path_numba(
 # State now includes: cost, prog, path_mask, zeta_mask (for MP branching)
 # Key now includes: ai_count, hist_mask, hist_len, zeta_mask
 
-# Key type WITH zeta: (ai_count, hist_mask, hist_len, zeta_mask)
-key_with_zeta_type = types.Tuple((types.int64, types.int64, types.int64, types.int64))
+# Key type WITH zeta and mu: (ai_count, hist_mask, hist_len, zeta_mask, mu_encoded)
+key_with_zeta_type = types.Tuple((types.int64, types.int64, types.int64, types.int64, types.int64))
 val_with_zeta_type = types.Tuple((types.float64, types.float64, types.int64))  # cost, prog, path_mask
 val_list_with_zeta_type = types.ListType(val_with_zeta_type)
 
@@ -306,8 +306,13 @@ def run_with_branching_constraints_numba(
     left_pattern_limits,     # 1D array [pattern_idx] - max allowed coverage
     num_left_patterns,       # int
     has_left_patterns,       # bool
-    # Right patterns are more complex - handled via flags for now
-    # (Full implementation would track mu modes)
+    # === SP Right Pattern Branching (B.3.2) ===
+    right_pattern_elements,  # 2D array [pat_idx, elem_idx] encoded (w*1M+t)
+    right_pattern_starts,    # 1D array [pat_idx] start time of pattern
+    right_pattern_duals,     # 1D array [pat_idx] dual reward
+    right_pattern_counts,    # 1D array [pat_idx] number of elements in pattern
+    num_right_patterns,      # int
+    has_right_patterns       # bool
 ):
     """
     Extended DP loop with branching constraint support.
@@ -316,6 +321,7 @@ def run_with_branching_constraints_numba(
     - SP Variable Fixing: forbidden_mask[j,t] = True means x[j,t] must be 0
     - MP No-Good Cuts: Track zeta deviation vector via bitmask
     - SP Left Pattern Branching: Track rho counters, prune if limit exceeded
+    - SP Right Pattern Branching: Track mu modes (0=exclude, 1=cover), apply duals
     """
     best_columns = List.empty_list(result_tuple_type)
     obj_mode = obj_mode_float
@@ -356,8 +362,8 @@ def run_with_branching_constraints_numba(
                         encoded = left_pattern_elements[pat_idx, elem_idx]
                         if encoded < 0:
                             break
-                        w_pat = encoded // 1000
-                        t_pat = encoded % 1000
+                        w_pat = encoded // 1000000
+                        t_pat = encoded % 1000000
                         if w_pat == j and t_pat == r_k:
                             # Increment rho for this pattern
                             current_rho = (init_rho >> (pat_idx * 8)) & 0xFF
@@ -374,8 +380,81 @@ def run_with_branching_constraints_numba(
             if init_rho == -1:
                 continue  # This starting state is already infeasible
             
+            # === Initialize Mu for SP Right Patterns ===
+            # Encoded in int64, 2 bits per pattern (0=inactive/exclude, 1=cover, 2=violated/prune)
+            # Actually, logic is:
+            # Mode 0: Inactive / Wait
+            # Mode 1: Exclude (entered at start, committed to NOT cover)
+            # Mode 2: Cover (entered at start, committed to cover)
+            # Wait, let's stick to Python logic:
+            # - Before start: implicitly Inactive
+            # - At start time: Decision -> Enter Cover (1) or Exclude (0)
+            # - After start: Follow mode rules
+            # We need to map this to "state". 
+            # Let's use 2 bits: 00=inactive/exclude(default), 01=cover, 11=pruned?
+            # Better: 
+            #   0: Exclude/Inactive (Default) - If we hit a required element, we MUST NOT take it (if in window)
+            #   1: Cover - We MUST take all required elements
+            
+            # Python logic review:
+            # if time < t_start: continue (wait)
+            # if time == t_start: 
+            #    if in_pattern: enter Cover (next_mu=1)
+            #    else: enter Exclude (next_mu=0)
+            # if time > t_start:
+            #    if Exclude (0): if in_pattern -> Prune
+            #    if Cover (1): if element is active at t and we don't take it -> Prune
+            
+            # So state is binary: 0 or 1.
+            # But we also need to know if we have "started" yet. 
+            # Actually, `time` implicitly tells us if we passed `t_start`.
+            # So a single bit per pattern is enough: 0=Exclude, 1=Cover.
+            # Default init is 0.
+            
+            # Initial Check at r_k:
+            init_mu = int64(0)
+            if has_right_patterns:
+                for pat_idx in range(num_right_patterns):
+                    t_start = right_pattern_starts[pat_idx]
+                    
+                    # Is current (j, r_k) in pattern?
+                    in_pattern = False
+                    for elem_idx in range(right_pattern_counts[pat_idx]):
+                        encoded = right_pattern_elements[pat_idx, elem_idx]
+                        w_pat = encoded // 1000000
+                        t_pat = encoded % 1000000
+                        if w_pat == j and t_pat == r_k:
+                            in_pattern = True
+                            break
+                    
+                    if r_k == t_start:
+                        if in_pattern:
+                            # Enter Cover Mode
+                            init_mu = init_mu | (1 << pat_idx)
+                        else:
+                            # Enter Exclude Mode (bit remains 0)
+                            pass
+                    elif r_k > t_start:
+                        # Should have started earlier. Since we start at r_k, we missed the start?
+                        # If a pattern started before r_k, and we start a NEW column at r_k, 
+                        # technically the "past" is empty.
+                        # Wait, columns represent a full worker shift.
+                        # If start > t_start, we missed the start trigger.
+                        # Implies we can never "Cover" it fully from the start?
+                        # Actually, if we start late, we can't have covered the start element.
+                        # So we effectively are in Exclude mode (having missed the start).
+                        # Checks:
+                        # If Exclude (0): if in_pattern -> Prune
+                         if in_pattern:
+                             # We are picking an element but we are in Exclude mode (implicitly, since we missed start or chose Exclude)
+                             init_mu = int64(-1)
+                             break
+            
+            if init_mu == -1:
+                continue
+
             # Initialize state dict
-            # Key: (ai_count, hist_mask, hist_len, zeta_mask)
+            # Key: (ai_count, hist_mask, hist_len, zeta_mask, mu_encoded)
             current_states = Dict.empty(key_with_zeta_type, val_list_with_zeta_type)
             
             init_ai = int64(0)
@@ -383,12 +462,15 @@ def run_with_branching_constraints_numba(
             init_hlen = int64(1)
             init_path = int64(1)
             
-            # Include rho in key if we have left patterns (encoded in zeta_mask slot for now)
-            # Actually, for proper tracking we need rho in the key or value
-            # Simplification: Store rho in upper bits of zeta_mask (zeta uses lower bits, rho uses upper)
+            # Combine zeta and rho for the key field `zeta_mask` to save space if needed, 
+            # BUT we added a new field for mu. Let's keep zeta and rho packed in `zeta_mask` for now 
+            # to minimize key size change, OR use the new 5-tuple key properly.
+            # Let's use the new 5-tuple key: (ai, hist, hlen, zeta_rho, mu)
+            # where zeta_rho = zeta | (rho << 32)
+            
             combined_zeta_rho = init_zeta | (init_rho << 32)
             
-            init_key = (init_ai, init_hist, init_hlen, combined_zeta_rho)
+            init_key = (init_ai, init_hist, init_hlen, combined_zeta_rho, init_mu)
             val_list = List.empty_list(val_with_zeta_type)
             val_list.append((float64(start_cost), float64(1.0), init_path))
             current_states[init_key] = val_list
@@ -398,7 +480,7 @@ def run_with_branching_constraints_numba(
                 next_states = Dict.empty(key_with_zeta_type, val_list_with_zeta_type)
                 
                 for key, bucket in current_states.items():
-                    ai_count, hist_mask, hist_len, combined_zeta_rho = key
+                    ai_count, hist_mask, hist_len, combined_zeta_rho, mu_encoded = key
                     zeta_mask = combined_zeta_rho & 0xFFFFFFFF
                     rho_encoded = combined_zeta_rho >> 32
                     
@@ -425,39 +507,80 @@ def run_with_branching_constraints_numba(
                                 cost_ther = cost - pi_matrix[j, t]
                                 prog_ther = prog + 1.0
                                 
-                                # Update zeta for therapist action
+                                # Update zeta
                                 new_zeta = zeta_mask
                                 if has_nogood_cuts:
                                     for cut_idx in range(num_nogood_cuts):
-                                        if (new_zeta >> cut_idx) & 1 == 0:  # Not yet deviated
+                                        if (new_zeta >> cut_idx) & 1 == 0:
                                             forbidden_val = nogood_patterns[cut_idx, j, t]
-                                            if forbidden_val != 1:  # We took 1, forbidden != 1
+                                            if forbidden_val != 1:
                                                 new_zeta = new_zeta | (1 << cut_idx)
                                 
-                                # Update rho for left patterns
+                                # Update rho
                                 new_rho = rho_encoded
                                 rho_valid = True
                                 if has_left_patterns:
                                     for pat_idx in range(num_left_patterns):
                                         for elem_idx in range(left_pattern_elements.shape[1]):
                                             encoded = left_pattern_elements[pat_idx, elem_idx]
-                                            if encoded < 0:
-                                                break
-                                            w_pat = encoded // 1000
-                                            t_pat = encoded % 1000
+                                            if encoded < 0: break
+                                            w_pat = encoded // 1000000
+                                            t_pat = encoded % 1000000
                                             if w_pat == j and t_pat == t:
                                                 current_rho = (new_rho >> (pat_idx * 8)) & 0xFF
                                                 current_rho += 1
                                                 if current_rho > left_pattern_limits[pat_idx]:
-                                                    rho_valid = False
-                                                    break
+                                                    rho_valid = False; break
                                                 new_rho = (new_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
-                                        if not rho_valid:
-                                            break
+                                        if not rho_valid: break
                                 
-                                if rho_valid:
+                                # Update mu (Right Pattern)
+                                new_mu = mu_encoded
+                                mu_valid = True
+                                if has_right_patterns and rho_valid:
+                                    for pat_idx in range(num_right_patterns):
+                                        t_start = right_pattern_starts[pat_idx]
+                                        current_mode = (new_mu >> pat_idx) & 1
+                                        
+                                        in_pattern = False
+                                        for elem_idx in range(right_pattern_counts[pat_idx]):
+                                            encoded = right_pattern_elements[pat_idx, elem_idx]
+                                            w_pat = encoded // 1000000
+                                            t_pat = encoded % 1000000
+                                            if w_pat == j and t_pat == t:
+                                                in_pattern = True
+                                                break
+                                        
+                                        if t == t_start:
+                                            if in_pattern:
+                                                # Enter Cover (Set bit to 1)
+                                                new_mu = new_mu | (1 << pat_idx)
+                                            else:
+                                                # Enter Exclude (Set bit to 0 - clear it)
+                                                new_mu = new_mu & ~(1 << pat_idx)
+                                        elif t > t_start:
+                                            if current_mode == 0: # Exclude
+                                                if in_pattern:
+                                                    mu_valid = False; break # Pruned
+                                            else: # Cover Mode (1)
+                                                # If element is available at t but we took something else?
+                                                # Here we TOOK Therapist (1).
+                                                # If (j,t) is in pattern, we are good (we took it).
+                                                # If (j,t) is NOT in pattern, is that a problem?
+                                                # Pattern definition: "Cover" means take ALL elements in P.
+                                                # So if (j,t) is in P, we MUST take it. We did.
+                                                # If (j,t) is NOT in P, we took Therapist. That's allowed in Cover mode?
+                                                # Yes, usually Cover only mandates specific (j,t) to be 1. It doesn't forbid others from being 1.
+                                                # So: If InPattern -> Good. If NotInPattern -> Good.
+                                                # Wait, logic check: "Cover" means x[j,t]=1 for all (j,t) in P.
+                                                # Here we set x[j,t]=1.
+                                                # Implementation detail: For Cover, we must ensure we NEVER MISS a required one.
+                                                # Since we took 1, we satisfy any requirement at (j,t) if it exists.
+                                                pass
+
+                                if rho_valid and mu_valid:
                                     new_combined = new_zeta | (new_rho << 32)
-                                    new_key_ther = (ai_count, new_mask_ther, new_len_ther, new_combined)
+                                    new_key_ther = (ai_count, new_mask_ther, new_len_ther, new_combined, new_mu)
                                     new_val_ther = (cost_ther, prog_ther, path_mask | (1 << (t - r_k)))
                                     
                                     # Add to next_states with dominance
@@ -471,8 +594,7 @@ def run_with_branching_constraints_numba(
                                         for i in range(len(bucket_t)):
                                             c_old, p_old, _ = bucket_t[i]
                                             if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
-                                                is_dominated = True
-                                                break
+                                                is_dominated = True; break
                                         if not is_dominated:
                                             clean = List.empty_list(val_with_zeta_type)
                                             for i in range(len(bucket_t)):
@@ -506,37 +628,73 @@ def run_with_branching_constraints_numba(
                                     for cut_idx in range(num_nogood_cuts):
                                         if (new_zeta >> cut_idx) & 1 == 0:
                                             forbidden_val = nogood_patterns[cut_idx, j, t]
-                                            if forbidden_val != 0 and forbidden_val > 0:  # We took 0, forbidden != 0
+                                            if forbidden_val != 0 and forbidden_val > 0:
                                                 new_zeta = new_zeta | (1 << cut_idx)
                                 
                                 # AI action doesn't match pattern elements (therapist only)
                                 # so rho stays the same
                                 new_rho = rho_encoded
                                 
-                                new_combined = new_zeta | (new_rho << 32)
-                                new_key_ai = (new_ai_count, new_mask_ai, new_len_ai, new_combined)
-                                new_val_ai = (cost_ai, prog_ai, path_mask)
+                                # Update mu (Right Pattern)
+                                new_mu = mu_encoded
+                                mu_valid = True
+                                if has_right_patterns:
+                                    for pat_idx in range(num_right_patterns):
+                                        t_start = right_pattern_starts[pat_idx]
+                                        current_mode = (new_mu >> pat_idx) & 1
+                                        
+                                        in_pattern = False
+                                        # Only Therapist actions are "In Pattern" usually? 
+                                        # Yes, pattern elements are (j,t). Taking AI means x[j,t]=0, so effectively NOT in pattern.
+                                        
+                                        if t == t_start:
+                                            # At start, if we take AI (0), we cannot be "In Pattern" (which requires 1 at elements)
+                                            # So we Enter Exclude (bit=0)
+                                            new_mu = new_mu & ~(1 << pat_idx)
+                                        elif t > t_start:
+                                            if current_mode == 0: # Exclude
+                                                # Allowed, we are not picking pattern elements
+                                                pass
+                                            else: # Cover Mode (1)
+                                                # We must take 1 if (j,t) is in pattern.
+                                                # Check if this (j,t) is required
+                                                is_required_here = False
+                                                for elem_idx in range(right_pattern_counts[pat_idx]):
+                                                    encoded = right_pattern_elements[pat_idx, elem_idx]
+                                                    w_pat = encoded // 1000000
+                                                    t_pat = encoded % 1000000
+                                                    if w_pat == j and t_pat == t:
+                                                        is_required_here = True
+                                                        break
+                                                
+                                                if is_required_here:
+                                                    # We took AI (0), but 1 was required! -> Prune
+                                                    mu_valid = False; break
                                 
-                                if new_key_ai not in next_states:
-                                    l = List.empty_list(val_with_zeta_type)
-                                    l.append(new_val_ai)
-                                    next_states[new_key_ai] = l
-                                else:
-                                    bucket_a = next_states[new_key_ai]
-                                    is_dominated = False
-                                    for i in range(len(bucket_a)):
-                                        c_old, p_old, _ = bucket_a[i]
-                                        if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
-                                            is_dominated = True
-                                            break
-                                    if not is_dominated:
-                                        clean = List.empty_list(val_with_zeta_type)
+                                if mu_valid:
+                                    new_combined = new_zeta | (new_rho << 32)
+                                    new_key_ai = (new_ai_count, new_mask_ai, new_len_ai, new_combined, new_mu)
+                                    new_val_ai = (cost_ai, prog_ai, path_mask)
+                                    
+                                    if new_key_ai not in next_states:
+                                        l = List.empty_list(val_with_zeta_type)
+                                        l.append(new_val_ai)
+                                        next_states[new_key_ai] = l
+                                    else:
+                                        bucket_a = next_states[new_key_ai]
+                                        is_dominated = False
                                         for i in range(len(bucket_a)):
-                                            c_old, p_old, path_old = bucket_a[i]
-                                            if not (cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon):
-                                                clean.append((c_old, p_old, path_old))
-                                        clean.append(new_val_ai)
-                                        next_states[new_key_ai] = clean
+                                            c_old, p_old, _ = bucket_a[i]
+                                            if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
+                                                is_dominated = True; break
+                                        if not is_dominated:
+                                            clean = List.empty_list(val_with_zeta_type)
+                                            for i in range(len(bucket_a)):
+                                                c_old, p_old, path_old = bucket_a[i]
+                                                if not (cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon):
+                                                    clean.append((c_old, p_old, path_old))
+                                            clean.append(new_val_ai)
+                                            next_states[new_key_ai] = clean
                 
                 current_states = next_states
                 if len(current_states) == 0:
@@ -544,7 +702,7 @@ def run_with_branching_constraints_numba(
             
             # === Final Step (Transition to Tau) ===
             for key, bucket in current_states.items():
-                ai_count, hist_mask, hist_len, combined_zeta_rho = key
+                ai_count, hist_mask, hist_len, combined_zeta_rho, mu_encoded = key
                 zeta_mask = combined_zeta_rho & 0xFFFFFFFF
                 rho_encoded = combined_zeta_rho >> 32
                 
@@ -572,51 +730,92 @@ def run_with_branching_constraints_numba(
                                         if forbidden_val != 1:
                                             final_zeta = final_zeta | (1 << cut_idx)
                             
-                            # Update final rho (for completeness)
+                            # Rho
                             final_rho = rho_encoded
                             rho_valid = True
                             if has_left_patterns:
                                 for pat_idx in range(num_left_patterns):
                                     for elem_idx in range(left_pattern_elements.shape[1]):
                                         encoded = left_pattern_elements[pat_idx, elem_idx]
-                                        if encoded < 0:
-                                            break
-                                        w_pat = encoded // 1000
-                                        t_pat = encoded % 1000
+                                        if encoded < 0: break
+                                        w_pat = encoded // 1000000
+                                        t_pat = encoded % 1000000
                                         if w_pat == j and t_pat == tau:
                                             current_rho = (final_rho >> (pat_idx * 8)) & 0xFF
                                             current_rho += 1
                                             if current_rho > left_pattern_limits[pat_idx]:
-                                                rho_valid = False
-                                                break
+                                                rho_valid = False; break
                                             final_rho = (final_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
-                                    if not rho_valid:
-                                        break
+                                    if not rho_valid: break
                             
-                            if not rho_valid:
-                                continue
+                            if not rho_valid: continue
+
+                            # Mu (Right Pattern)
+                            final_mu = mu_encoded
+                            mu_valid = True
+                            right_reward = 0.0
+                            if has_right_patterns:
+                                for pat_idx in range(num_right_patterns):
+                                    t_start = right_pattern_starts[pat_idx]
+                                    current_mode = (final_mu >> pat_idx) & 1
+                                    
+                                    in_pattern = False
+                                    for elem_idx in range(right_pattern_counts[pat_idx]):
+                                        encoded = right_pattern_elements[pat_idx, elem_idx]
+                                        w_pat = encoded // 1000000
+                                        t_pat = encoded % 1000000
+                                        if w_pat == j and t_pat == tau:
+                                            in_pattern = True
+                                            break
+                                    
+                                    if tau == t_start:
+                                        if in_pattern: final_mu = final_mu | (1 << pat_idx)
+                                        else: final_mu = final_mu & ~(1 << pat_idx)
+                                    elif tau > t_start:
+                                        if current_mode == 0 and in_pattern:
+                                            mu_valid = False; break
+                                        # In Cover mode, taking 1 is always checking for broken chains. 
+                                        # Since we took 1, we satisfy requirement if present.
+                                    
+                                    # CHECK DUAL REWARD
+                                    # If we end in Cover Mode (1), we effectively covered the pattern
+                                    # (assuming future elements beyond tau don't exist in this column logic, 
+                                    # or we "commit" to them which is handled by branching logic).
+                                    # Simplified: If we are in Cover Mode at the end, apply dual.
+                                    if mu_valid and ((final_mu >> pat_idx) & 1):
+                                        right_reward += right_pattern_duals[pat_idx]
+                            
+                            if not mu_valid: continue
                             
                             # === Terminal Feasibility Check for Zeta ===
-                            # All no-good cuts must be deviated (all zeta bits = 1)
                             if has_nogood_cuts:
                                 all_deviated = True
                                 for cut_idx in range(num_nogood_cuts):
                                     if (final_zeta >> cut_idx) & 1 == 0:
-                                        all_deviated = False
-                                        break
-                                if not all_deviated:
-                                    continue
+                                        all_deviated = False; break
+                                if not all_deviated: continue
                             
                             condition_met = (final_prog >= s_k - epsilon)
                             is_valid = False
-                            if obj_mode > 0.5:
-                                is_valid = condition_met
-                            else:
-                                is_valid = condition_met or (tau == max_time)
+                            if obj_mode > 0.5: is_valid = condition_met
+                            else: is_valid = condition_met or (tau == max_time)
                             
                             if is_valid:
                                 duration_val = tau - r_k + 1
-                                rc = final_cost + (duration_val * obj_mode) - gamma_k
+                                # Apply right_reward (subtract from cost because it's a dual "benefit" usually handled as cost reduction)
+                                # Wait, duals in reduced cost: RC = Cost - Duals.
+                                # If SP branching pattern is "covered", we get the dual value?
+                                # Yes, usually: if x covers pattern p, term -mu_p is added.
+                                # Standard RC = (c - sum(pi)) - gamma.
+                                # With SP right branching (cover pattern P):
+                                # Constraint: Sum(x in P) >= 1 (Cover) -> Dual mu >= 0
+                                # RC = ... - mu_p * (1 if covered else 0) ??
+                                # Actually, standard constraint form: sum x_j >= 1.
+                                # Dual mu >= 0.
+                                # RC term: - coeff * dual.
+                                # Coeff is 1 if covered. So -mu.
+                                # So we subtract right_reward.
+                                rc = final_cost + (duration_val * obj_mode) - gamma_k - right_reward
                                 if rc < -1e-6:
                                     best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
                     
@@ -636,7 +835,7 @@ def run_with_branching_constraints_numba(
                                 final_prog = prog + eff
                                 final_path_mask = path_mask
                                 
-                                # Update final zeta for AI ending
+                                # Zeta
                                 final_zeta = zeta_mask
                                 if has_nogood_cuts:
                                     for cut_idx in range(num_nogood_cuts):
@@ -645,26 +844,53 @@ def run_with_branching_constraints_numba(
                                             if forbidden_val != 0 and forbidden_val > 0:
                                                 final_zeta = final_zeta | (1 << cut_idx)
                                 
+                                # Mu
+                                final_mu = mu_encoded
+                                mu_valid = True
+                                right_reward = 0.0
+                                if has_right_patterns:
+                                    for pat_idx in range(num_right_patterns):
+                                        t_start = right_pattern_starts[pat_idx]
+                                        current_mode = (final_mu >> pat_idx) & 1
+                                        
+                                        # AI (0) matches "Not In Pattern"
+                                        if tau == t_start:
+                                            # Must be Exclude
+                                            final_mu = final_mu & ~(1 << pat_idx)
+                                        elif tau > t_start:
+                                            if current_mode == 1: # Cover Mode
+                                                # Required 1?
+                                                is_required_here = False
+                                                for elem_idx in range(right_pattern_counts[pat_idx]):
+                                                    encoded = right_pattern_elements[pat_idx, elem_idx]
+                                                    w_pat = encoded // 1000000
+                                                    t_pat = encoded % 1000000
+                                                    if w_pat == j and t_pat == tau:
+                                                        is_required_here = True; break
+                                                if is_required_here:
+                                                    mu_valid = False; break
+                                        
+                                        if mu_valid and ((final_mu >> pat_idx) & 1):
+                                            right_reward += right_pattern_duals[pat_idx]
+
+                                if not mu_valid: continue
+
                                 # Terminal zeta check
                                 if has_nogood_cuts:
                                     all_deviated = True
                                     for cut_idx in range(num_nogood_cuts):
                                         if (final_zeta >> cut_idx) & 1 == 0:
-                                            all_deviated = False
-                                            break
-                                    if not all_deviated:
-                                        continue
+                                            all_deviated = False; break
+                                    if not all_deviated: continue
                                 
                                 condition_met = (final_prog >= s_k - epsilon)
                                 is_valid = False
-                                if obj_mode > 0.5:
-                                    is_valid = condition_met
-                                else:
-                                    is_valid = condition_met or (tau == max_time)
+                                if obj_mode > 0.5: is_valid = condition_met
+                                else: is_valid = condition_met or (tau == max_time)
                                 
                                 if is_valid:
                                     duration_val = tau - r_k + 1
-                                    rc = final_cost + (duration_val * obj_mode) - gamma_k
+                                    rc = final_cost + (duration_val * obj_mode) - gamma_k - right_reward
                                     if rc < -1e-6:
                                         best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
     

@@ -1517,6 +1517,8 @@ def solve_pricing_for_profile_bnp(
     # gamma for this profile
     gamma_k = duals_gamma + duals_delta
     
+
+    
     # Call multi-phase pricing (heuristic + exact fallback)
     best_columns = solve_pricing_multi_phase(
         recipient_id=profile,
@@ -1569,6 +1571,14 @@ def solve_pricing_for_profile_bnp(
         left_pattern_limits = np.zeros(1, dtype=np.int64)
         num_left_patterns = 0
         
+        # Right Pattern Arrays (B.3.2)
+        right_pattern_elements = np.full((1, 1), -1, dtype=np.int64)
+        right_pattern_starts = np.zeros(1, dtype=np.int64)
+        right_pattern_duals = np.zeros(1, dtype=np.float64)
+        right_pattern_counts = np.zeros(1, dtype=np.int64)
+        num_right_patterns = 0
+        has_right_patterns = False
+        
         if branching_constraints:
             from branching_constraints import SPVariableBranching, MPVariableBranching, SPPatternBranching
             
@@ -1615,11 +1625,40 @@ def solve_pricing_for_profile_bnp(
                 for pat_idx, c in enumerate(sp_left_patterns):
                     left_pattern_limits[pat_idx] = len(c.pattern) - 1  # limit = |P| - 1
                     for elem_idx, (j, t) in enumerate(sorted(c.pattern)):
-                        # Encode (j, t) as j*1000 + t
-                        left_pattern_elements[pat_idx, elem_idx] = j * 1000 + t
+                        # Encode (j, t) as j*1000000 + t
+                        left_pattern_elements[pat_idx, elem_idx] = j * 1000000 + t
+
+            # B.3.2: SP Right Pattern Branching
+            sp_right_patterns = [c for c in branching_constraints 
+                                 if isinstance(c, SPPatternBranching) and c.profile == profile 
+                                 and c.direction == 'right']
+            if sp_right_patterns:
+                has_right_patterns = True
+                num_right_patterns = len(sp_right_patterns)
+                max_elems = max(len(c.pattern) for c in sp_right_patterns) if sp_right_patterns else 0
+                right_pattern_elements = np.full((num_right_patterns, max_elems), -1, dtype=np.int64)
+                right_pattern_starts = np.zeros(num_right_patterns, dtype=np.int64)
+                right_pattern_duals = np.zeros(num_right_patterns, dtype=np.float64)
+                right_pattern_counts = np.zeros(num_right_patterns, dtype=np.int64)
+                
+                for pat_idx, c in enumerate(sp_right_patterns):
+                    # Sort pattern elements by time
+                    sorted_pat = sorted(c.pattern, key=lambda x: x[1])
+                    right_pattern_counts[pat_idx] = len(sorted_pat)
+                    # Note: We assume duals are 0.0 for now, as typical BNPH logic applies duals
+                    # at master level or via flow balance, but specific branching duals need careful handling.
+                    # Current architecture might need specific dual passing if branching adds constraints to RMP.
+                    right_pattern_duals[pat_idx] = 0.0 
+                    
+                    if sorted_pat:
+                         _, first_t = sorted_pat[0]
+                         right_pattern_starts[pat_idx] = first_t
+                    
+                    for elem_idx, (j, t) in enumerate(sorted_pat):
+                         right_pattern_elements[pat_idx, elem_idx] = j * 1000000 + t
         
         # Decide which Numba function to call
-        use_branching_numba = has_sp_fixing or has_nogood_cuts or has_left_patterns
+        use_branching_numba = has_sp_fixing or has_nogood_cuts or has_left_patterns or has_right_patterns
         
         if use_branching_numba:
             # Call extended Numba function with branching support
@@ -1632,7 +1671,9 @@ def solve_pricing_for_profile_bnp(
                 # MP No-Good Cuts
                 nogood_patterns, num_nogood_cuts, has_nogood_cuts,
                 # SP Left Patterns
-                left_pattern_elements, left_pattern_limits, num_left_patterns, has_left_patterns
+                left_pattern_elements, left_pattern_limits, num_left_patterns, has_left_patterns,
+                # SP Right Patterns
+                right_pattern_elements, right_pattern_starts, right_pattern_duals, right_pattern_counts, num_right_patterns, has_right_patterns
             )
         else:
             # Call original fast path (no constraints)
