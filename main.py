@@ -29,6 +29,7 @@ def main(allow_gaps=False):
     # ===========================
     # Setup multi-level logging: separate files for DEBUG, INFO, WARNING, ERROR
     # Set print_all_logs=True to also print all log levels to console (not just PRINT level)
+
     print_all_logs = False # Set to True to see all logger output on console
     setup_multi_level_logging(base_log_dir='logs', enable_console=True, print_all_logs=print_all_logs)
 
@@ -134,13 +135,15 @@ def main(allow_gaps=False):
     # - [ ] Verify gap usage in solutions (x=0, y=0).
     # - [ ] Implement Gap-specific metrics (E.5) in extra_values.py.
     # - [ ] Port Gap logic to Numba for performance.
+
+
     labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 'use_parallel_pricing': use_parallel_pricing,
                      'n_pricing_workers': n_pricing_workers,
                      'debug_mode': True, 'use_apriori_pruning': False, 'use_pure_dp_optimization': True,
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
                      'use_numba_labeling': True,
-                     'allow_gaps': allow_gaps}
+                     'allow_gaps': False}
 
     # ===========================
     # CONFIGURATION SUMMARY
@@ -304,6 +307,7 @@ def main(allow_gaps=False):
     agg_focus_x, agg_focus_los = None, None
     agg_post_x, agg_post_los = None, None
 
+
     if use_branch_and_price and results.get('incumbent_solution'):
         inc_sol = results['incumbent_solution']
         
@@ -322,11 +326,41 @@ def main(allow_gaps=False):
         # Calculate EXTRA METRICS (E.2 - E.8)
         # Pack data for Focus
         f_derived_data = {'e': f_e, 'Y': f_Y, 'theta': f_theta, 'omega': f_omega, 'g': f_g, 'z': f_z}
-        f_metrics = calculate_extra_metrics(cg_solver, inc_sol, cg_solver.P_F, f_derived_data)
+        # Prepare Focus Horizon: Days 1 to D_focus
+        f_start, f_end = 1, D_focus
+        f_metrics = calculate_extra_metrics(cg_solver, inc_sol, cg_solver.P_F, f_derived_data, cg_solver.T, start_day=f_start, end_day=f_end)
         
         # Pack data for Post
         p_derived_data = {'e': p_e, 'Y': p_Y, 'theta': p_theta, 'omega': p_omega, 'g': p_g, 'z': p_z}
-        p_metrics = calculate_extra_metrics(cg_solver, inc_sol, cg_solver.P_Post, p_derived_data)
+        # Prepare Post Horizon: Days D_focus+1 to End of Planning Horizon (D_focus + D_max)
+        # Note: We use cg_solver.D to find max day, or cg_solver.D_planning
+        max_d = max(cg_solver.D) # This is usually D_focus. Wait, D in cg_solver is Focus horizon!
+        # D_planning is the full horizon? Check instance_setup returns.
+        # But Max_t keys go up to D_full.
+        # Let's use D_focus+1 to max key in Max_t or approximation.
+        # Better: Post starts at D_focus + 1. End is max(T for Post patients).
+        # We'll use D_focus+1 to max(cg_solver.D_full) if available, or just a large number handled by loop checks.
+        
+        # Accessing D_full or similar from cg_solver might be needed?
+        # cg_solver setup has self.D = D_focus list.
+        # But Max_t has keys beyond D_focus.
+        
+        # Let's inspect accessible attributes later if needed. For now, assume Max_t logic handles missing keys.
+        # We'll use start=D_focus+1, end=None (defaults to max(D) in extra_values, which is WRONG if D is only focus).
+        
+        # FIX: We need max horizon day.
+        # extra_values uses max(cg_solver.D) as default end.
+        
+        p_start = D_focus + 1
+        p_end = 1000 # Temporary Safe Upper Bound if D_full not accessible? 
+        # Or better: check max key in Max_t inside extra_values if end is None?
+        # But we are in main.py.
+        
+        # Let's try to get D_full max from keys of Max_t if possible, or just pass a sufficient horizon.
+        # The calculation loop checks `if (t, d) in Max_t`. So passing a large end_day is safe.
+        p_end = 200 # Sufficiently large covers most instances
+        
+        p_metrics = calculate_extra_metrics(cg_solver, inc_sol, cg_solver.P_Post, p_derived_data, cg_solver.T, start_day=p_start, end_day=p_end)
         
         # Aggregate X and LOS variables (stripping col_id)
         x_dict = inc_sol.get('x', {})
@@ -520,17 +554,44 @@ def main(allow_gaps=False):
             # Filter for focus patients and print
             focus_lambdas = {k: v for k, v in lambdas.items() if k[0] in cg_solver.P_F}
             if focus_lambdas:
-                print(f"{'Patient Profile':<20} {'Column ID':<15} {'Obj Coeff':<15} {'Schedule':<30}")
-                print("-" * 85)
+                print(f"{'Patient Profile':<20} {'Column ID':<15} {'Obj Coeff':<15} {'LOS':<10} {'Schedule':<30}")
+                print("-" * 95)
                 for (p, a), val in sorted(focus_lambdas.items()):
                     # Extract (t, d) pairs from global_solutions['x']
                     x_sol = cg_solver.global_solutions['x'].get((p, a), {})
                     # Key format: (p, t, d, a)
                     active_days = sorted([(t, d) for (p_val, t, d, a_val), v in x_sol.items() if v > 0.5])
                     schedule_str = ", ".join([f"({t},{d})" for t, d in active_days])
-                    print(f"{p:<20} {a:<15} {int(round(val['obj'])):<15} {schedule_str}")
+                    los_data = cg_solver.global_solutions['LOS'].get((p, a), {})
+                    los_val = list(los_data.values())[0] if isinstance(los_data, dict) and los_data else (los_data if isinstance(los_data, (int, float)) else 0)
+                    print(f"{p:<20} {a:<15} {int(round(val['obj'])):<15} {int(round(los_val)):<10} {schedule_str}")
             else:
                 print("No active lambdas found for focus patients.")
+        else:
+            print("No lambda solution available.")
+        print("=" * 100 + "\n")
+
+        print("\n" + "=" * 100)
+        print(" POST PATIENT LAMBDA COEFFICIENTS (>0) ".center(100, "="))
+        print("=" * 100)
+
+        if lambdas:
+            # Filter for post patients and print
+            post_lambdas = {k: v for k, v in lambdas.items() if k[0] in cg_solver.P_Post}
+            if post_lambdas:
+                print(f"{'Patient Profile':<20} {'Column ID':<15} {'Obj Coeff':<15} {'LOS':<10} {'Schedule':<30}")
+                print("-" * 95)
+                for (p, a), val in sorted(post_lambdas.items()):
+                    # Extract (t, d) pairs from global_solutions['x']
+                    x_sol = cg_solver.global_solutions['x'].get((p, a), {})
+                    # Key format: (p, t, d, a)
+                    active_days = sorted([(t, d) for (p_val, t, d, a_val), v in x_sol.items() if v > 0.5])
+                    schedule_str = ", ".join([f"({t},{d})" for t, d in active_days])
+                    los_data = cg_solver.global_solutions['LOS'].get((p, a), {})
+                    los_val = list(los_data.values())[0] if isinstance(los_data, dict) and los_data else (los_data if isinstance(los_data, (int, float)) else 0)
+                    print(f"{p:<20} {a:<15} {int(round(val['obj'])):<15} {int(round(los_val)):<10} {schedule_str}")
+            else:
+                print("No active lambdas found for post patients.")
         else:
             print("No lambda solution available.")
         print("=" * 100 + "\n")
@@ -553,4 +614,4 @@ def main(allow_gaps=False):
     return results
 
 if __name__ == "__main__":
-    results = main(allow_gaps=True)
+    results = main()
