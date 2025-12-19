@@ -222,7 +222,16 @@ class BranchAndPrice:
             'ip_solves': 0,
             'node_processing_order': [],
             'bfs_decision_log': [],
-            'tree_complete': False  # True if all nodes were processed (no open nodes remain)
+            'tree_complete': False,  # True if all nodes were processed (no open nodes remain)
+            # Timing statistics
+            'time_in_mp': 0.0,
+            'time_in_sp': 0.0,
+            'time_in_ip_heuristic': 0.0,
+            'time_in_root': 0.0,
+            'time_in_branching': 0.0,
+            'time_to_first_incumbent': None,
+            # Pattern size counts (SP branching only)
+            'pattern_size_counts': {}  # {size: count} e.g. {1: 5, 2: 3} means 5 patterns of size 1, 3 of size 2
         }
 
         # Timing
@@ -433,12 +442,18 @@ class BranchAndPrice:
             # ===== USE BRANCH-AND-PRICE CG (with labeling) =====
             self.logger.info("[Root] Using Branch-and-Price CG with LABELING ALGORITHM\n")
             
+            # Start timing root node
+            root_start_time = time.time()
+            
             # Solve root node using the same method as child nodes
             # This ensures labeling algorithm is used consistently
             lp_bound, is_integral, most_frac_info, lambda_list_root = self.solve_node_with_cg(
                 root_node, 
                 max_cg_iterations=100
             )
+            
+            # Record root node time
+            self.stats['time_in_root'] = time.time() - root_start_time
             
             # Compute incumbent after CG converges (if not using early incumbent)
             if self.early_incumbent_iteration == 0:
@@ -848,6 +863,11 @@ class BranchAndPrice:
             left_child, right_child = self.branch_on_mp_variable(root_node, branching_info)
         else:  # 'sp'
             left_child, right_child = self.branch_on_sp_pattern(root_node, branching_info)
+            # Track pattern size for SP branching
+            pattern_size = branching_info.get('pattern_size', 1)
+            if pattern_size not in self.stats['pattern_size_counts']:
+                self.stats['pattern_size_counts'][pattern_size] = 0
+            self.stats['pattern_size_counts'][pattern_size] += 1
         #print(left_child, right_child)
         # Mark root as branched
         root_node.status = 'branched'
@@ -1239,6 +1259,11 @@ class BranchAndPrice:
                 left_child, right_child = self.branch_on_mp_variable(current_node, branching_info)
             else:  # 'sp'
                 left_child, right_child = self.branch_on_sp_pattern(current_node, branching_info)
+                # Track pattern size for SP branching
+                pattern_size = branching_info.get('pattern_size', 1)
+                if pattern_size not in self.stats['pattern_size_counts']:
+                    self.stats['pattern_size_counts'][pattern_size] = 0
+                self.stats['pattern_size_counts'][pattern_size] += 1
 
             # Mark current node as branched
             current_node.status = 'branched'
@@ -1319,6 +1344,24 @@ class BranchAndPrice:
 
     def _get_results_dict(self):
         """Create results dictionary."""
+        # Build list of CG iterations per node (sorted by node_id)
+        iterations_per_node = [
+            self.nodes[node_id].cg_iterations 
+            for node_id in sorted(self.nodes.keys())
+            if hasattr(self.nodes[node_id], 'cg_iterations')
+        ]
+        
+        # Find incumbent node
+        incumbent_node_id = self._find_incumbent_node() if hasattr(self, '_find_incumbent_node') else None
+        
+        # Determine if solved optimally (tree complete and incumbent found)
+        is_optimal = self.stats['tree_complete'] and self.incumbent < float('inf')
+        
+        # Calculate overhead time
+        time_accounted = (self.stats['time_in_mp'] + self.stats['time_in_sp'] + 
+                          self.stats['time_in_ip_heuristic'] + self.stats['time_in_branching'])
+        time_overhead = self.stats['total_time'] - time_accounted
+        
         return {
             'lp_bound': self.best_lp_bound,
             'incumbent': self.incumbent if self.incumbent < float('inf') else None,
@@ -1332,7 +1375,24 @@ class BranchAndPrice:
             'total_time': self.stats['total_time'],
             'root_node': self.nodes[0],
             'tree_complete': self.stats['tree_complete'],
-            'incumbent_lambdas': self.incumbent_lambdas
+            'incumbent_lambdas': self.incumbent_lambdas,
+            'total_nodes': len(self.nodes),
+            'iterations_per_node': iterations_per_node,
+            'root_integral': self.nodes[0].is_integral,
+            'is_optimal': is_optimal,
+            'incumbent_node_id': incumbent_node_id,
+            # Timing statistics
+            'time_in_mp': self.stats['time_in_mp'],
+            'time_in_sp': self.stats['time_in_sp'],
+            'time_in_ip_heuristic': self.stats['time_in_ip_heuristic'],
+            'time_in_root': self.stats['time_in_root'],
+            'time_in_branching': self.stats['time_in_branching'],
+            'time_to_first_incumbent': self.stats['time_to_first_incumbent'],
+            'time_overhead': time_overhead,
+            # Pattern size counts (SP only, None for MP)
+            'pattern_size_counts': self.stats['pattern_size_counts'] if self.branching_strategy == 'sp' else None,
+            # Final solution
+            'incumbent_solution': self.incumbent_solution
         }
 
     # ============================================================================
@@ -2119,8 +2179,11 @@ class BranchAndPrice:
 
             self.logger.info(f"    [CG Iter {cg_iteration}] Solving master LP...")
 
-            # Solve master as LP
+            # Solve master as LP with timing
+            mp_start_time = time.time()
             master.solRelModel()
+            self.stats['time_in_mp'] += time.time() - mp_start_time
+            
             if master.Model.status != 2:  # GRB.OPTIMAL
                 self.logger.warning(f"    ⚠️  Master in CG-iterations infeasible or unbounded at node {node.node_id}")
                 return float('inf'), False, None, {}
@@ -2501,6 +2564,7 @@ class BranchAndPrice:
 
             # End timing SPs
             sp_duration = time.time() - sp_start_time
+            self.stats['time_in_sp'] += sp_duration
             print(f"    [Performance] All Subproblems solved in {sp_duration:.4f}s")
             
             self.logger.info(f"    [CG Iter {cg_iteration}] Added {columns_added_this_iter} new columns")
@@ -2564,6 +2628,8 @@ class BranchAndPrice:
 
         self.logger.info(f"{'─' * 100}\n")
 
+        # Store CG iterations on the node for later retrieval
+        node.cg_iterations = cg_iteration
         self.stats['total_cg_iterations'] += cg_iteration
 
         return lp_obj, is_integral, most_frac_info, lambda_list_cg
@@ -3933,7 +3999,9 @@ class BranchAndPrice:
 
         try:
             self.logger.info("  Optimizing...")
+            ip_heur_start = time.time()
             master.Model.optimize()
+            self.stats['time_in_ip_heuristic'] += time.time() - ip_heur_start
 
             improved = False
 
@@ -3955,6 +4023,9 @@ class BranchAndPrice:
                             lambda_assignments[(p, a)] = {'value': float(round(var.X)), 'obj': var.Obj}
                     self.incumbent_lambdas = lambda_assignments
                     self.stats['incumbent_updates'] += 1
+                    # Track time to first incumbent
+                    if self.stats['time_to_first_incumbent'] is None:
+                        self.stats['time_to_first_incumbent'] = time.time() - self.start_time
                     self.update_gap()
 
                     self.logger.info(f"\n  ✅ IMPROVED INCUMBENT FOUND!")
