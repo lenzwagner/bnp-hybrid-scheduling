@@ -41,6 +41,7 @@ class MasterProblem_d:
         self.drop_threshold = 5
         self.column_pool = {}
         self.branching_bounds = {}
+        self.all_patterns = {} # Stores path_pattern for reconstruction
         self.aggregated = defaultdict(int)
         self.verbose = verbose
         for (p, t, d), value in self.pre_x.items():
@@ -85,10 +86,12 @@ class MasterProblem_d:
                 self.Model.chgCoeff(self.cons_p_max[t, d], self.lmbda[p, 1], value)
         self.Model.update()
 
-    def addLambdaVar(self, p, a, col, coef):
+    def addLambdaVar(self, p, a, col, coef, pattern=None):
         new_col = gu.Column(col, self.Model.getConstrs())
         self.lmbda[p, a] = self.Model.addVar(obj=coef[0], vtype=gu.GRB.INTEGER, column=new_col, name=f"lmbda[{p},{a}]")
         self.A.append(a)
+        if pattern is not None:
+            self.all_patterns[(p, a)] = pattern
         self.Model.update()
 
     def finSol(self):
@@ -262,6 +265,37 @@ class MasterProblem_d:
                 active_solutions['l'].update(sols_dict['l'].get(key, {}))
                 if not isinstance(app_data, (int, float)):
                     active_solutions['App'].update(sols_dict['App'].get(key, {}))
+            
+            # Reconstruct variables from pattern (AI usage y and Gaps)
+            # This is critical for Labeling algorithm where y might not be in global_solutions
+            if key in self.all_patterns and self.all_patterns[key] is not None:
+                pat_info = self.all_patterns[key]
+                p, col_id = key
+                
+                # Check format (dict vs list) - we standardized on dict in recent steps
+                if isinstance(pat_info, dict):
+                    pattern_vals = pat_info.get('path')
+                    start_t = pat_info.get('start')
+                else:
+                    # Fallback or legacy (full list pattern without start?)
+                    # If we don't have start, we can't map to time.
+                    pattern_vals = None 
+                    start_t = None
+                
+                if start_t is not None and pattern_vals is not None:
+                    for i, val in enumerate(pattern_vals):
+                        current_time = start_t + i
+                        
+                        # Interpretation:
+                        # 0: AI Session -> y=1 (and x=0)
+                        # 1: Human Session -> x=1 (already handled by schedules_x)
+                        # 2: Gap -> y=0, x=0
+                        
+                        if val == 0: # AI
+                            # Add to y solutions: (p, time, col_id) -> 1
+                            # Match Subproblem.getVarSol format: (p, d, itr) -> val
+                            active_solutions['y'][(p, current_time, col_id)] = 1.0
+                            
         return active_solutions
 
     def set_branching_bound(self, var, bound_type, value):

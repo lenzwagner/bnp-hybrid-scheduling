@@ -8,7 +8,7 @@ from Utils.extra_values import calculate_extra_metrics
 
 logger = get_logger(__name__)
 
-def main():
+def main(allow_gaps=False):
     """
     Main function to run Column Generation or Branch-and-Price algorithm.
 
@@ -124,12 +124,23 @@ def main():
     save_tree_path = 'bnp_tree.png'  # Path to save (None to not save)
 
     # Define labeling specs
+    # TODO: TREATMENT GAPS (Relaxing x+y=1 constraint)
+    # Status:
+    # - [x] Core Logic Implemented: 'allow_gaps' flag enables Gap action (2) in label.py.
+    # - [x] Integration: MasterProblem correctly reconstructs AI/Gap usage from path_pattern.
+    # - [x] Optimization: Currently uses Python labeling (Numba disabled if allow_gaps=True).
+    #
+    # Future Work (x+y < 1):
+    # - [ ] Verify gap usage in solutions (x=0, y=0).
+    # - [ ] Implement Gap-specific metrics (E.5) in extra_values.py.
+    # - [ ] Port Gap logic to Numba for performance.
     labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 'use_parallel_pricing': use_parallel_pricing,
                      'n_pricing_workers': n_pricing_workers,
                      'debug_mode': True, 'use_apriori_pruning': False, 'use_pure_dp_optimization': True,
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
-                     'use_numba_labeling': True}
+                     'use_numba_labeling': True,
+                     'allow_gaps': allow_gaps}
 
     # ===========================
     # CONFIGURATION SUMMARY
@@ -542,4 +553,4 @@ def main():
     return results
 
 if __name__ == "__main__":
-    results = main()
+    results = main(allow_gaps=True)

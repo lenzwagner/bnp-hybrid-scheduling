@@ -108,7 +108,8 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         use_heuristic_pricing=cg_solver_data.get('use_heuristic_pricing', False),
         heuristic_max_labels=cg_solver_data.get('heuristic_max_labels', 20),
         use_relaxed_history=cg_solver_data.get('use_relaxed_history', False),
-        use_numba_labeling=cg_solver_data.get('use_numba_labeling', False)
+        use_numba_labeling=cg_solver_data.get('use_numba_labeling', False),
+        allow_gaps=cg_solver_data.get('allow_gaps', False)
     )
     
     return (profile, col_data_list)
@@ -188,6 +189,7 @@ class BranchAndPrice:
         self.heuristic_max_labels = label_dict['heuristic_max_labels'] if label_dict is not None else 20
         self.use_relaxed_history = label_dict['use_relaxed_history'] if label_dict is not None else True
         self.use_numba_labeling = label_dict['use_numba_labeling'] if label_dict is not None else False
+        self.allow_gaps = label_dict.get('allow_gaps', False) if label_dict is not None else False
         
         # Create persistent multiprocessing pool
         self.pricing_pool = None
@@ -2341,7 +2343,8 @@ class BranchAndPrice:
                     'use_heuristic_pricing': self.use_heuristic_pricing,
                     'heuristic_max_labels': self.heuristic_max_labels,
                     'use_relaxed_history': self.use_relaxed_history,
-                    'use_numba_labeling': self.use_numba_labeling
+                    'use_numba_labeling': self.use_numba_labeling,
+                    'allow_gaps': self.allow_gaps
                 }
                 
                 # Prepare arguments for each profile
@@ -2722,7 +2725,8 @@ class BranchAndPrice:
                     self.logger.info(
                         f"      [Column {profile},{col_id}] Added {len(branching_coefs)} branching coefficients")
 
-                master.addLambdaVar(profile, col_id, col_coefs, los_list)
+                master.addLambdaVar(profile, col_id, col_coefs, los_list, 
+                                    pattern={'path': col_data.get('path_pattern'), 'start': col_data.get('start')})
             master.Model.update()
 
 
@@ -3211,9 +3215,11 @@ class BranchAndPrice:
 
         # Add lambda variable to master
         if profile in self.cg_solver.P_F:
-            master.addLambdaVar(profile, col_id, col_coefs, col_data['los_list'])
+            master.addLambdaVar(profile, col_id, col_coefs, col_data['los_list'], 
+                                pattern={'path': col_data.get('path_pattern'), 'start': col_data.get('start')})
         else:
-            master.addLambdaVar(profile, col_id, col_coefs, [0])
+            master.addLambdaVar(profile, col_id, col_coefs, [0], 
+                                pattern={'path': col_data.get('path_pattern'), 'start': col_data.get('start')})
         
         self.logger.info(f"      [Labeling] Added column {col_id} for profile {profile}, "
                         f"reduced cost: {col_data['reduced_cost']:.6f}")

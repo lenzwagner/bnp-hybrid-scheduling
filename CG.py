@@ -479,7 +479,8 @@ class ColumnGeneration:
                     self.master.addLambdaVar(
                         col_info['index'], current_col_id,
                         [*col_info['lambda_list'], *col_info['x_list']],
-                        los_list_for_master
+                        los_list_for_master,
+                        pattern={'path': col_info.get('path_pattern'), 'start': col_info.get('start')}
                     )
 
                     # Store solution variables

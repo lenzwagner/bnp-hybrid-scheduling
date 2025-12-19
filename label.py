@@ -335,8 +335,8 @@ def generate_full_column_vector(worker_id, path_assignments, start_time, end_tim
     for t_idx, val in enumerate(path_assignments):
         current_time = start_time + t_idx
         global_idx = worker_offset + (current_time - 1)
-        if 0 <= global_idx < vector_length:
-            full_vector[global_idx] = float(val)
+        if 0 <= global_idx < vector_length and val == 1:
+            full_vector[global_idx] = 1.0
     return full_vector
 
 
@@ -417,7 +417,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                 branch_constraints=None, branching_variant='mp',
                                 max_columns=10, use_pure_dp_optimization=True,
                                 use_heuristic_pricing=False, max_labels_per_bucket=None,
-                                stop_at_first_negative=False, use_relaxed_history=False):
+                                stop_at_first_negative=False, use_relaxed_history=False,
+                                allow_gaps=False):
     """
     Solve the pricing problem for a single recipient.
     
@@ -745,6 +746,17 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                                    path + [0], recipient_id, pruning_stats, dominance_mode, 
                                                    None, None, None, epsilon)
 
+                            # C: Gap (Treat as non-human (0) for history, but keeps ai_count unchanged)
+                            if allow_gaps and check_strict_feasibility(hist, 0, ms, min_ms):
+                                cost_gap = cost
+                                prog_gap = prog
+                                new_hist_gap = (hist + (0,))
+                                if len(new_hist_gap) > ms - 1: new_hist_gap = new_hist_gap[-(ms - 1):]
+
+                                add_state_to_buckets(next_states, cost_gap, prog_gap, ai_count, new_hist_gap, 
+                                                   path + [2], recipient_id, pruning_stats, dominance_mode, 
+                                                   None, None, None, epsilon)
+
                     current_states = next_states
                     if not current_states: break
                 timers['state_expansion'] += time.time() - t_dp_start
@@ -760,15 +772,20 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                          possible_moves = []
                          if check_strict_feasibility(hist, 1, ms, min_ms): possible_moves.append(1)
                          if is_timeout_scenario and check_strict_feasibility(hist, 0, ms, min_ms): possible_moves.append(0)
+                         # Add Gap (2) if allowed and feasible (treat as 0)
+                         if allow_gaps and check_strict_feasibility(hist, 0, ms, min_ms): possible_moves.append(2)
 
                          for move in possible_moves:
                              if move == 1:
                                  final_cost_accum = cost - pi_dict.get((j, tau), 0)
                                  final_prog = prog + 1.0
-                             else:
+                             elif move == 0:
                                  final_cost_accum = cost
                                  efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
                                  final_prog = prog + efficiency
+                             elif move == 2:
+                                 final_cost_accum = cost
+                                 final_prog = prog
 
                              final_path = path + [move]
                              condition_met = (final_prog >= s_k - epsilon)
@@ -1402,7 +1419,7 @@ def solve_pricing_multi_phase(
     branch_constraints=None, branching_variant='mp',
     max_columns=10, use_pure_dp_optimization=True,
     use_heuristic_pricing=True, heuristic_max_labels=20,
-    use_relaxed_history=False
+    use_relaxed_history=False, allow_gaps=False
 ):
     """
     Multi-phase pricing with heuristic + exact fallback.
@@ -1434,7 +1451,8 @@ def solve_pricing_multi_phase(
             use_heuristic_pricing=True,
             max_labels_per_bucket=heuristic_max_labels,
             stop_at_first_negative=True,
-            use_relaxed_history=use_relaxed_history
+            use_relaxed_history=use_relaxed_history,
+            allow_gaps=allow_gaps
         )
         
         # Check if heuristic found columns with negative reduced cost
@@ -1459,7 +1477,8 @@ def solve_pricing_multi_phase(
         use_heuristic_pricing=False,
         max_labels_per_bucket=None,
         stop_at_first_negative=False,
-        use_relaxed_history=use_relaxed_history
+        use_relaxed_history=use_relaxed_history,
+        allow_gaps=allow_gaps
     )
 
 
@@ -1486,7 +1505,8 @@ def solve_pricing_for_profile_bnp(
     use_heuristic_pricing=False,
     heuristic_max_labels=20,
     use_relaxed_history=False,
-    use_numba_labeling=False
+    use_numba_labeling=False,
+    allow_gaps=False
 ):
     """
     Wrapper function for Branch-and-Price integration.
@@ -1550,11 +1570,12 @@ def solve_pricing_for_profile_bnp(
         use_pure_dp_optimization=use_pure_dp_optimization,
         use_heuristic_pricing=use_heuristic_pricing,
         heuristic_max_labels=heuristic_max_labels,
-        use_relaxed_history=use_relaxed_history
-    ) if not (use_numba_labeling and HAS_NUMBA) else []
+        use_relaxed_history=use_relaxed_history,
+        allow_gaps=allow_gaps
+    ) if not (use_numba_labeling and HAS_NUMBA and not allow_gaps) else []
     
     # === NUMBA OPTIMIZATION ===
-    if use_numba_labeling and HAS_NUMBA:
+    if use_numba_labeling and HAS_NUMBA and not allow_gaps:
         # Prepare data for Numba
         # Convert pi_dict to matrix
         max_worker_id = max(workers) if workers else 0
@@ -1829,7 +1850,7 @@ def run_labeling_algorithm(recipients_r, recipients_s, gamma_dict, obj_mode_dict
                            pi_dict, workers, max_time, ms, min_ms, theta_lookup,
                            print_worker_selection=True, use_bound_pruning=True, 
                            dominance_mode='bucket', branch_constraints=None, 
-                           branching_variant='mp', n_workers=None):
+                           branching_variant='mp', n_workers=None, allow_gaps=False):
     """
     Global Labeling Algorithm Function.
     
@@ -1884,7 +1905,10 @@ def run_labeling_algorithm(recipients_r, recipients_s, gamma_dict, obj_mode_dict
                 gamma_val, multiplier, pi_dict, workers, 
                 max_time, ms, min_ms, theta_lookup,
                 use_bound_pruning, dominance_mode, 
-                branch_constraints, branching_variant
+                use_bound_pruning, dominance_mode, 
+                branch_constraints, branching_variant,
+                10, True, False, None, False, False, # Defaults for intermediate args: max_cols, pure_dp, heuristic, max_labels, stop_first, relaxed
+                allow_gaps
             ))
         
         # Execute in parallel
@@ -1909,7 +1933,8 @@ def run_labeling_algorithm(recipients_r, recipients_s, gamma_dict, obj_mode_dict
                                               use_bound_pruning=use_bound_pruning, 
                                               dominance_mode=dominance_mode, 
                                               branch_constraints=branch_constraints, 
-                                              branching_variant=branching_variant)
+                                              branching_variant=branching_variant,
+                                              allow_gaps=allow_gaps)
             
             if cols:
                 results.extend(cols)
