@@ -127,7 +127,7 @@ class NumbaStabilityComparison:
             )
 
             start_time = time.time()
-            results = bnp_solver.solve(time_limit=600, max_nodes=1)
+            results = bnp_solver.solve(time_limit=600, max_nodes=300)
             solve_time = time.time() - start_time
 
             return {
@@ -135,6 +135,7 @@ class NumbaStabilityComparison:
                 'lp_bound': results.get('lp_bound'),
                 'incumbent': results.get('incumbent'),
                 'cg_iterations': results.get('cg_iterations', 0),
+                'nodes_explored': results.get('nodes_explored', 0),
                 'solve_time': solve_time
             }
 
@@ -146,6 +147,7 @@ class NumbaStabilityComparison:
                 'lp_bound': None,
                 'incumbent': None,
                 'cg_iterations': 0,
+                'nodes_explored': 0,
                 'solve_time': 0
             }
 
@@ -187,12 +189,13 @@ class NumbaStabilityComparison:
                         'lp_bound': result.get('lp_bound'),
                         'incumbent': result.get('incumbent'),
                         'cg_iterations': result.get('cg_iterations'),
+                        'nodes_explored': result.get('nodes_explored'),
                         'solve_time': result.get('solve_time'),
                         'error': result.get('error', '')
                     })
 
                     if result['success']:
-                        print(f"✓ LP={result['lp_bound']:.4f} ({result['solve_time']:.1f}s)")
+                        print(f"✓ LP={result['lp_bound']:.4f} Nodes={result['nodes_explored']} ({result['solve_time']:.1f}s)")
                     else:
                         print(f"✗ ERROR: {result.get('error', 'Unknown')[:50]}")
 
@@ -258,6 +261,33 @@ class NumbaStabilityComparison:
         print(f"  Numba:  {nb_times:.2f}s")
         print(f"  Speedup: {speedup:.2f}x")
 
+        # Max Nodes Reporting
+        print("\n" + "=" * 100)
+        print(" MAX NODE USAGE ".center(100, "="))
+        print("=" * 100)
+        
+        if not df.empty and 'nodes_explored' in df.columns:
+            max_nodes = df['nodes_explored'].max()
+            max_row = df[df['nodes_explored'] == max_nodes].iloc[0]
+            
+            print(f"Run with MOST nodes explored: {max_nodes}")
+            print(f"  - Seed: {max_row['seed']}")
+            print(f"  - Strategy: {max_row['branching_strategy']}")
+            print(f"  - Numba: {max_row['use_numba']}")
+            
+            # Additional detail: average nodes per strategy
+            print("\nAverage nodes per strategy:")
+            print(df.groupby('branching_strategy')['nodes_explored'].mean().to_string())
+
+            # Specific: Max nodes for Numba runs
+            numba_df = df[df['use_numba'] == True]
+            if not numba_df.empty:
+                max_numba_nodes = numba_df['nodes_explored'].max()
+                max_numba_row = numba_df[numba_df['nodes_explored'] == max_numba_nodes].iloc[0]
+                print(f"\nRun with MOST nodes explored (Numba Only): {max_numba_nodes}")
+                print(f"  - Seed: {max_numba_row['seed']}")
+                print(f"  - Strategy: {max_numba_row['branching_strategy']}")
+
     def _save_results(self):
         """Save results to CSV."""
         if not self.results:
@@ -276,7 +306,7 @@ class NumbaStabilityComparison:
 
 def main():
     """Main function."""
-    NUM_SEEDS = 2
+    NUM_SEEDS = 25
     START_SEED = 1
     BRANCHING_STRATEGIES = ['sp', 'mp']
 

@@ -37,7 +37,7 @@ def main(allow_gaps=False):
     # RESULTS DATAFRAME (initialize empty)
     # ===========================
     results_df = pd.DataFrame(columns=[
-        'seed', 'branching_strategy', 'learn_type', 'theta_base', 'lin_increase',
+        'seed', 'branching_strategy', 'search_strategy', 'learn_type', 'theta_base', 'lin_increase',
         'k_learn', 'infl_point', 'MS', 'MS_min', 'W_on', 'W_off', 'daily',
         'T', 'D', 'final_ub', 'final_lb', 'final_gap', 'root_lp', 'root_gap',
         'total_nodes', 'total_cg_iterations', 'iterations_per_node',
@@ -412,6 +412,7 @@ def main(allow_gaps=False):
     full_row_data = {
         'seed': seed,
         'branching_strategy': branching_strategy,
+        'search_strategy': search_strategy,
         'learn_type': app_data['learn_type'][0],
         'theta_base': app_data['theta_base'][0],
         'lin_increase': app_data['lin_increase'][0],
