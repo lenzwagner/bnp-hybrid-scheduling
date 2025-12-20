@@ -1611,20 +1611,7 @@ def solve_pricing_for_profile_bnp(
         has_right_patterns = False
         
         if branching_constraints:
-            from branching_constraints import SPVariableBranching, MPVariableBranching, SPPatternBranching
-            
-            # B.1: SP Variable Fixing
-            sp_var_constraints = [c for c in branching_constraints 
-                                  if isinstance(c, SPVariableBranching) and c.profile == profile]
-            if sp_var_constraints:
-                has_sp_fixing = True
-                for c in sp_var_constraints:
-                    j, t = c.agent, c.period
-                    if j <= max_worker_id and t <= max_time:
-                        if c.dir == 'left':  # Fix to 0
-                            forbidden_mask[j, t] = True
-                        else:  # Fix to 1
-                            required_mask[j, t] = True
+            from branching_constraints import MPVariableBranching, SPPatternBranching
             
             # B.2: MP No-Good Cuts
             mp_nogood_constraints = [c for c in branching_constraints 
@@ -1647,67 +1634,91 @@ def solve_pricing_for_profile_bnp(
                                 if isinstance(c, SPPatternBranching) and c.profile == profile 
                                 and c.direction == 'left']
             if sp_left_patterns:
-                has_left_patterns = True
-                num_left_patterns = len(sp_left_patterns)
-                max_pattern_size = max(len(c.pattern) for c in sp_left_patterns)
-                left_pattern_elements = np.full((num_left_patterns, max_pattern_size), -1, dtype=np.int64)
-                left_pattern_limits = np.zeros(num_left_patterns, dtype=np.int64)
+                # SIZE=1 OPTIMIZATION: Use forbidden_mask for single-element patterns
+                for c in sp_left_patterns:
+                    if len(c.pattern) == 1:
+                        (j, t) = next(iter(c.pattern))
+                        if j <= max_worker_id and t <= max_time:
+                            forbidden_mask[j, t] = True
+                            has_sp_fixing = True
                 
-                for pat_idx, c in enumerate(sp_left_patterns):
-                    left_pattern_limits[pat_idx] = len(c.pattern) - 1  # limit = |P| - 1
-                    for elem_idx, (j, t) in enumerate(sorted(c.pattern)):
-                        # Encode (j, t) as j*1000000 + t
-                        left_pattern_elements[pat_idx, elem_idx] = j * 1000000 + t
+                # Filter to only patterns with size > 1 for left_pattern_elements
+                sp_left_patterns_multi = [c for c in sp_left_patterns if len(c.pattern) > 1]
+                
+                if sp_left_patterns_multi:
+                    has_left_patterns = True
+                    num_left_patterns = len(sp_left_patterns_multi)
+                    max_pattern_size = max(len(c.pattern) for c in sp_left_patterns_multi)
+                    left_pattern_elements = np.full((num_left_patterns, max_pattern_size), -1, dtype=np.int64)
+                    left_pattern_limits = np.zeros(num_left_patterns, dtype=np.int64)
+                    
+                    for pat_idx, c in enumerate(sp_left_patterns_multi):
+                        left_pattern_limits[pat_idx] = len(c.pattern) - 1  # limit = |P| - 1
+                        for elem_idx, (j, t) in enumerate(sorted(c.pattern)):
+                            # Encode (j, t) as j*1000000 + t
+                            left_pattern_elements[pat_idx, elem_idx] = j * 1000000 + t
 
             # B.3.2: SP Right Pattern Branching
             sp_right_patterns = [c for c in branching_constraints 
                                  if isinstance(c, SPPatternBranching) and c.profile == profile 
                                  and c.direction == 'right']
             if sp_right_patterns:
-                has_right_patterns = True
-                num_right_patterns = len(sp_right_patterns)
-                max_elems = max(len(c.pattern) for c in sp_right_patterns) if sp_right_patterns else 0
-                right_pattern_elements = np.full((num_right_patterns, max_elems), -1, dtype=np.int64)
-                right_pattern_starts = np.zeros(num_right_patterns, dtype=np.int64)
-                right_pattern_duals = np.zeros(num_right_patterns, dtype=np.float64)
-                right_pattern_counts = np.zeros(num_right_patterns, dtype=np.int64)
+                # SIZE=1 OPTIMIZATION: Use required_mask for single-element patterns
+                for c in sp_right_patterns:
+                    if len(c.pattern) == 1:
+                        (j, t) = next(iter(c.pattern))
+                        if j <= max_worker_id and t <= max_time:
+                            required_mask[j, t] = True
+                            has_sp_fixing = True
                 
-                # Collect info for printing
-                pattern_info_list = []
+                # Filter to only patterns with size > 1 for right_pattern_elements
+                sp_right_patterns_multi = [c for c in sp_right_patterns if len(c.pattern) > 1]
                 
-                for pat_idx, c in enumerate(sp_right_patterns):
-                    # Sort pattern elements by time
-                    sorted_pat = sorted(c.pattern, key=lambda x: x[1])
-                    right_pattern_counts[pat_idx] = len(sorted_pat)
+                if sp_right_patterns_multi:
+                    has_right_patterns = True
+                    num_right_patterns = len(sp_right_patterns_multi)
+                    max_elems = max(len(c.pattern) for c in sp_right_patterns_multi)
+                    right_pattern_elements = np.full((num_right_patterns, max_elems), -1, dtype=np.int64)
+                    right_pattern_starts = np.zeros(num_right_patterns, dtype=np.int64)
+                    right_pattern_duals = np.zeros(num_right_patterns, dtype=np.float64)
+                    right_pattern_counts = np.zeros(num_right_patterns, dtype=np.int64)
                     
-                    # Extract dual from master_constraint if available
-                    # Right branch (>=) should have dual >= 0
-                    # If column covers pattern, RC is reduced by this dual
-                    dual_val = 0.0
-                    if hasattr(c, 'master_constraint') and c.master_constraint is not None:
-                        try:
-                            dual_val = c.master_constraint.Pi
-                        except Exception as e:
-                            logger.warning(f"  [Numba] Could not extract dual for Right Pattern {pat_idx}: {e}")
-                            dual_val = 0.0
-                    right_pattern_duals[pat_idx] = dual_val
+                    # Collect info for printing
+                    pattern_info_list = []
                     
-                    # Store pattern info for printing
-                    pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted_pat) + "}"
-                    pattern_info_list.append((pat_idx, pattern_str, dual_val))
+                    for pat_idx, c in enumerate(sp_right_patterns_multi):
+                        # Sort pattern elements by time
+                        sorted_pat = sorted(c.pattern, key=lambda x: x[1])
+                        right_pattern_counts[pat_idx] = len(sorted_pat)
+                        
+                        # Extract dual from master_constraint if available
+                        # Right branch (>=) should have dual >= 0
+                        # If column covers pattern, RC is reduced by this dual
+                        dual_val = 0.0
+                        if hasattr(c, 'master_constraint') and c.master_constraint is not None:
+                            try:
+                                dual_val = c.master_constraint.Pi
+                            except Exception as e:
+                                logger.warning(f"  [Numba] Could not extract dual for Right Pattern {pat_idx}: {e}")
+                                dual_val = 0.0
+                        right_pattern_duals[pat_idx] = dual_val
+                        
+                        # Store pattern info for printing
+                        pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted_pat) + "}"
+                        pattern_info_list.append((pat_idx, pattern_str, dual_val))
+                        
+                        if sorted_pat:
+                             _, first_t = sorted_pat[0]
+                             right_pattern_starts[pat_idx] = first_t
+                        
+                        for elem_idx, (j, t) in enumerate(sorted_pat):
+                             right_pattern_elements[pat_idx, elem_idx] = j * 1000000 + t
                     
-                    if sorted_pat:
-                         _, first_t = sorted_pat[0]
-                         right_pattern_starts[pat_idx] = first_t
-                    
-                    for elem_idx, (j, t) in enumerate(sorted_pat):
-                         right_pattern_elements[pat_idx, elem_idx] = j * 1000000 + t
-                
-                # Print all Right Pattern Duals for this profile
-                print(f"\n  [NUMBA RIGHT PATTERNS] Profile {profile}: {num_right_patterns} Right Pattern(s)")
-                for pat_idx, pattern_str, dual_val in pattern_info_list:
-                    dual_status = f"δ = {dual_val:+.6f}" if dual_val != 0.0 else "δ = 0.0 (inactive)"
-                    print(f"    Pattern #{pat_idx}: {pattern_str} → {dual_status} and original dual {dual_val}")
+                    # Print all Right Pattern Duals for this profile
+                    print(f"\n  [NUMBA RIGHT PATTERNS] Profile {profile}: {num_right_patterns} Right Pattern(s)")
+                    for pat_idx, pattern_str, dual_val in pattern_info_list:
+                        dual_status = f"δ = {dual_val:+.6f}" if dual_val != 0.0 else "δ = 0.0 (inactive)"
+                        print(f"    Pattern #{pat_idx}: {pattern_str} → {dual_status} and original dual {dual_val}")
         
         # Decide which Numba function to call
         use_branching_numba = has_sp_fixing or has_nogood_cuts or has_left_patterns or has_right_patterns

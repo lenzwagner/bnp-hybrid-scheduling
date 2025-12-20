@@ -48,131 +48,6 @@ class BranchingConstraint(ABC):
         pass
 
 
-class SPVariableBranching(BranchingConstraint):
-    """
-    Branching on Subproblem Variable x_{njt}
-
-    Master Problem Impact (Equation branch:sub2):
-    - Left:  sum_{a: chi^a_{njt}=1} Lambda_{na} <= floor(beta)
-    - Right: sum_{a: chi^a_{njt}=1} Lambda_{na} >= ceil(beta)
-
-    Subproblem Impact (Equation branch:sub3):
-    - Left:  x_{njt} = 0 (fix variable to 0)
-    - Right: x_{njt} = 1 (fix variable to 1)
-
-    Attributes:
-        profile: Profile index n
-        agent: Agent index j (or therapist type if aggregated)
-        period: Period index t
-        level: Level in search tree (for dual variable tracking)
-        dual_left: Dual variable for left constraint (delta^L_{nl})
-        dual_right: Dual variable for right constraint (delta^R_{nl})
-        master_constraint: Reference to restored cosntraint
-    """
-
-    def __init__(self, profile_n, agent_j, period_t, dir, level,
-                 floor_val, ceil_val):
-        self.profile = profile_n
-        self.agent = agent_j
-        self.period = period_t
-        self.level = level
-        self.dir = dir
-        self.floor = floor_val
-        self.ceil = ceil_val
-        self.dual_left = 0.0
-        self.dual_right = 0.0
-        self.master_constraint = None
-
-    def apply_to_master(self, master, node):
-        """Add constraint to master and set coefficients for initial columns."""
-        n, j, t = self.profile, self.agent, self.period
-
-        # Find relevant columns
-        relevant_columns = []
-        for (p, a), col_data in node.column_pool.items():
-            if p != n:
-                continue
-
-            schedules_x = col_data.get('schedules_x', {})
-
-            # Check if any key (n, j, t, *) exists with value > 0.5
-            # Keys are now (n, j, t, col_id) where col_id can be any value
-            found = False
-            for key, value in schedules_x.items():
-                if len(key) == 4 and key[0] == n and key[1] == j and key[2] == t and value > 0.5:
-                    found = True
-                    break
-
-            if found:
-                relevant_columns.append(a)
-
-        if not relevant_columns:
-            return
-
-        # Create constraint
-        lhs = gu.quicksum(master.lmbda[n, a] for a in relevant_columns if (n, a) in master.lmbda)
-
-        if self.dir == 'left':
-            self.master_constraint = master.Model.addConstr(
-                lhs <= self.floor,
-                name=f"sp_branch_L{self.level}_{n}_{j}_{t}"
-            )
-        else:
-            self.master_constraint = master.Model.addConstr(
-                lhs >= self.ceil,
-                name=f"sp_branch_R{self.level}_{n}_{j}_{t}"
-            )
-
-        master.Model.update()
-
-        # Set coefficients for EXISTING initial column (col_id=1)
-        if (n, 1) in master.lmbda:
-            if 1 in relevant_columns:
-                master.Model.chgCoeff(self.master_constraint, master.lmbda[n, 1], 1)
-                #print(f"    [SP Branch] Set coefficient for Lambda[{n},1] in constraint")
-
-
-    def apply_to_subproblem(self, subproblem):
-        """
-        Fix variable in subproblem.
-
-        Paper Equation (branch:sub3):
-        - Left:  x_{njt} = 0
-        - Right: x_{njt} = 1
-        """
-        if subproblem.P != self.profile:
-            return
-
-        # Key format in subproblem: x[p, j, t, iteration]
-        var_key = (self.profile, self.agent, self.period, subproblem.itr)
-
-        if var_key in subproblem.x:
-            if self.dir == 'left':
-                subproblem.x[var_key].LB = 0
-                subproblem.x[var_key].UB = 0
-            else:
-                subproblem.x[var_key].LB = 1
-                subproblem.x[var_key].UB = 1
-            subproblem.Model.update()
-
-    def is_column_compatible(self, column_data):
-        """
-        SP variable branching: All columns are compatible!
-
-        The master constraint regulates usage.
-        Column filtering is not necessary and can lead to bugs.
-
-        Returns:
-            bool: Always True
-        """
-
-        return True
-
-    def __repr__(self):
-        return (f"SPBranch(profile={self.profile}, agent={self.agent}, "
-                f"period={self.period}, level={self.level})")
-
-
 class SPPatternBranching(BranchingConstraint):
     """
     Branching on Pattern P(k) ⊆ J × T_k (set of resource pairs)
@@ -284,12 +159,31 @@ class SPPatternBranching(BranchingConstraint):
         
         Left:  sum_{(j,t) in P(k)} x_{kjt} <= |P(k)| - 1
         Right: sum_{(j,t) in P(k)} x_{kjt} = |P(k)| * w^Full
+        
+        Optimization: For size=1 patterns, directly fix variable bounds.
         """
         if subproblem.P != self.profile:
             return
         
         k = self.profile
         itr = subproblem.itr
+        pattern_size = len(self.pattern)
+        
+        # SIZE=1 OPTIMIZATION: Directly fix variable bounds
+        if pattern_size == 1:
+            (j_pat, t_pat) = next(iter(self.pattern))
+            var_key = (k, j_pat, t_pat, itr)
+            if var_key in subproblem.x:
+                if self.direction == 'left':
+                    # Left: x = 0
+                    subproblem.x[var_key].LB = 0
+                    subproblem.x[var_key].UB = 0
+                else:
+                    # Right: x = 1
+                    subproblem.x[var_key].LB = 1
+                    subproblem.x[var_key].UB = 1
+                subproblem.Model.update()
+            return
         
         # Build sum of x variables over the pattern
         pattern_vars = []
@@ -302,7 +196,6 @@ class SPPatternBranching(BranchingConstraint):
             # Pattern variables don't exist in this subproblem (shouldn't happen)
             return
         
-        pattern_size = len(self.pattern)
         lhs = gu.quicksum(pattern_vars)
         
         if self.direction == 'left':

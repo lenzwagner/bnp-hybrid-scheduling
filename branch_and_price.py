@@ -1065,10 +1065,7 @@ class BranchAndPrice:
                     for idx, c in enumerate(current_node.branching_constraints, 1):
 
                         # Manual str representation for clear output
-                        if "SPVariableBranching" in str(type(c)):
-                            c_type = "SP Var"
-                            details = f"Worker {c.agent}, Time {c.period}, {c.dir.upper()} (Level {c.level})"
-                        elif "SPPatternBranching" in str(type(c)):
+                        if "SPPatternBranching" in str(type(c)):
                             c_type = "SP Pattern"
                             pat_str = str(sorted(list(c.pattern)))
                             details = f"Profile {c.profile}, Pattern {pat_str}, {c.direction.upper()} (Level {c.level})"
@@ -1408,7 +1405,6 @@ class BranchAndPrice:
         Strategy depends on self.branching_strategy:
         - 'mp': Branch on Lambda_{na} (master variable)
         - 'sp': Branch on Pattern P(k) (hierarchical pattern-based branching)
-        - 'sp_var': Branch on single x_{njt} via beta_{njt} (single variable branching)
 
         Tie-breaking: smallest n, then smallest a/j/t
 
@@ -1429,9 +1425,6 @@ class BranchAndPrice:
             result = self._select_sp_branching_candidate(node, node_lambda)
             self.logger.info(f"DEBUG: _select_sp_branching_candidate returned: {result}")
             return result
-        elif self.branching_strategy == 'sp_var':
-            # Single variable branching
-            return self._select_sp_variable_branching_candidate(node, node_lambda)
         else:
             raise ValueError(f"Unknown branching strategy: {self.branching_strategy}")
 
@@ -1698,97 +1691,6 @@ class BranchAndPrice:
         self.logger.info(f"     Floor: {floor_val}, Ceil: {ceil_val}")
         
         return 'sp', branching_info
-
-    def _select_sp_variable_branching_candidate(self, node, lambdas):
-        """
-        Select most fractional single x_{njt} for SP Variable Branching.
-        
-        Computes beta_{njt} = sum_{a: chi^a_{njt}=1} Lambda_{na} for all (n,j,t),
-        then selects the one with highest fractionality.
-        
-        This is the classic SP variable branching (NOT pattern-based).
-        
-        Returns:
-            tuple: ('sp', branching_info) or (None, None)
-        """
-        self.logger.info(f"\n[SP Variable Branching] Starting single variable candidate selection...")
-        self.logger.info(f"  Column pool size: {len(node.column_pool)}")
-        self.logger.info(f"  Lambda values size: {len(lambdas)}")
-        
-        # Compute beta_{njt} for all (n,j,t) combinations
-        beta_values = {}  # (n, j, t) -> beta value
-        
-        for (n, a), lambda_val in lambdas.items():
-            # Handle both dict format and direct float
-            lval = lambda_val.get('value', 0.0) if isinstance(lambda_val, dict) else lambda_val
-            if lval < 1e-6:
-                continue
-            
-            if (n, a) not in node.column_pool:
-                continue
-            
-            col_data = node.column_pool[(n, a)]
-            schedules_x = col_data.get('schedules_x', {})
-            
-            # For each assignment in this column
-            for (p, j, t, _), chi_val in schedules_x.items():
-                if p == n and chi_val > 0.5:
-                    key = (n, j, t)
-                    if key not in beta_values:
-                        beta_values[key] = 0.0
-                    beta_values[key] += lval
-        
-        # Find most fractional beta_{njt}
-        best_candidate = None
-        max_fractionality = 0.0
-        
-        for (n, j, t), beta_val in beta_values.items():
-            floor_val = int(beta_val)
-            ceil_val = floor_val + 1
-            
-            dist_to_floor = beta_val - floor_val
-            dist_to_ceil = ceil_val - beta_val
-            fractionality = min(dist_to_floor, dist_to_ceil)
-            
-            if fractionality > 1e-5:  # Fractional
-                is_better = False
-                
-                if fractionality > max_fractionality + 1e-10:
-                    is_better = True
-                elif abs(fractionality - max_fractionality) < 1e-10:
-                    # Tie-breaking: smallest n, then j, then t
-                    if best_candidate is None:
-                        is_better = True
-                    else:
-                        current_key = (n, j, t)
-                        best_key = (best_candidate['profile'], 
-                                  best_candidate['agent'], 
-                                  best_candidate['period'])
-                        if current_key < best_key:
-                            is_better = True
-                
-                if is_better:
-                    max_fractionality = fractionality
-                    best_candidate = {
-                        'profile': n,
-                        'agent': j,
-                        'period': t,
-                        'beta_value': beta_val,
-                        'floor': floor_val,
-                        'ceil': ceil_val,
-                        'fractionality': fractionality
-                    }
-        
-        if best_candidate is None:
-            self.logger.error(f"  ❌ No fractional variable found!")
-            return None, None
-        
-        self.logger.info(f"\n  ✅ Selected variable for branching:")
-        self.logger.info(f"     x[{best_candidate['profile']},{best_candidate['agent']},{best_candidate['period']}]")
-        self.logger.info(f"     beta = {best_candidate['beta_value']:.6f}")
-        self.logger.info(f"     fractionality = {best_candidate['fractionality']:.6f}")
-        
-        return 'sp', best_candidate
 
 
     def branch_on_mp_variable(self, parent_node, branching_info):
@@ -2216,12 +2118,8 @@ class BranchAndPrice:
                     print(f"\n   Active Branching Constraints ({len(node.branching_constraints)}):")
                     for idx, c in enumerate(node.branching_constraints, 1):
 
-
                         # Manual str representation for clear output
-                        if "SPVariableBranching" in str(type(c)):
-                            c_type = "SP Var"
-                            details = f"Worker {c.agent}, Time {c.period}, {c.dir.upper()} (Level {c.level})"
-                        elif "SPPatternBranching" in str(type(c)):
+                        if "SPPatternBranching" in str(type(c)):
                             c_type = "SP Pattern"
                             pat_str = str(sorted(list(c.pattern)))
                             details = f"Profile {c.profile}, Pattern {pat_str}, {c.direction.upper()} (Level {c.level})"
@@ -2778,31 +2676,13 @@ class BranchAndPrice:
 
         CRITICAL: A branching constraint on profile n only affects columns for profile n!
         """
-        from branching_constraints import SPVariableBranching, SPPatternBranching, MPVariableBranching
+        from branching_constraints import SPPatternBranching, MPVariableBranching
 
         coefs = []
         schedules_x = col_data.get('schedules_x', {})
 
         for constraint in branching_constraints:
-            if isinstance(constraint, SPVariableBranching):
-                n, j, t = constraint.profile, constraint.agent, constraint.period
-
-                # ✅ CRITICAL FIX: If this column is not for the branched profile, coef = 0
-                if profile != n:
-                    coefs.append(0)
-                    continue
-
-                # Only if profile == n: check if this column has assignment (j,t)
-                chi_value = 0
-                for (p, j_sched, t_sched, a), val in schedules_x.items():
-                    if p == profile and j_sched == j and t_sched == t and a == col_id:
-                        chi_value = val
-                        break
-
-                coef = 1 if chi_value > 0.5 else 0
-                coefs.append(coef)
-            
-            elif isinstance(constraint, SPPatternBranching):
+            if isinstance(constraint, SPPatternBranching):
                 k = constraint.profile
                 pattern = constraint.pattern
                 
@@ -2853,16 +2733,14 @@ class BranchAndPrice:
 
     def _get_branching_constraint_duals(self, master, node):
         """
-        Extract dual variables from SP branching constraints.
-        
-        Supports both SPVariableBranching and SPPatternBranching.
+        Extract dual variables from SP branching constraints (SPPatternBranching).
 
         According to Paper Eq. (branch:sub4):
         - Left branch (≤): δ^L ≤ 0
         - Right branch (≥): δ^R ≥ 0
         - Both are ADDED in pricing: - sum(δ^L + δ^R)
         """
-        from branching_constraints import SPVariableBranching, SPPatternBranching
+        from branching_constraints import SPPatternBranching
         
         branching_duals = {}
 
@@ -2872,7 +2750,9 @@ class BranchAndPrice:
         sp_constraints_found = 0
 
         for constraint in node.branching_constraints:
-            # Only SP branching constraints (Variable or Pattern) have master constraints
+            # Only SP Pattern branching constraints have master constraints
+            if not isinstance(constraint, SPPatternBranching):
+                continue
             if not hasattr(constraint, 'master_constraint') or constraint.master_constraint is None:
                 continue
 
@@ -2880,13 +2760,7 @@ class BranchAndPrice:
                 dual_val = constraint.master_constraint.Pi
                 sp_constraints_found += 1
                 
-                # Get direction attribute (different for SPVariableBranching vs SPPatternBranching)
-                if isinstance(constraint, SPVariableBranching):
-                    direction = constraint.dir
-                elif isinstance(constraint, SPPatternBranching):
-                    direction = constraint.direction
-                else:
-                    direction = 'unknown'
+                direction = constraint.direction
 
                 # Validate dual sign (according to constraint direction)
                 if direction == 'left' and dual_val > 1e-6:
@@ -2894,27 +2768,16 @@ class BranchAndPrice:
                 if direction == 'right' and dual_val < -1e-6:
                     self.logger.warning(f"      ⚠️  WARNING: Right branch (≥) has negative dual: {dual_val:.6f}")
 
-                # Store dual - key format depends on constraint type
-                if isinstance(constraint, SPVariableBranching):
-                    # Key: (profile, agent, period, level)
-                    key = (constraint.profile, constraint.agent, constraint.period, constraint.level)
-                    branching_duals[key] = dual_val
-                    
-                    self.logger.info(f"      [Dual] Level {constraint.level:2d} ({direction:5s}): "
-                                f"x[{constraint.profile},{constraint.agent:2d},{constraint.period:2d}] "
-                                f"→ π={dual_val:+.6f}")
+                # Store dual with pattern identifier
+                # Key: (profile, 'pattern', pattern_id, level) where pattern_id is the pattern hash
+                pattern_id = hash(constraint.pattern)
+                key = (constraint.profile, 'pattern', pattern_id, constraint.level)
+                branching_duals[key] = dual_val
                 
-                elif isinstance(constraint, SPPatternBranching):
-                    # For pattern branching, store with pattern identifier
-                    # Key: (profile, 'pattern', pattern_id, level) where pattern_id is the pattern hash
-                    pattern_id = hash(constraint.pattern)
-                    key = (constraint.profile, 'pattern', pattern_id, constraint.level)
-                    branching_duals[key] = dual_val
-                    
-                    pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(constraint.pattern)) + "}"
-                    self.logger.info(f"      [Dual] Level {constraint.level:2d} ({direction:5s}): "
-                                f"Pattern[{constraint.profile}] {pattern_str} "
-                                f"→ π={dual_val:+.6f}")
+                pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(constraint.pattern)) + "}"
+                self.logger.info(f"      [Dual] Level {constraint.level:2d} ({direction:5s}): "
+                            f"Pattern[{constraint.profile}] {pattern_str} "
+                            f"→ π={dual_val:+.6f}")
 
             except Exception as e:
                 self.logger.warning(f"      ⚠️  Could not extract dual from constraint: {e}")
@@ -3323,199 +3186,6 @@ class BranchAndPrice:
                     f"with reduced cost {subproblem.Model.objVal:.6f}")
 
 
-
-    def branch_on_sp_variable(self, parent_node, branching_info):
-        """
-        Branch on Subproblem Variable x_{njt}.
-
-        Creates two child nodes:
-        - Left:  x_{njt} = 0  (no assignment)
-        - Right: x_{njt} = 1  (force assignment)
-
-        Paper Section 3.2.4, Equations (branch:sub2) and (branch:sub3)
-
-        Args:
-            parent_node: BnPNode to branch from
-            branching_info: Dict with 'profile', 'agent', 'period', 'beta_value', etc.
-
-        Returns:
-            tuple: (left_child, right_child)
-        """
-        n = branching_info['profile']
-        j = branching_info['agent']
-        t = branching_info['period']
-        beta_val = branching_info['beta_value']
-        floor_val = branching_info['floor']
-        ceil_val = branching_info['ceil']
-
-        self.logger.info(f"\n{'=' * 100}")
-        self.logger.info(f" BRANCHING ON SP VARIABLE ".center(100, "="))
-        self.logger.info(f"{'=' * 100}")
-        self.logger.info(f"Branching on x[{n},{j},{t}], beta = {beta_val:.6f}")
-        self.logger.info(f"  Left:  x[{n},{j},{t}] = 0")
-        self.logger.info(f"  Right: x[{n},{j},{t}] = 1")
-
-        # -------------------------
-        # LEFT CHILD
-        # -------------------------
-        self.node_counter += 1
-        left_child = BnPNode(
-            node_id=self.node_counter,
-            parent_id=parent_node.node_id,
-            depth=parent_node.depth + 1,
-            path=parent_node.path + 'l'
-        )
-
-        from branching_constraints import SPVariableBranching
-
-        left_constraint = SPVariableBranching(
-            profile_n=n,
-            agent_j=j,
-            period_t=t,
-            dir='left',
-            level=left_child.depth,
-            floor_val=floor_val,
-            ceil_val=ceil_val
-        )
-
-        left_child.branching_constraints = parent_node.branching_constraints.copy()
-        left_child.branching_constraints.append(left_constraint)
-
-        self._inherit_columns_from_parent(left_child, parent_node)
-
-        # -------------------------
-        # RIGHT CHILD
-        # -------------------------
-        self.node_counter += 1
-        right_child = BnPNode(
-            node_id=self.node_counter,
-            parent_id=parent_node.node_id,
-            depth=parent_node.depth + 1,
-            path=parent_node.path + 'r'
-        )
-
-        right_constraint = SPVariableBranching(
-            profile_n=n,
-            agent_j=j,
-            period_t=t,
-            dir='right',
-            level=right_child.depth,
-            floor_val=floor_val,
-            ceil_val=ceil_val
-        )
-
-        right_child.branching_constraints = parent_node.branching_constraints.copy()
-        right_child.branching_constraints.append(right_constraint)
-
-        self._inherit_columns_from_parent(right_child, parent_node)
-
-        # Store nodes in the main dictionary first
-        self.nodes[left_child.node_id] = left_child
-        self.nodes[right_child.node_id] = right_child
-
-        # -------------------------
-        # IMMEDIATELY SOLVE BOTH CHILDREN WITH FULL COLUMN GENERATION
-        # This is the CORRECT Branch-and-Price approach!
-        # -------------------------
-        self.logger.info("\n" + "=" * 100)
-        self.logger.info(" SOLVING BOTH CHILDREN IMMEDIATELY WITH FULL CG ".center(100, "="))
-        self.logger.info("=" * 100)
-
-        # Solve left child
-        left_is_active, left_bound, left_lambdas = self._solve_and_evaluate_child_node(left_child)
-
-        # Solve right child
-        right_is_active, right_bound, right_lambdas = self._solve_and_evaluate_child_node(right_child)
-
-        self.logger.info(f"\n  Child Node Evaluation Summary:")
-        self.logger.info(f"    Left  (Node {left_child.node_id}): Bound={left_bound:.6f}, Active={left_is_active}, Status={left_child.status}")
-        self.logger.info(f"    Right (Node {right_child.node_id}): Bound={right_bound:.6f}, Active={right_is_active}, Status={right_child.status}")
-
-        # Add to open nodes ONLY if they are active (not fathomed)
-        # For BFS: Store (bound, node_id) tuple
-        # For DFS: Store node_id only
-        if self.search_strategy == 'bfs':
-            if left_is_active:
-                self.open_nodes.append((left_bound, left_child.node_id))
-                self.logger.info(f"    ✓ Left child added to open_nodes with bound {left_bound:.6f}")
-            if right_is_active:
-                self.open_nodes.append((right_bound, right_child.node_id))
-                self.logger.info(f"    ✓ Right child added to open_nodes with bound {right_bound:.6f}")
-        else:  # DFS
-            # Add right first, then left (so left is processed first in LIFO)
-            if right_is_active:
-                self.open_nodes.append(right_child.node_id)
-                self.logger.info(f"    ✓ Right child added to open_nodes")
-            if left_is_active:
-                self.open_nodes.append(left_child.node_id)
-                self.logger.info(f"    ✓ Left child added to open_nodes")
-
-        parent_node.status = 'branched'
-
-        self.logger.info(f"  Created left child:  Node {left_child.node_id} (depth {left_child.depth})")
-        self.logger.info(f"  Created right child: Node {right_child.node_id} (depth {right_child.depth})")
-        self.logger.info(f"{'=' * 100}\n")
-
-        # -------------------------
-        # DETAILED OUTPUT OF OPEN_NODES STRUCTURE
-        # -------------------------
-        print("\n" + "╔" + "═" * 98 + "╗")
-        print("║" + " OPEN_NODES STRUCTURE AFTER BRANCHING ".center(98) + "║")
-        print("╠" + "═" * 98 + "╣")
-        incumbent_str = f"{self.incumbent:.6f}" if self.incumbent < float('inf') else "None"
-        print(f"║ Current Incumbent (UB): {incumbent_str}".ljust(99) + "║")
-        print("╠" + "═" * 98 + "╣")
-
-        if self.search_strategy == 'bfs':
-            print("║ Strategy: BEST-FIRST SEARCH (BFS)".ljust(99) + "║")
-            print("║ Format: List of tuples [(bound, node_id), ...]".ljust(99) + "║")
-            print("╠" + "═" * 98 + "╣")
-            print(f"║ Total nodes in open_nodes: {len(self.open_nodes)}".ljust(99) + "║")
-            print("╠" + "═" * 98 + "╣")
-
-            # Sort for display (ascending bound = best first)
-            sorted_nodes = sorted(self.open_nodes, key=lambda x: x[0])
-
-            for idx, (bound, node_id) in enumerate(sorted_nodes, 1):
-                node = self.nodes[node_id]
-                marker = "🏆 BEST" if idx == 1 else ""
-                # Show if node can improve incumbent
-                if self.incumbent < float('inf'):
-                    can_improve = " ✓" if bound < self.incumbent - 1e-5 else " ❌"
-                    gap_to_inc = abs(bound - self.incumbent)
-                    print(f"║ {idx}. Node {node_id:3d}: bound={bound:10.6f}, depth={node.depth}, path='{node.path:10s}' {marker} {can_improve} (Δ={gap_to_inc:.4f})".ljust(99)[:99] + "║")
-                else:
-                    print(f"║ {idx}. Node {node_id:3d}: bound={bound:10.6f}, depth={node.depth}, path='{node.path:10s}' {marker}".ljust(99) + "║")
-
-            print("╠" + "═" * 98 + "╣")
-            print(f"║ Raw open_nodes list: {self.open_nodes}".ljust(99)[:99] + "║")
-
-        else:  # DFS
-            print("║ Strategy: DEPTH-FIRST SEARCH (DFS)".ljust(99) + "║")
-            print("║ Format: List of node IDs [node_id, ...]".ljust(99) + "║")
-            print("╠" + "═" * 98 + "╣")
-            print(f"║ Total nodes in open_nodes: {len(self.open_nodes)}".ljust(99) + "║")
-            print("╠" + "═" * 98 + "╣")
-
-            for idx, node_id in enumerate(reversed(self.open_nodes), 1):
-                node = self.nodes[node_id]
-                marker = "👉 NEXT" if idx == 1 else ""
-                # Show if node can improve incumbent
-                if self.incumbent < float('inf'):
-                    can_improve = " ✓" if node.lp_bound < self.incumbent - 1e-5 else " ❌"
-                    gap_to_inc = abs(node.lp_bound - self.incumbent)
-                    print(f"║ {idx}. Node {node_id:3d}: bound={node.lp_bound:10.6f}, depth={node.depth}, path='{node.path:10s}' {marker} {can_improve} (Δ={gap_to_inc:.4f})".ljust(99)[:99] + "║")
-                else:
-                    print(f"║ {idx}. Node {node_id:3d}: bound={node.lp_bound:10.6f}, depth={node.depth}, path='{node.path:10s}' {marker}".ljust(99) + "║")
-
-            print("╠" + "═" * 98 + "╣")
-            print(f"║ Raw open_nodes list: {self.open_nodes}".ljust(99)[:99] + "║")
-
-        print("╚" + "═" * 98 + "╝\n")
-
-        self.stats['nodes_branched'] += 1
-
-        return left_child, right_child
 
     def branch_on_sp_pattern(self, parent_node, branching_info):
         """

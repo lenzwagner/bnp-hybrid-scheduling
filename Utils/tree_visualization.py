@@ -79,15 +79,16 @@ class BnPTreeVisualizer:
         # Get the last branching constraint (most recent)
         last_constraint = node.branching_constraints[-1]
 
-        from branching_constraints import MPVariableBranching, SPVariableBranching
+        from branching_constraints import MPVariableBranching, SPPatternBranching
 
         if isinstance(last_constraint, MPVariableBranching):
             direction_symbol = "≤" if last_constraint.direction == 'left' else "≥"
             return f"λ[{last_constraint.profile},{last_constraint.column}] {direction_symbol} {last_constraint.bound}"
 
-        elif isinstance(last_constraint, SPVariableBranching):
-            value = last_constraint.floor if last_constraint.dir == 'left' else last_constraint.ceil
-            return f"x[{last_constraint.profile},{last_constraint.agent},{last_constraint.period}] = {value}"
+        elif isinstance(last_constraint, SPPatternBranching):
+            pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(last_constraint.pattern)) + "}"
+            direction = "≤" if last_constraint.direction == 'left' else "≥"
+            return f"Pattern {pattern_str} {direction}"
 
         return "Unknown"
 
@@ -98,7 +99,7 @@ class BnPTreeVisualizer:
 
         last_constraint = child.branching_constraints[-1]
 
-        from branching_constraints import MPVariableBranching, SPVariableBranching
+        from branching_constraints import MPVariableBranching, SPPatternBranching
 
         if isinstance(last_constraint, MPVariableBranching):
             if last_constraint.direction == 'left':
@@ -106,9 +107,9 @@ class BnPTreeVisualizer:
             else:
                 return f"λ ≥ {last_constraint.bound}"
 
-        elif isinstance(last_constraint, SPVariableBranching):
-            value = last_constraint.floor if last_constraint.dir == 'left' else last_constraint.ceil
-            return f"x = {value}"
+        elif isinstance(last_constraint, SPPatternBranching):
+            direction = "≤" if last_constraint.direction == 'left' else "≥"
+            return f"Pattern {direction}"
 
         return ""
 
@@ -593,7 +594,7 @@ class BnPTreeVisualizer:
 
         last_constraint = child.branching_constraints[-1]
 
-        from branching_constraints import MPVariableBranching, SPVariableBranching
+        from branching_constraints import MPVariableBranching, SPPatternBranching
 
         if isinstance(last_constraint, MPVariableBranching):
             # Master Problem Variable Branching: λ_{n,a} ≤ b or λ_{n,a} ≥ b
@@ -601,20 +602,11 @@ class BnPTreeVisualizer:
             # Use proper LaTeX subscript formatting
             return f"$\\lambda_{{{last_constraint.profile},{last_constraint.column}}} {symbol} {last_constraint.bound:.0f}$"
 
-        elif isinstance(last_constraint, SPVariableBranching):
-            # Subproblem Variable Branching - Show Master Problem Impact:
-            # Left:  ∑_{a: χ^a_{njt}=1} λ_{n,a} ≤ floor(β)
-            # Right: ∑_{a: χ^a_{njt}=1} λ_{n,a} ≥ ceil(β)
-            if last_constraint.dir == 'left':
-                symbol = r"\leq"
-                bound = last_constraint.floor
-            else:
-                symbol = r"\geq"
-                bound = last_constraint.ceil
-
-            # Show aggregated lambda constraint with subscript for x_{njt}
-            n, j, t = last_constraint.profile, last_constraint.agent, last_constraint.period
-            return f"$\\sum_{{a}} \\lambda_{{{n},a}}^{{x_{{{j},{t}}}}} {symbol} {bound:.0f}$"
+        elif isinstance(last_constraint, SPPatternBranching):
+            # Subproblem Pattern Branching
+            symbol = r"\leq" if last_constraint.direction == 'left' else r"\geq"
+            pattern_str = ", ".join(f"({j},{t})" for j, t in sorted(last_constraint.pattern))
+            return f"$P\\{{{pattern_str}\\}} {symbol}$"
 
         return ""
 
