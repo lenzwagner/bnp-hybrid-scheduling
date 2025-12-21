@@ -102,7 +102,7 @@ def main(allow_gaps=False):
 
     # Branch-and-Price settings
     use_branch_and_price = True  # Set to False for standard CG
-    branching_strategy = 'sp'  # 'mp' for MP variable branching, 'sp' for SP variable branching
+    branching_strategy = 'mp'  # 'mp' for MP variable branching, 'sp' for SP variable branching
     search_strategy = 'bfs' # 'dfs' for Depth-First, 'bfs' for Best-Fit-Search
     
     # Parallelization settings
@@ -120,9 +120,6 @@ def main(allow_gaps=False):
 
     # Visualization settings
     visualize_tree = False  # Enable tree visualization
-    tree_layout = 'hierarchical'  # 'hierarchical' or 'radial'
-    detailed_tree = False  # Show detailed info on nodes
-    save_tree_path = 'bnp_tree.png'  # Path to save (None to not save)
 
     # Define labeling specs
     # TODO: TREATMENT GAPS (Relaxing x+y=1 constraint)
@@ -278,15 +275,6 @@ def main(allow_gaps=False):
                 save_path='Pictures/Tree/tree_academic.png',
                 dpi=600  # High resolution for papers
             )
-
-            # Other options:
-            # Standard hierarchical: layout='hierarchical', save_path='Pictures/Tree/tree_hierarchical.png'
-            # Radial layout: layout='radial', save_path='Pictures/Tree/tree_radial.png'
-            # Detailed view: detailed=True, save_path='Pictures/Tree/tree_detailed.png'
-            # Custom colors: academic=True, node_color='#ADD8E6', fathomed_color='#FFB6C1'
-
-            # Export for LaTeX:
-            # bnp_solver.export_tree_tikz('Pictures/Tree/bnp_tree.tex')
 
     else:
         # Standard Column Generation

@@ -50,18 +50,9 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
     s_k = cg_solver_data['Req_agg'][profile]
     obj_multiplier = cg_solver_data['E_dict'].get(profile, 1)
     
-    # Extract duals_delta from branching constraints (variable branching only)
-    duals_delta = 0.0
+    # Extract pattern duals for this profile (Right-Pattern duals are >= 0, reduce RC when covered)
     pattern_dual_sum = 0.0
     if branching_duals:
-        variable_duals = {k: v for k, v in branching_duals.items() 
-                        if k[0] == profile and len(k) == 4 and k[1] != 'pattern'}
-        if variable_duals:
-            duals_delta = sum(variable_duals.values())
-            print('Error with dual handling!')
-            sys.exit()
-        
-        # Extract pattern duals for this profile (Right-Pattern duals are >= 0, reduce RC when covered)
         pattern_duals = {k: v for k, v in branching_duals.items() 
                         if k[0] == profile and len(k) == 4 and k[1] == 'pattern'}
         if pattern_duals:
@@ -79,8 +70,7 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         # Pattern duals (right-branch, >= 0) reduce RC when pattern is covered.
         # For conservative bound, assume patterns could be covered.
         
-        # Safe check (includes pattern duals):
-        lb_pruning = (s_k * obj_multiplier) - duals_gamma - duals_delta - pattern_dual_sum
+        lb_pruning = (s_k * obj_multiplier) - duals_gamma - pattern_dual_sum
         # Safety margin
         if lb_pruning > -1e-9:
             # Prune this profile! No negative reduced cost possible.
@@ -92,7 +82,6 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         profile=profile,
         duals_pi=duals_pi,
         duals_gamma=duals_gamma,
-        duals_delta=duals_delta,
         r_k=r_k,
         s_k=s_k,
         obj_multiplier=obj_multiplier,
@@ -2973,21 +2962,12 @@ class BranchAndPrice:
         MS = self.cg_solver.app_data['MS'][0]
         MIN_MS = self.cg_solver.app_data['MS_min'][0]
         
-        # Extract duals_delta from branching constraints (for SP variable branching)
-        duals_delta = 0.0
-        if branching_duals:
-            variable_duals = {k: v for k, v in branching_duals.items() 
-                            if k[0] == profile and len(k) == 4 and k[1] != 'pattern'}
-            if variable_duals:
-                duals_delta = sum(variable_duals.values())
-        
         # Call labeling algorithm
 
         col_data_list = solve_pricing_for_profile_bnp(
             profile=profile,
             duals_pi=duals_pi,
             duals_gamma=duals_gamma.get(profile, 0.0),
-            duals_delta=duals_delta,
             r_k=r_k,
             s_k=s_k,
             obj_multiplier=obj_multiplier,
