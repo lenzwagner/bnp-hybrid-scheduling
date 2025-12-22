@@ -470,7 +470,18 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
     t_init_start = time.time()
 
     # Worker Dominance Pre-Elimination
-    candidate_workers = compute_candidate_workers(workers, r_k, max_time, pi_dict)
+    # Use Numba-optimized version if available
+    if HAS_NUMBA:
+        # Convert pi_dict to matrix format for Numba
+        workers_array = np.array(workers, dtype=np.int64)
+        pi_matrix = np.zeros((max(workers) + 1, max_time + 2), dtype=np.float64)
+        for (w, t), v in pi_dict.items():
+            if w <= max(workers) and t <= max_time + 1:
+                pi_matrix[w, t] = v
+        candidate_workers_numba = label_numba.compute_candidate_workers_numba(workers_array, r_k, max_time, pi_matrix)
+        candidate_workers = candidate_workers_numba.tolist()  # Fast numpy tolist()
+    else:
+        candidate_workers = compute_candidate_workers(workers, r_k, max_time, pi_dict)
     eliminated_workers = [w for w in workers if w not in candidate_workers]
 
     # Print for each Recipient
@@ -1585,8 +1596,17 @@ def solve_pricing_for_profile_bnp(
             if w <= max_worker_id and t <= max_time:
                 pi_matrix[w, t] = val
 
-        # Arrays
-        workers_arr = np.array(workers, dtype=np.int64)
+        # Worker Dominance Pre-Elimination (using Numba-optimized version)
+        workers_array_full = np.array(workers, dtype=np.int64)
+        workers_arr = label_numba.compute_candidate_workers_numba(
+            workers_array_full, r_k, max_time, pi_matrix
+        )  # Returns numpy array directly
+        
+        # Log eliminated workers
+        eliminated = set(workers) - set(workers_arr)
+        if eliminated:
+            logger.info(f"[NUMBA] Profile {profile}: Workers {list(workers_arr)} (eliminated {list(eliminated)})")
+        
         theta_arr = np.array(theta_lookup, dtype=np.float64)
         
         # === FLATTEN BRANCHING CONSTRAINTS FOR NUMBA ===

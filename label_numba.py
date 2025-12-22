@@ -1,7 +1,186 @@
 
 import numpy as np
-from numba import njit, int64, float64, types
+from numba import njit, int64, float64, types, prange
 from numba.typed import List, Dict
+
+
+# =============================================================================
+# NUMBA-OPTIMIZED HELPER FUNCTIONS
+# =============================================================================
+
+@njit(cache=True)
+def validate_column_history_numba(path_mask, duration, MS, MIN_MS):
+    """
+    Numba-optimized validation that a complete column satisfies rolling window constraints.
+    
+    Args:
+        path_mask: Bitmask representing the path (bit i = 1 means therapist at position i)
+        duration: Length of the schedule
+        MS: Rolling window size
+        MIN_MS: Minimum human services required in window
+    
+    Returns:
+        bool: True if column satisfies all rolling window constraints
+    """
+    # Check every position in the schedule
+    for i in range(duration):
+        if i + 1 < MS:
+            # Not enough history yet - check if remaining slots can satisfy MIN_MS
+            current_sum = 0
+            for j in range(i + 1):
+                if (path_mask >> j) & 1:
+                    current_sum += 1
+            remaining_slots = MS - (i + 1)
+            max_possible = current_sum + remaining_slots
+            if max_possible < MIN_MS:
+                return False
+        else:
+            # Complete window exists
+            window_start = i + 1 - MS
+            window_sum = 0
+            for j in range(window_start, i + 1):
+                if (path_mask >> j) & 1:
+                    window_sum += 1
+            if window_sum < MIN_MS:
+                return False
+    
+    return True
+
+
+@njit(cache=True, inline='always')
+def compute_lower_bound_numba(current_cost, start_time, end_time, gamma_k, obj_mode):
+    """
+    Numba-optimized Lower Bound calculation for Bound Pruning.
+    
+    Inlined for maximum performance in hot loops.
+    
+    Args:
+        current_cost: Accumulated cost so far
+        start_time: Column start time
+        end_time: Column end time
+        gamma_k: Gamma dual value
+        obj_mode: Objective mode multiplier
+    
+    Returns:
+        float: Minimum achievable final Reduced Cost (optimistic)
+    """
+    duration = end_time - start_time + 1
+    time_cost = duration * obj_mode
+    return current_cost + time_cost - gamma_k
+
+@njit(cache=True)
+def compute_candidate_workers_numba(workers, r_k, tau_max, pi_matrix):
+    """
+    Numba-optimized Worker Dominance Pre-Elimination.
+    
+    Worker j1 dominates j2 if π_{j1,t} >= π_{j2,t} for all t in [r_k, tau_max]
+    AND π_{j1,t} > π_{j2,t} for at least one t (strict dominance).
+    Since π values are <= 0 (implicit costs), higher π means lower cost.
+    
+    Args:
+        workers: 1D numpy array of worker IDs
+        r_k: Release time (int)
+        tau_max: Maximum time horizon (int)
+        pi_matrix: 2D numpy array [num_workers, max_time+1] of pi values
+    
+    Returns:
+        Tuple of (candidate_array, count) - numpy array with candidates and actual count
+    """
+    n_workers = len(workers)
+    # Pre-allocate result array (worst case: all workers are candidates)
+    result = np.empty(n_workers, dtype=np.int64)
+    count = 0
+    
+    for i1 in range(n_workers):
+        j1 = workers[i1]
+        is_dominated = False
+        
+        for i2 in range(n_workers):
+            if i1 == i2:
+                continue
+                
+            j2 = workers[i2]
+            
+            # Check if j2 dominates j1
+            all_better_or_equal = True
+            at_least_one_strictly_better = False
+            
+            for t in range(r_k, tau_max + 1):
+                pi_j1 = pi_matrix[j1, t]
+                pi_j2 = pi_matrix[j2, t]
+                
+                if pi_j2 < pi_j1:  # j2 is worse in this period
+                    all_better_or_equal = False
+                    break
+                elif pi_j2 > pi_j1:  # j2 is strictly better in this period
+                    at_least_one_strictly_better = True
+            
+            # j2 dominates j1 if it's at least as good everywhere and strictly better somewhere
+            if all_better_or_equal and at_least_one_strictly_better:
+                is_dominated = True
+                break
+        
+        if not is_dominated:
+            result[count] = j1
+            count += 1
+    
+    # Return slice of actual candidates
+    return result[:count]
+
+
+@njit(cache=True)
+def generate_full_column_vector_numba(worker_id, path_mask, start_time, end_time, max_time, num_workers):
+    """
+    Numba-optimized generation of the full column vector for a schedule.
+    
+    Args:
+        worker_id: Worker ID (1-indexed)
+        path_mask: Bitmask representing the path (bit i = 1 means therapist at time start_time + i)
+        start_time: Start time of schedule
+        end_time: End time of schedule
+        max_time: Maximum time horizon
+        num_workers: Total number of workers
+        
+    Returns:
+        1D numpy array representing the full column vector
+    """
+    vector_length = num_workers * max_time
+    full_vector = np.zeros(vector_length, dtype=np.float64)
+    
+    worker_offset = (worker_id - 1) * max_time
+    duration = end_time - start_time + 1
+    
+    for t_idx in range(duration):
+        # Check if bit t_idx is set (therapist assignment)
+        if (path_mask >> t_idx) & 1:
+            current_time = start_time + t_idx
+            global_idx = worker_offset + (current_time - 1)
+            if 0 <= global_idx < vector_length:
+                full_vector[global_idx] = 1.0
+    
+    return full_vector
+
+
+@njit(cache=True)
+def path_mask_to_list(path_mask, duration):
+    """
+    Convert a bitmask path to a list of 0s and 1s.
+    
+    Args:
+        path_mask: Bitmask representing the path
+        duration: Length of the schedule
+        
+    Returns:
+        List of 0s and 1s
+    """
+    result = List.empty_list(int64)
+    for i in range(duration):
+        if (path_mask >> i) & 1:
+            result.append(int64(1))
+        else:
+            result.append(int64(0))
+    return result
+
 
 # Type aliases for readability
 # State: (cost, progress, path_mask, history_mask, history_len, ai_count)
@@ -269,6 +448,197 @@ def run_fast_path_numba(
 
     return best_columns
 
+
+@njit(cache=True)
+def run_fast_path_single_worker_numba(
+    j,  # Single worker ID
+    r_k, s_k, gamma_k, obj_mode_float, 
+    pi_matrix,
+    max_time, 
+    MS, MIN_MS, 
+    theta_lookup,
+    epsilon
+):
+    """
+    Optimized DP loop for a SINGLE worker.
+    This function can be called in parallel from Python using multiprocessing.
+    
+    Returns:
+        List of columns for this worker
+    """
+    best_columns = List.empty_list(result_tuple_type)
+    obj_mode = obj_mode_float
+    
+    time_until_end = max_time - r_k + 1
+    effective_min_duration = min(int(s_k), time_until_end)
+    start_tau = r_k + effective_min_duration - 1
+    
+    for tau in range(start_tau, max_time + 1):
+        is_timeout_scenario = (tau == max_time)
+        start_cost = -pi_matrix[j, r_k]
+        
+        current_states = Dict.empty(key_type, val_list_type)
+        
+        init_ai = 0
+        init_hist = 1
+        init_hlen = 1
+        init_path = 1
+        
+        init_key = (int64(init_ai), int64(init_hist), int64(init_hlen))
+        val_list = List.empty_list(val_tuple_type)
+        val_list.append((float64(start_cost), float64(1.0), int64(init_path)))
+        current_states[init_key] = val_list
+        
+        # DP Loop
+        for t in range(r_k + 1, tau):
+            next_states = Dict.empty(key_type, val_list_type)
+            
+            for key, bucket in current_states.items():
+                ai_count, hist_mask, hist_len = key
+                
+                for state in bucket:
+                    cost, prog, path_mask = state
+                    
+                    # Reachability Pruning
+                    remaining_steps = tau - t + 1
+                    if not is_timeout_scenario:
+                        if obj_mode > 0.5:
+                            if prog + remaining_steps * 1.0 < s_k - epsilon:
+                                continue
+                    
+                    # A: Therapist
+                    feasible_ther, new_mask_ther, new_len_ther = check_strict_feasibility_numba(
+                        hist_mask, hist_len, 1, MS, MIN_MS
+                    )
+                    
+                    if feasible_ther:
+                        cost_ther = cost - pi_matrix[j, t]
+                        prog_ther = prog + 1.0
+                        
+                        new_key_ther = (ai_count, new_mask_ther, new_len_ther)
+                        new_val_ther = (cost_ther, prog_ther, (path_mask | (1 << (t - r_k))))
+                        
+                        if new_key_ther not in next_states:
+                            l = List.empty_list(val_tuple_type)
+                            l.append(new_val_ther)
+                            next_states[new_key_ther] = l
+                        else:
+                            bucket_t = next_states[new_key_ther]
+                            is_dominated = False
+                            for i in range(len(bucket_t)):
+                                c_old, p_old, _ = bucket_t[i]
+                                if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
+                                    is_dominated = True
+                                    break
+                            
+                            if not is_dominated:
+                                clean_bucket = List.empty_list(val_tuple_type)
+                                for i in range(len(bucket_t)):
+                                    c_old, p_old, path_old = bucket_t[i]
+                                    if cost_ther <= c_old + epsilon and prog_ther >= p_old - epsilon:
+                                        pass
+                                    else:
+                                        clean_bucket.append((c_old, p_old, path_old))
+                                clean_bucket.append(new_val_ther)
+                                next_states[new_key_ther] = clean_bucket
+                    
+                    # B: AI
+                    feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
+                        hist_mask, hist_len, 0, MS, MIN_MS
+                    )
+                    
+                    if feasible_ai:
+                        cost_ai = cost
+                        eff = 1.0
+                        if ai_count < len(theta_lookup):
+                            eff = theta_lookup[ai_count]
+                        prog_ai = prog + eff
+                        new_ai_count = ai_count + 1
+                        
+                        new_key_ai = (new_ai_count, new_mask_ai, new_len_ai)
+                        new_val_ai = (cost_ai, prog_ai, path_mask)
+                        
+                        if new_key_ai not in next_states:
+                            l = List.empty_list(val_tuple_type)
+                            l.append(new_val_ai)
+                            next_states[new_key_ai] = l
+                        else:
+                            bucket_a = next_states[new_key_ai]
+                            is_dominated = False
+                            for i in range(len(bucket_a)):
+                                c_old, p_old, _ = bucket_a[i]
+                                if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
+                                    is_dominated = True
+                                    break
+                            
+                            if not is_dominated:
+                                clean_bucket = List.empty_list(val_tuple_type)
+                                for i in range(len(bucket_a)):
+                                    c_old, p_old, path_old = bucket_a[i]
+                                    if cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon:
+                                        pass
+                                    else:
+                                        clean_bucket.append((c_old, p_old, path_old))
+                                clean_bucket.append(new_val_ai)
+                                next_states[new_key_ai] = clean_bucket
+            
+            current_states = next_states
+            if len(current_states) == 0:
+                break
+        
+        # Final Step
+        for key, bucket in current_states.items():
+            ai_count, hist_mask, hist_len = key
+            
+            for state in bucket:
+                cost, prog, path_mask = state
+                
+                # Option 1: End with Therapist
+                feasible_ther, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 1, MS, MIN_MS)
+                
+                if feasible_ther:
+                    final_cost = cost - pi_matrix[j, tau]
+                    final_prog = prog + 1.0
+                    final_path_mask = path_mask | (1 << (tau - r_k))
+                    
+                    condition_met = (final_prog >= s_k - epsilon)
+                    is_valid = False
+                    if obj_mode > 0.5:
+                        is_valid = condition_met
+                    else:
+                        is_valid = condition_met or (tau == max_time)
+                    
+                    if is_valid:
+                        duration_val = tau - r_k + 1
+                        rc = final_cost + (duration_val * obj_mode) - gamma_k
+                        if rc < -1e-6:
+                            best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                
+                # Option 2: End with AI (only on timeout)
+                if is_timeout_scenario:
+                    feasible_ai, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 0, MS, MIN_MS)
+                    if feasible_ai:
+                        final_cost = cost
+                        eff = 1.0
+                        if ai_count < len(theta_lookup):
+                            eff = theta_lookup[ai_count]
+                        final_prog = prog + eff
+                        final_path_mask = path_mask
+                        
+                        condition_met = (final_prog >= s_k - epsilon)
+                        is_valid = False
+                        if obj_mode > 0.5:
+                            is_valid = condition_met
+                        else:
+                            is_valid = condition_met or (tau == max_time)
+                        
+                        if is_valid:
+                            duration_val = tau - r_k + 1
+                            rc = final_cost + (duration_val * obj_mode) - gamma_k
+                            if rc < -1e-6:
+                                best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+    
+    return best_columns
 
 
 # =============================================================================
