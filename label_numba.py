@@ -291,6 +291,84 @@ def check_strict_feasibility_numba(hist_mask, hist_len, next_val, MS, MIN_MS):
         trunc_mask = new_mask & ((1 << ms_minus_1) - 1)
         return True, trunc_mask, ms_minus_1
 
+
+# =============================================================================
+# OPTIMIZATION #1: FSA TRANSITION TABLE (Finite State Automaton)
+# =============================================================================
+# Pre-compute ALL transitions for the rolling window feasibility check.
+# Since MS is usually small (5-6), there are only 2^MS × 2 possible transitions.
+# This eliminates ALL bit operations in the hot DP loop.
+
+def build_fsa_transition_table(MS, MIN_MS):
+    """
+    Build precomputed transition table for rolling window feasibility.
+    
+    For MS=5: 2^5 = 32 states × 2 actions = 64 entries
+    For MS=6: 2^6 = 64 states × 2 actions = 128 entries
+    
+    Table layout: index = (hist_mask << 1) | action
+    where hist_mask represents the last (MS-1) bits of history.
+    
+    Returns:
+        Tuple of (fsa_new_mask, fsa_new_len, fsa_feasible) arrays
+    """
+    # After the history is full, we only track MS-1 bits (the truncated storage)
+    max_stored_mask = 1 << (MS - 1)  # 2^(MS-1) possible stored states
+    
+    # Output arrays: indexed by (stored_mask << 1) | action
+    table_size = max_stored_mask * 2
+    fsa_new_mask = np.zeros(table_size, dtype=np.int64)
+    fsa_new_len = np.zeros(table_size, dtype=np.int64)
+    fsa_feasible = np.zeros(table_size, dtype=np.bool_)
+    
+    # Build table assuming hist_len = MS-1 (full window - the common case)
+    for hist_mask in range(max_stored_mask):
+        for action in range(2):
+            idx = (hist_mask << 1) | action
+            
+            # Compute transition using existing logic
+            new_len = (MS - 1) + 1  # hist_len = MS-1, so new_len = MS
+            new_mask = (hist_mask << 1) | action
+            
+            # Full window check: count ones in last MS bits
+            ms_mask = (1 << MS) - 1
+            window_bits = new_mask & ms_mask
+            current_ones = bin(window_bits).count('1')
+            
+            if current_ones < MIN_MS:
+                fsa_feasible[idx] = False
+                fsa_new_mask[idx] = new_mask
+                fsa_new_len[idx] = MS
+            else:
+                fsa_feasible[idx] = True
+                # Truncate to MS-1 for storage
+                trunc_mask = new_mask & ((1 << (MS - 1)) - 1)
+                fsa_new_mask[idx] = trunc_mask
+                fsa_new_len[idx] = MS - 1
+    
+    return fsa_new_mask, fsa_new_len, fsa_feasible
+
+
+@njit(cache=True, inline='always')
+def check_feasibility_fsa(hist_mask, action, fsa_new_mask, fsa_new_len, fsa_feasible):
+    """
+    O(1) feasibility check using precomputed FSA transition table.
+    
+    This replaces ALL bit operations with a single array lookup.
+    Only valid when hist_len == MS-1 (full history).
+    
+    Args:
+        hist_mask: Current history mask (MS-1 bits)
+        action: Next action (0 or 1)
+        fsa_new_mask, fsa_new_len, fsa_feasible: Precomputed tables
+        
+    Returns:
+        Tuple of (is_feasible, new_mask, new_len)
+    """
+    idx = (hist_mask << 1) | action
+    return fsa_feasible[idx], fsa_new_mask[idx], fsa_new_len[idx]
+
+
 # Type definitions for Dict
 # Key: packed int64 (ai_count << 24 | hist_mask << 8 | hist_len)
 key_type = types.int64  # OPTIMIZATION A: Packed key for faster hashing
@@ -304,7 +382,42 @@ val_list_type = types.ListType(val_tuple_type)
 # (j, rc, start, end, path_mask, prog)
 result_tuple_type = types.Tuple((types.float64, types.float64, types.int64, types.int64, types.int64, types.float64))
 
-@njit(cache=True)
+
+# =============================================================================
+# OPTIMIZATION #1: IN-PLACE BUCKET DOMINANCE (Avoid List.empty_list())
+# =============================================================================
+# Using .pop() + re-append instead of creating new lists each time
+# This avoids the expensive memory allocation overhead of List.empty_list()
+
+@njit(cache=True, inline='always')
+def add_to_bucket_with_dominance(bucket, new_cost, new_prog, new_path, epsilon):
+    """
+    Add new state to bucket with dominance pruning, modifying bucket in-place.
+    
+    Returns True if the new state was added (not dominated).
+    Removes dominated states from bucket and adds new state.
+    """
+    # Check if new state is dominated by any existing state
+    for i in range(len(bucket)):
+        c_old, p_old, _ = bucket[i]
+        if c_old <= new_cost + epsilon and p_old >= new_prog - epsilon:
+            return False  # New state is dominated, don't add
+    
+    # New state is not dominated - remove states that it dominates
+    # We use a reverse iteration with pop() to avoid index shifting issues
+    i = len(bucket) - 1
+    while i >= 0:
+        c_old, p_old, _ = bucket[i]
+        if new_cost <= c_old + epsilon and new_prog >= p_old - epsilon:
+            # Old state is dominated by new state - remove it
+            bucket.pop(i)
+        i -= 1
+    
+    # Add the new state
+    bucket.append((new_cost, new_prog, new_path))
+    return True
+
+@njit(cache=True, fastmath=True)
 def run_fast_path_numba(
     r_k, s_k, gamma_k, obj_mode_float, 
     pi_matrix, # 2D array [worker, time]
@@ -384,24 +497,10 @@ def run_fast_path_numba(
                                 l.append(new_val_ther)
                                 next_states[new_key_ther] = l
                             else:
+                                # OPTIMIZATION #1: In-place dominance check
                                 bucket_t = next_states[new_key_ther]
-                                is_dominated = False
-                                for i in range(len(bucket_t)):
-                                    c_old, p_old, _ = bucket_t[i]
-                                    if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
-                                        is_dominated = True
-                                        break
-                                
-                                if not is_dominated:
-                                    clean_bucket = List.empty_list(val_tuple_type)
-                                    for i in range(len(bucket_t)):
-                                        c_old, p_old, path_old = bucket_t[i]
-                                        if cost_ther <= c_old + epsilon and prog_ther >= p_old - epsilon:
-                                            pass
-                                        else:
-                                            clean_bucket.append((c_old, p_old, path_old))
-                                    clean_bucket.append(new_val_ther)
-                                    next_states[new_key_ther] = clean_bucket
+                                add_to_bucket_with_dominance(bucket_t, cost_ther, prog_ther, 
+                                                            path_mask | (1 << (t - r_k)), epsilon)
 
                         # B: AI
                         feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
@@ -425,24 +524,9 @@ def run_fast_path_numba(
                                 l.append(new_val_ai)
                                 next_states[new_key_ai] = l
                             else:
+                                # OPTIMIZATION #1: In-place dominance check
                                 bucket_a = next_states[new_key_ai]
-                                is_dominated = False
-                                for i in range(len(bucket_a)):
-                                    c_old, p_old, _ = bucket_a[i]
-                                    if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
-                                        is_dominated = True
-                                        break
-                                
-                                if not is_dominated:
-                                    clean_bucket = List.empty_list(val_tuple_type)
-                                    for i in range(len(bucket_a)):
-                                        c_old, p_old, path_old = bucket_a[i]
-                                        if cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon:
-                                            pass
-                                        else:
-                                            clean_bucket.append((c_old, p_old, path_old))
-                                    clean_bucket.append(new_val_ai)
-                                    next_states[new_key_ai] = clean_bucket
+                                add_to_bucket_with_dominance(bucket_a, cost_ai, prog_ai, path_mask, epsilon)
 
                 current_states = next_states
                 if len(current_states) == 0:
@@ -509,7 +593,7 @@ def run_fast_path_numba(
 # =============================================================================
 # Pre-compute worker-specific suffix sums for aggressive state pruning
 
-@njit(cache=True)
+@njit(cache=True, fastmath=True)
 def compute_suffix_sums(pi_matrix, candidate_workers, max_time):
     """
     Compute WORKER-SPECIFIC suffix sums of dual gains.
@@ -538,7 +622,7 @@ def compute_suffix_sums(pi_matrix, candidate_workers, max_time):
     return suffix_sum
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=True, fastmath=True)
 def run_fast_path_with_lb_numba(
     r_k, s_k, gamma_k, obj_mode_float, 
     pi_matrix,
@@ -625,21 +709,10 @@ def run_fast_path_with_lb_numba(
                                 l.append(new_val_ther)
                                 next_states[new_key_ther] = l
                             else:
+                                # OPTIMIZATION #1: In-place dominance check
                                 bucket_t = next_states[new_key_ther]
-                                is_dominated = False
-                                for i in range(len(bucket_t)):
-                                    c_old, p_old, _ = bucket_t[i]
-                                    if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
-                                        is_dominated = True
-                                        break
-                                if not is_dominated:
-                                    clean_bucket = List.empty_list(val_tuple_type)
-                                    for i in range(len(bucket_t)):
-                                        c_old, p_old, path_old = bucket_t[i]
-                                        if not (cost_ther <= c_old + epsilon and prog_ther >= p_old - epsilon):
-                                            clean_bucket.append((c_old, p_old, path_old))
-                                    clean_bucket.append(new_val_ther)
-                                    next_states[new_key_ther] = clean_bucket
+                                add_to_bucket_with_dominance(bucket_t, cost_ther, prog_ther,
+                                                            path_mask | (1 << (t - r_k)), epsilon)
                         
                         # B: AI
                         feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
@@ -661,21 +734,9 @@ def run_fast_path_with_lb_numba(
                                 l.append(new_val_ai)
                                 next_states[new_key_ai] = l
                             else:
+                                # OPTIMIZATION #1: In-place dominance check
                                 bucket_a = next_states[new_key_ai]
-                                is_dominated = False
-                                for i in range(len(bucket_a)):
-                                    c_old, p_old, _ = bucket_a[i]
-                                    if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
-                                        is_dominated = True
-                                        break
-                                if not is_dominated:
-                                    clean_bucket = List.empty_list(val_tuple_type)
-                                    for i in range(len(bucket_a)):
-                                        c_old, p_old, path_old = bucket_a[i]
-                                        if not (cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon):
-                                            clean_bucket.append((c_old, p_old, path_old))
-                                    clean_bucket.append(new_val_ai)
-                                    next_states[new_key_ai] = clean_bucket
+                                add_to_bucket_with_dominance(bucket_a, cost_ai, prog_ai, path_mask, epsilon)
                 
                 current_states = next_states
                 if len(current_states) == 0:
@@ -752,7 +813,7 @@ def run_fast_path_with_lb_numba(
 # =============================================================================
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=True, fastmath=True)
 def run_fast_path_parallel_numba(
     r_k, s_k, gamma_k, obj_mode_float, 
     pi_matrix,
@@ -827,21 +888,10 @@ def run_fast_path_parallel_numba(
                                 l.append(new_val_ther)
                                 next_states[new_key_ther] = l
                             else:
+                                # OPTIMIZATION #1: In-place dominance check
                                 bucket_t = next_states[new_key_ther]
-                                is_dominated = False
-                                for i in range(len(bucket_t)):
-                                    c_old, p_old, _ = bucket_t[i]
-                                    if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
-                                        is_dominated = True
-                                        break
-                                if not is_dominated:
-                                    clean_bucket = List.empty_list(val_tuple_type)
-                                    for i in range(len(bucket_t)):
-                                        c_old, p_old, path_old = bucket_t[i]
-                                        if not (cost_ther <= c_old + epsilon and prog_ther >= p_old - epsilon):
-                                            clean_bucket.append((c_old, p_old, path_old))
-                                    clean_bucket.append(new_val_ther)
-                                    next_states[new_key_ther] = clean_bucket
+                                add_to_bucket_with_dominance(bucket_t, cost_ther, prog_ther,
+                                                            path_mask | (1 << (t - r_k)), epsilon)
                         
                         # B: AI
                         feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
@@ -863,21 +913,9 @@ def run_fast_path_parallel_numba(
                                 l.append(new_val_ai)
                                 next_states[new_key_ai] = l
                             else:
+                                # OPTIMIZATION #1: In-place dominance check
                                 bucket_a = next_states[new_key_ai]
-                                is_dominated = False
-                                for i in range(len(bucket_a)):
-                                    c_old, p_old, _ = bucket_a[i]
-                                    if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
-                                        is_dominated = True
-                                        break
-                                if not is_dominated:
-                                    clean_bucket = List.empty_list(val_tuple_type)
-                                    for i in range(len(bucket_a)):
-                                        c_old, p_old, path_old = bucket_a[i]
-                                        if not (cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon):
-                                            clean_bucket.append((c_old, p_old, path_old))
-                                    clean_bucket.append(new_val_ai)
-                                    next_states[new_key_ai] = clean_bucket
+                                add_to_bucket_with_dominance(bucket_a, cost_ai, prog_ai, path_mask, epsilon)
                 
                 current_states = next_states
                 if len(current_states) == 0:
@@ -958,7 +996,7 @@ def run_fast_path_parallel_numba(
 # State buffer layout: [cost, prog, path_mask, packed_key]
 # Using 2D arrays and counters instead of Dict+List
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=True, fastmath=True)
 def run_fast_path_optimized_numba(
     r_k, s_k, gamma_k, obj_mode_float, 
     pi_matrix,
@@ -1164,7 +1202,7 @@ def run_fast_path_optimized_numba(
     return all_columns
 
 
-@njit(cache=True)
+@njit(cache=True, fastmath=True)
 
 def run_fast_path_single_worker_numba(
     j,  # Single worker ID
@@ -1239,24 +1277,10 @@ def run_fast_path_single_worker_numba(
                             l.append(new_val_ther)
                             next_states[new_key_ther] = l
                         else:
+                            # OPTIMIZATION #1: In-place dominance check
                             bucket_t = next_states[new_key_ther]
-                            is_dominated = False
-                            for i in range(len(bucket_t)):
-                                c_old, p_old, _ = bucket_t[i]
-                                if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
-                                    is_dominated = True
-                                    break
-                            
-                            if not is_dominated:
-                                clean_bucket = List.empty_list(val_tuple_type)
-                                for i in range(len(bucket_t)):
-                                    c_old, p_old, path_old = bucket_t[i]
-                                    if cost_ther <= c_old + epsilon and prog_ther >= p_old - epsilon:
-                                        pass
-                                    else:
-                                        clean_bucket.append((c_old, p_old, path_old))
-                                clean_bucket.append(new_val_ther)
-                                next_states[new_key_ther] = clean_bucket
+                            add_to_bucket_with_dominance(bucket_t, cost_ther, prog_ther,
+                                                        path_mask | (1 << (t - r_k)), epsilon)
                     
                     # B: AI
                     feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
@@ -1279,24 +1303,9 @@ def run_fast_path_single_worker_numba(
                             l.append(new_val_ai)
                             next_states[new_key_ai] = l
                         else:
+                            # OPTIMIZATION #1: In-place dominance check
                             bucket_a = next_states[new_key_ai]
-                            is_dominated = False
-                            for i in range(len(bucket_a)):
-                                c_old, p_old, _ = bucket_a[i]
-                                if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
-                                    is_dominated = True
-                                    break
-                            
-                            if not is_dominated:
-                                clean_bucket = List.empty_list(val_tuple_type)
-                                for i in range(len(bucket_a)):
-                                    c_old, p_old, path_old = bucket_a[i]
-                                    if cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon:
-                                        pass
-                                    else:
-                                        clean_bucket.append((c_old, p_old, path_old))
-                                clean_bucket.append(new_val_ai)
-                                next_states[new_key_ai] = clean_bucket
+                            add_to_bucket_with_dominance(bucket_a, cost_ai, prog_ai, path_mask, epsilon)
             
             current_states = next_states
             if len(current_states) == 0:
@@ -1370,7 +1379,30 @@ val_with_zeta_type = types.Tuple((types.float64, types.float64, types.int64))  #
 val_list_with_zeta_type = types.ListType(val_with_zeta_type)
 
 
-@njit(cache=True)
+# =============================================================================
+# OPTIMIZATION #2: BITMASK-BASED PATTERN MEMBERSHIP (O(1) instead of O(P×L))
+# =============================================================================
+# Pre-compute bitmasks: pattern_bits[worker, time] has bit p set if (worker, time) ∈ Pattern_p
+# This eliminates the expensive inner loops over pattern elements.
+
+@njit(cache=True, inline='always')
+def check_pattern_membership_bitmask(pattern_bits, j, t, pat_idx):
+    """
+    O(1) check if (j, t) is in pattern pat_idx using precomputed bitmask.
+    
+    Args:
+        pattern_bits: 2D array [max_worker+1, max_time+1] of int64 bitmasks
+        j: Worker ID
+        t: Time step
+        pat_idx: Pattern index (0-63)
+        
+    Returns:
+        bool: True if (j, t) is in the pattern
+    """
+    return ((pattern_bits[j, t] >> pat_idx) & 1) == 1
+
+
+@njit(cache=True, fastmath=True)
 def run_with_branching_constraints_numba(
     r_k, s_k, gamma_k, obj_mode_float,
     pi_matrix,           # 2D array [worker, time]
@@ -1388,17 +1420,20 @@ def run_with_branching_constraints_numba(
     num_nogood_cuts,     # int - number of active no-good cuts
     has_nogood_cuts,     # bool - whether any no-good cuts are active
     # === SP Pattern Branching (B.3) ===
-    left_pattern_elements,   # 2D array [pattern_idx, flat_idx] containing encoded (w*1000+t) or -1
+    left_pattern_elements,   # 2D array [pattern_idx, flat_idx] containing encoded (w*1000+t) or -1 (LEGACY - kept for compatibility)
     left_pattern_limits,     # 1D array [pattern_idx] - max allowed coverage
     num_left_patterns,       # int
     has_left_patterns,       # bool
     # === SP Right Pattern Branching (B.3.2) ===
-    right_pattern_elements,  # 2D array [pat_idx, elem_idx] encoded (w*1M+t)
+    right_pattern_elements,  # 2D array [pat_idx, elem_idx] encoded (w*1M+t) (LEGACY - kept for compatibility)
     right_pattern_starts,    # 1D array [pat_idx] start time of pattern
     right_pattern_duals,     # 1D array [pat_idx] dual reward
     right_pattern_counts,    # 1D array [pat_idx] number of elements in pattern
     num_right_patterns,      # int
-    has_right_patterns       # bool
+    has_right_patterns,      # bool
+    # === OPTIMIZATION #2: Bitmask Pattern Membership (O(1) lookup) ===
+    left_pattern_bits,       # 2D array [max_worker+1, max_time+1] - bit p set if (j,t) ∈ left pattern p
+    right_pattern_bits       # 2D array [max_worker+1, max_time+1] - bit p set if (j,t) ∈ right pattern p
 ):
     """
     Extended DP loop with branching constraint support.
@@ -1443,23 +1478,18 @@ def run_with_branching_constraints_numba(
             init_rho = int64(0)
             if has_left_patterns:
                 for pat_idx in range(num_left_patterns):
-                    # Check if (j, r_k) is in this pattern's elements
-                    for elem_idx in range(left_pattern_elements.shape[1]):
-                        encoded = left_pattern_elements[pat_idx, elem_idx]
-                        if encoded < 0:
+                    # OPTIMIZATION #2: O(1) bitmask check instead of O(L) loop
+                    in_pattern = check_pattern_membership_bitmask(left_pattern_bits, j, r_k, pat_idx)
+                    if in_pattern:
+                        # Increment rho for this pattern
+                        current_rho = (init_rho >> (pat_idx * 8)) & 0xFF
+                        current_rho += 1
+                        # Check limit
+                        if current_rho > left_pattern_limits[pat_idx]:
+                            init_rho = int64(-1)  # Signal: pruned
                             break
-                        w_pat = encoded // 1000000
-                        t_pat = encoded % 1000000
-                        if w_pat == j and t_pat == r_k:
-                            # Increment rho for this pattern
-                            current_rho = (init_rho >> (pat_idx * 8)) & 0xFF
-                            current_rho += 1
-                            # Check limit
-                            if current_rho > left_pattern_limits[pat_idx]:
-                                init_rho = int64(-1)  # Signal: pruned
-                                break
-                            # Update rho
-                            init_rho = (init_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
+                        # Update rho
+                        init_rho = (init_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
                     if init_rho == -1:
                         break
             
@@ -1503,15 +1533,8 @@ def run_with_branching_constraints_numba(
                 for pat_idx in range(num_right_patterns):
                     t_start = right_pattern_starts[pat_idx]
                     
-                    # Is current (j, r_k) in pattern?
-                    in_pattern = False
-                    for elem_idx in range(right_pattern_counts[pat_idx]):
-                        encoded = right_pattern_elements[pat_idx, elem_idx]
-                        w_pat = encoded // 1000000
-                        t_pat = encoded % 1000000
-                        if w_pat == j and t_pat == r_k:
-                            in_pattern = True
-                            break
+                    # OPTIMIZATION #2: O(1) bitmask check instead of O(L) loop
+                    in_pattern = check_pattern_membership_bitmask(right_pattern_bits, j, r_k, pat_idx)
                     
                     if r_k == t_start:
                         if in_pattern:
@@ -1607,18 +1630,17 @@ def run_with_branching_constraints_numba(
                                 rho_valid = True
                                 if has_left_patterns:
                                     for pat_idx in range(num_left_patterns):
-                                        for elem_idx in range(left_pattern_elements.shape[1]):
-                                            encoded = left_pattern_elements[pat_idx, elem_idx]
-                                            if encoded < 0: break
-                                            w_pat = encoded // 1000000
-                                            t_pat = encoded % 1000000
-                                            if w_pat == j and t_pat == t:
-                                                current_rho = (new_rho >> (pat_idx * 8)) & 0xFF
-                                                current_rho += 1
-                                                if current_rho > left_pattern_limits[pat_idx]:
-                                                    rho_valid = False; break
-                                                new_rho = (new_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
-                                        if not rho_valid: break
+                                        # OPTIMIZATION #2: O(1) bitmask check instead of O(L) loop
+                                        in_pattern = check_pattern_membership_bitmask(left_pattern_bits, j, t, pat_idx)
+                                        if in_pattern:
+                                            current_rho = (new_rho >> (pat_idx * 8)) & 0xFF
+                                            current_rho += 1
+                                            if current_rho > left_pattern_limits[pat_idx]:
+                                                rho_valid = False
+                                                break
+                                            new_rho = (new_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
+                                        if not rho_valid:
+                                            break
                                 
                                 # Update mu (Right Pattern)
                                 new_mu = mu_encoded
@@ -1628,14 +1650,8 @@ def run_with_branching_constraints_numba(
                                         t_start = right_pattern_starts[pat_idx]
                                         current_mode = (new_mu >> pat_idx) & 1
                                         
-                                        in_pattern = False
-                                        for elem_idx in range(right_pattern_counts[pat_idx]):
-                                            encoded = right_pattern_elements[pat_idx, elem_idx]
-                                            w_pat = encoded // 1000000
-                                            t_pat = encoded % 1000000
-                                            if w_pat == j and t_pat == t:
-                                                in_pattern = True
-                                                break
+                                        # OPTIMIZATION #2: O(1) bitmask check instead of O(L) loop
+                                        in_pattern = check_pattern_membership_bitmask(right_pattern_bits, j, t, pat_idx)
                                         
                                         if t == t_start:
                                             if in_pattern:
@@ -1645,24 +1661,11 @@ def run_with_branching_constraints_numba(
                                                 # Enter Exclude (Set bit to 0 - clear it)
                                                 new_mu = new_mu & ~(1 << pat_idx)
                                         elif t > t_start:
-                                            if current_mode == 0: # Exclude
+                                            if current_mode == 0:  # Exclude
                                                 if in_pattern:
-                                                    mu_valid = False; break # Pruned
-                                            else: # Cover Mode (1)
-                                                # If element is available at t but we took something else?
-                                                # Here we TOOK Therapist (1).
-                                                # If (j,t) is in pattern, we are good (we took it).
-                                                # If (j,t) is NOT in pattern, is that a problem?
-                                                # Pattern definition: "Cover" means take ALL elements in P.
-                                                # So if (j,t) is in P, we MUST take it. We did.
-                                                # If (j,t) is NOT in P, we took Therapist. That's allowed in Cover mode?
-                                                # Yes, usually Cover only mandates specific (j,t) to be 1. It doesn't forbid others from being 1.
-                                                # So: If InPattern -> Good. If NotInPattern -> Good.
-                                                # Wait, logic check: "Cover" means x[j,t]=1 for all (j,t) in P.
-                                                # Here we set x[j,t]=1.
-                                                # Implementation detail: For Cover, we must ensure we NEVER MISS a required one.
-                                                # Since we took 1, we satisfy any requirement at (j,t) if it exists.
-                                                pass
+                                                    mu_valid = False
+                                                    break  # Pruned
+                                            # Cover Mode (1): taking therapist is always OK
 
                                 if rho_valid and mu_valid:
                                     new_combined = new_zeta | (new_rho << 32)
@@ -1675,20 +1678,10 @@ def run_with_branching_constraints_numba(
                                         l.append(new_val_ther)
                                         next_states[new_key_ther] = l
                                     else:
+                                        # OPTIMIZATION #1: In-place dominance check
                                         bucket_t = next_states[new_key_ther]
-                                        is_dominated = False
-                                        for i in range(len(bucket_t)):
-                                            c_old, p_old, _ = bucket_t[i]
-                                            if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
-                                                is_dominated = True; break
-                                        if not is_dominated:
-                                            clean = List.empty_list(val_with_zeta_type)
-                                            for i in range(len(bucket_t)):
-                                                c_old, p_old, path_old = bucket_t[i]
-                                                if not (cost_ther <= c_old + epsilon and prog_ther >= p_old - epsilon):
-                                                    clean.append((c_old, p_old, path_old))
-                                            clean.append(new_val_ther)
-                                            next_states[new_key_ther] = clean
+                                        add_to_bucket_with_dominance(bucket_t, cost_ther, prog_ther,
+                                                                    path_mask | (1 << (t - r_k)), epsilon)
                         
                         # === B: AI (action = 0) ===
                         can_take_ai = True
@@ -1729,33 +1722,21 @@ def run_with_branching_constraints_numba(
                                         t_start = right_pattern_starts[pat_idx]
                                         current_mode = (new_mu >> pat_idx) & 1
                                         
-                                        in_pattern = False
-                                        # Only Therapist actions are "In Pattern" usually? 
-                                        # Yes, pattern elements are (j,t). Taking AI means x[j,t]=0, so effectively NOT in pattern.
-                                        
                                         if t == t_start:
                                             # At start, if we take AI (0), we cannot be "In Pattern" (which requires 1 at elements)
                                             # So we Enter Exclude (bit=0)
                                             new_mu = new_mu & ~(1 << pat_idx)
                                         elif t > t_start:
-                                            if current_mode == 0: # Exclude
+                                            if current_mode == 0:  # Exclude
                                                 # Allowed, we are not picking pattern elements
                                                 pass
-                                            else: # Cover Mode (1)
-                                                # We must take 1 if (j,t) is in pattern.
-                                                # Check if this (j,t) is required
-                                                is_required_here = False
-                                                for elem_idx in range(right_pattern_counts[pat_idx]):
-                                                    encoded = right_pattern_elements[pat_idx, elem_idx]
-                                                    w_pat = encoded // 1000000
-                                                    t_pat = encoded % 1000000
-                                                    if w_pat == j and t_pat == t:
-                                                        is_required_here = True
-                                                        break
-                                                
+                                            else:  # Cover Mode (1)
+                                                # OPTIMIZATION #2: O(1) bitmask check instead of O(L) loop
+                                                is_required_here = check_pattern_membership_bitmask(right_pattern_bits, j, t, pat_idx)
                                                 if is_required_here:
                                                     # We took AI (0), but 1 was required! -> Prune
-                                                    mu_valid = False; break
+                                                    mu_valid = False
+                                                    break
                                 
                                 if mu_valid:
                                     new_combined = new_zeta | (new_rho << 32)
@@ -1767,20 +1748,9 @@ def run_with_branching_constraints_numba(
                                         l.append(new_val_ai)
                                         next_states[new_key_ai] = l
                                     else:
+                                        # OPTIMIZATION #1: In-place dominance check
                                         bucket_a = next_states[new_key_ai]
-                                        is_dominated = False
-                                        for i in range(len(bucket_a)):
-                                            c_old, p_old, _ = bucket_a[i]
-                                            if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
-                                                is_dominated = True; break
-                                        if not is_dominated:
-                                            clean = List.empty_list(val_with_zeta_type)
-                                            for i in range(len(bucket_a)):
-                                                c_old, p_old, path_old = bucket_a[i]
-                                                if not (cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon):
-                                                    clean.append((c_old, p_old, path_old))
-                                            clean.append(new_val_ai)
-                                            next_states[new_key_ai] = clean
+                                        add_to_bucket_with_dominance(bucket_a, cost_ai, prog_ai, path_mask, epsilon)
                 
                 current_states = next_states
                 if len(current_states) == 0:
@@ -1821,18 +1791,17 @@ def run_with_branching_constraints_numba(
                             rho_valid = True
                             if has_left_patterns:
                                 for pat_idx in range(num_left_patterns):
-                                    for elem_idx in range(left_pattern_elements.shape[1]):
-                                        encoded = left_pattern_elements[pat_idx, elem_idx]
-                                        if encoded < 0: break
-                                        w_pat = encoded // 1000000
-                                        t_pat = encoded % 1000000
-                                        if w_pat == j and t_pat == tau:
-                                            current_rho = (final_rho >> (pat_idx * 8)) & 0xFF
-                                            current_rho += 1
-                                            if current_rho > left_pattern_limits[pat_idx]:
-                                                rho_valid = False; break
-                                            final_rho = (final_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
-                                    if not rho_valid: break
+                                    # OPTIMIZATION #2: O(1) bitmask check instead of O(L) loop
+                                    in_pattern = check_pattern_membership_bitmask(left_pattern_bits, j, tau, pat_idx)
+                                    if in_pattern:
+                                        current_rho = (final_rho >> (pat_idx * 8)) & 0xFF
+                                        current_rho += 1
+                                        if current_rho > left_pattern_limits[pat_idx]:
+                                            rho_valid = False
+                                            break
+                                        final_rho = (final_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
+                                    if not rho_valid:
+                                        break
                             
                             if not rho_valid: continue
 
@@ -1845,29 +1814,21 @@ def run_with_branching_constraints_numba(
                                     t_start = right_pattern_starts[pat_idx]
                                     current_mode = (final_mu >> pat_idx) & 1
                                     
-                                    in_pattern = False
-                                    for elem_idx in range(right_pattern_counts[pat_idx]):
-                                        encoded = right_pattern_elements[pat_idx, elem_idx]
-                                        w_pat = encoded // 1000000
-                                        t_pat = encoded % 1000000
-                                        if w_pat == j and t_pat == tau:
-                                            in_pattern = True
-                                            break
+                                    # OPTIMIZATION #2: O(1) bitmask check instead of O(L) loop
+                                    in_pattern = check_pattern_membership_bitmask(right_pattern_bits, j, tau, pat_idx)
                                     
                                     if tau == t_start:
-                                        if in_pattern: final_mu = final_mu | (1 << pat_idx)
-                                        else: final_mu = final_mu & ~(1 << pat_idx)
+                                        if in_pattern:
+                                            final_mu = final_mu | (1 << pat_idx)
+                                        else:
+                                            final_mu = final_mu & ~(1 << pat_idx)
                                     elif tau > t_start:
                                         if current_mode == 0 and in_pattern:
-                                            mu_valid = False; break
-                                        # In Cover mode, taking 1 is always checking for broken chains. 
-                                        # Since we took 1, we satisfy requirement if present.
+                                            mu_valid = False
+                                            break
+                                        # In Cover mode, taking 1 is always OK
                                     
-                                    # CHECK DUAL REWARD
-                                    # If we end in Cover Mode (1), we effectively covered the pattern
-                                    # (assuming future elements beyond tau don't exist in this column logic, 
-                                    # or we "commit" to them which is handled by branching logic).
-                                    # Simplified: If we are in Cover Mode at the end, apply dual.
+                                    # CHECK DUAL REWARD: If we end in Cover Mode (1), apply dual
                                     if mu_valid and ((final_mu >> pat_idx) & 1):
                                         right_reward += right_pattern_duals[pat_idx]
                             
@@ -1944,17 +1905,12 @@ def run_with_branching_constraints_numba(
                                             # Must be Exclude
                                             final_mu = final_mu & ~(1 << pat_idx)
                                         elif tau > t_start:
-                                            if current_mode == 1: # Cover Mode
-                                                # Required 1?
-                                                is_required_here = False
-                                                for elem_idx in range(right_pattern_counts[pat_idx]):
-                                                    encoded = right_pattern_elements[pat_idx, elem_idx]
-                                                    w_pat = encoded // 1000000
-                                                    t_pat = encoded % 1000000
-                                                    if w_pat == j and t_pat == tau:
-                                                        is_required_here = True; break
+                                            if current_mode == 1:  # Cover Mode
+                                                # OPTIMIZATION #2: O(1) bitmask check instead of O(L) loop
+                                                is_required_here = check_pattern_membership_bitmask(right_pattern_bits, j, tau, pat_idx)
                                                 if is_required_here:
-                                                    mu_valid = False; break
+                                                    mu_valid = False
+                                                    break
                                         
                                         if mu_valid and ((final_mu >> pat_idx) & 1):
                                             right_reward += right_pattern_duals[pat_idx]

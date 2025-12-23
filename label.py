@@ -1742,6 +1742,32 @@ def solve_pricing_for_profile_bnp(
                         dual_status = f"δ = {dual_val:+.6f}" if dual_val != 0.0 else "δ = 0.0 (inactive)"
                         print(f"    Pattern #{pat_idx}: {pattern_str} → {dual_status} and original dual {dual_val}")
         
+        # === OPTIMIZATION #2: Build Bitmask Arrays for O(1) Pattern Membership Checks ===
+        # left_pattern_bits[j, t] has bit p set if (j, t) ∈ left pattern p
+        # right_pattern_bits[j, t] has bit p set if (j, t) ∈ right pattern p
+        left_pattern_bits = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.int64)
+        right_pattern_bits = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.int64)
+        
+        if has_left_patterns:
+            for pat_idx in range(num_left_patterns):
+                for elem_idx in range(left_pattern_elements.shape[1]):
+                    encoded = left_pattern_elements[pat_idx, elem_idx]
+                    if encoded < 0:
+                        break
+                    j = encoded // 1000000
+                    t = encoded % 1000000
+                    if j <= max_worker_id and t <= max_time:
+                        left_pattern_bits[j, t] |= (1 << pat_idx)
+        
+        if has_right_patterns:
+            for pat_idx in range(num_right_patterns):
+                for elem_idx in range(int(right_pattern_counts[pat_idx])):
+                    encoded = right_pattern_elements[pat_idx, elem_idx]
+                    j = encoded // 1000000
+                    t = encoded % 1000000
+                    if j <= max_worker_id and t <= max_time:
+                        right_pattern_bits[j, t] |= (1 << pat_idx)
+        
         # Decide which Numba function to call
         use_branching_numba = has_sp_fixing or has_nogood_cuts or has_left_patterns or has_right_patterns
         
@@ -1758,7 +1784,9 @@ def solve_pricing_for_profile_bnp(
                 # SP Left Patterns
                 left_pattern_elements, left_pattern_limits, num_left_patterns, has_left_patterns,
                 # SP Right Patterns
-                right_pattern_elements, right_pattern_starts, right_pattern_duals, right_pattern_counts, num_right_patterns, has_right_patterns
+                right_pattern_elements, right_pattern_starts, right_pattern_duals, right_pattern_counts, num_right_patterns, has_right_patterns,
+                # OPTIMIZATION #2: Bitmask arrays for O(1) lookups
+                left_pattern_bits, right_pattern_bits
             )
         else:
             # Call optimized fast path (no constraints)
