@@ -889,44 +889,6 @@ def run_fast_path_optimized_numba(
     return all_columns
 
 
-# =============================================================================
-# AUTO-SELECTING WRAPPER (Best of both worlds)
-# =============================================================================
-
-def run_fast_path_auto_numba(
-    r_k, s_k, gamma_k, obj_mode_float, 
-    pi_matrix,
-    candidate_workers,
-    max_time, 
-    MS, MIN_MS, 
-    theta_lookup,
-    epsilon
-):
-    """
-    Auto-selecting wrapper that chooses the best implementation:
-    - Small/Medium problems (<=12 workers, T<=22): Optimized (A+C+D)
-    - Large problems: Parallel (A+C)
-    
-    This provides optimal performance across all problem sizes.
-    """
-    n_workers = len(candidate_workers)
-    duration = max_time - r_k
-    
-    # Heuristic: Use optimized for smaller state spaces
-    if n_workers <= 12 and duration <= 20:
-        return run_fast_path_optimized_numba(
-            r_k, s_k, gamma_k, obj_mode_float,
-            pi_matrix, candidate_workers, max_time,
-            MS, MIN_MS, theta_lookup, epsilon
-        )
-    else:
-        return run_fast_path_parallel_numba(
-            r_k, s_k, gamma_k, obj_mode_float,
-            pi_matrix, candidate_workers, max_time,
-            MS, MIN_MS, theta_lookup, epsilon
-        )
-
-
 @njit(cache=True)
 
 def run_fast_path_single_worker_numba(

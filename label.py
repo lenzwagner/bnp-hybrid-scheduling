@@ -1760,8 +1760,8 @@ def solve_pricing_for_profile_bnp(
                 right_pattern_elements, right_pattern_starts, right_pattern_duals, right_pattern_counts, num_right_patterns, has_right_patterns
             )
         else:
-            # Call original fast path (no constraints)
-            raw_cols = label_numba.run_fast_path_numba(
+            # Call optimized fast path (no constraints) - A+C optimizations
+            raw_cols = label_numba.run_fast_path_parallel_numba(
                 int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
                 pi_matrix, workers_arr, int(max_time), 
                 int(MS), int(MIN_MS), theta_arr, 1e-6
