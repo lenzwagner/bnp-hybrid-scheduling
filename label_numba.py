@@ -507,35 +507,33 @@ def run_fast_path_numba(
 # =============================================================================
 # OPTIMIZATION 1: ng-PATH LOWER BOUND WITH SUFFIX SUMS
 # =============================================================================
-# Pre-compute suffix sums of maximum dual gains for aggressive state pruning
+# Pre-compute worker-specific suffix sums for aggressive state pruning
 
 @njit(cache=True)
 def compute_suffix_sums(pi_matrix, candidate_workers, max_time):
     """
-    Compute suffix sums of maximum dual gains.
+    Compute WORKER-SPECIFIC suffix sums of dual gains.
     
-    suffix_sum[t] = sum of max(-pi[j, tau]) for tau from t to max_time
+    suffix_sum[worker_idx, t] = sum of -pi[j, tau] for tau from t to max_time
     
     This allows O(1) lookup of the maximum possible remaining dual gain
-    from any time t to the end.
+    for each specific worker from any time t to the end.
+    
+    Returns:
+        2D array of shape (n_workers, max_time + 2)
     """
     n_workers = len(candidate_workers)
     
-    # Max dual gain per time step
-    max_dual_per_time = np.zeros(max_time + 2, dtype=np.float64)
-    for t in range(1, max_time + 1):
-        max_gain = 0.0
-        for w_idx in range(n_workers):
-            j = candidate_workers[w_idx]
-            gain = -pi_matrix[j, t]
-            if gain > max_gain:
-                max_gain = gain
-        max_dual_per_time[t] = max_gain
+    # 2D array: suffix_sum[worker_idx, time]
+    suffix_sum = np.zeros((n_workers, max_time + 2), dtype=np.float64)
     
-    # Suffix sums (from end to start)
-    suffix_sum = np.zeros(max_time + 2, dtype=np.float64)
-    for t in range(max_time, 0, -1):
-        suffix_sum[t] = suffix_sum[t + 1] + max_dual_per_time[t]
+    for w_idx in range(n_workers):
+        j = candidate_workers[w_idx]
+        
+        # Compute suffix sums for this worker (from end to start)
+        for t in range(max_time, 0, -1):
+            gain = -pi_matrix[j, t]  # Dual gain at this time
+            suffix_sum[w_idx, t] = suffix_sum[w_idx, t + 1] + gain
     
     return suffix_sum
 
@@ -596,11 +594,11 @@ def run_fast_path_with_lb_numba(
                     for state in bucket:
                         cost, prog, path_mask = state
                         
-                        # === LOWER BOUND PRUNING ===
-                        # Optimistic bound: assume we get max dual gain at every future step
+                        # === LOWER BOUND PRUNING (Worker-Specific) ===
+                        # Optimistic bound: assume max dual gain for THIS worker at future steps
                         remaining_steps = tau - t + 1
                         optimistic_obj = remaining_steps * obj_mode
-                        optimistic_cost = cost + suffix_sum[t + 1]
+                        optimistic_cost = cost + suffix_sum[worker_idx, t + 1]
                         lower_bound = optimistic_cost + optimistic_obj - gamma_k
                         
                         if lower_bound >= -epsilon:
