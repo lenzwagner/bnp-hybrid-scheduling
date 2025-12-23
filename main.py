@@ -140,7 +140,7 @@ def main(allow_gaps=False):
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
                      'use_numba_labeling': True,
-                     'allow_gaps': False}
+                     'allow_gaps': False, 'use_lower_bound': True}
 
     # ===========================
     # CONFIGURATION SUMMARY

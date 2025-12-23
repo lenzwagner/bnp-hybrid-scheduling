@@ -210,52 +210,83 @@ def unpack_key(key):
     return ai_count, hist_mask, hist_len
 
 
-@njit(cache=True)
-def check_strict_feasibility_numba(hist_mask, hist_len, next_val, MS, MIN_MS):
+# =============================================================================
+# OPTIMIZATION 4: PRECOMPUTED TRANSITION LOOKUPS
+# =============================================================================
+# Pre-compute popcount (number of 1-bits) for all possible history masks
+# This eliminates the inner loop that counts bits one-by-one
+
+# Popcount lookup table for 16-bit values (covers hist_mask up to 2^16)
+POPCOUNT_TABLE = np.zeros(65536, dtype=np.int64)
+for _i in range(65536):
+    POPCOUNT_TABLE[_i] = bin(_i).count('1')
+
+
+@njit(cache=True, inline='always')
+def popcount16(x):
+    """Fast popcount for values up to 16 bits using lookup table."""
+    return POPCOUNT_TABLE[x & 0xFFFF]
+
+
+@njit(cache=True, inline='always')
+def check_strict_feasibility_fast(hist_mask, hist_len, next_val, MS, MIN_MS):
     """
-    Check if adding next_val to the history satisfies rolling window constraints.
-    Using bitwise operations.
+    Optimized feasibility check using precomputed popcount.
+    Replaces inner bit-counting loop with single table lookup.
     """
-    # New history check
     new_len = hist_len + 1
     new_mask = (hist_mask << 1) | next_val
     
-    # If we haven't filled the window yet
     if new_len < MS:
-        # Check if it's possible to satisfy MIN_MS
-        # Current ones + (MS - new_len) ones (optimistic future)
-        current_ones = 0
-        temp_mask = new_mask
-        for _ in range(new_len):
-            if temp_mask & 1:
-                current_ones += 1
-            temp_mask >>= 1
-            
+        # Partial window: Count current ones with lookup
+        masked = new_mask & ((1 << new_len) - 1)
+        current_ones = POPCOUNT_TABLE[masked & 0xFFFF]
         remaining_slots = MS - new_len
         if current_ones + remaining_slots < MIN_MS:
-            # Although returning False, we return valid shape placeholders
             return False, new_mask, new_len
         return True, new_mask, new_len
-        
     else:
-        # Full window check (new_len == MS or greater, but logically we enter with MS-1)
-        # We check the window of size MS (which is exactly new_mask if entered with MS-1)
+        # Full window: Count ones in last MS bits
+        ms_mask = (1 << MS) - 1
+        window_bits = new_mask & ms_mask
+        current_ones = POPCOUNT_TABLE[window_bits & 0xFFFF]
         
-        # We assume input hist_len is at most MS-1. So new_len is at most MS.
-        # If new_len == MS:
-        
-        # Count set bits in the window (last MS bits)
-        current_ones = 0
-        temp_mask = new_mask
-        for _ in range(MS):
-            if temp_mask & 1:
-                current_ones += 1
-            temp_mask >>= 1
-            
         if current_ones < MIN_MS:
-            return False, new_mask, MS 
-            
-        # Truncate to MS - 1 for state storage
+            return False, new_mask, MS
+        
+        # Truncate to MS-1 for storage
+        ms_minus_1 = MS - 1
+        trunc_mask = new_mask & ((1 << ms_minus_1) - 1)
+        return True, trunc_mask, ms_minus_1
+
+
+@njit(cache=True, inline='always')
+def check_strict_feasibility_numba(hist_mask, hist_len, next_val, MS, MIN_MS):
+    """
+    Check if adding next_val to the history satisfies rolling window constraints.
+    OPTIMIZED: Uses precomputed popcount table instead of bit-counting loops.
+    """
+    new_len = hist_len + 1
+    new_mask = (hist_mask << 1) | next_val
+    
+    if new_len < MS:
+        # Partial window: use popcount lookup
+        masked = new_mask & ((1 << new_len) - 1)
+        current_ones = POPCOUNT_TABLE[masked & 0xFFFF]
+        remaining_slots = MS - new_len
+        if current_ones + remaining_slots < MIN_MS:
+            return False, new_mask, new_len
+        return True, new_mask, new_len
+    else:
+        # Full window: count ones in last MS bits using popcount
+        ms_mask = (1 << MS) - 1
+        window_bits = new_mask & ms_mask
+        current_ones = POPCOUNT_TABLE[window_bits & 0xFFFF]
+        
+        if current_ones < MIN_MS:
+            return False, new_mask, MS
+        
+        # Truncate to MS-1 for storage
         ms_minus_1 = MS - 1
         trunc_mask = new_mask & ((1 << ms_minus_1) - 1)
         return True, trunc_mask, ms_minus_1
@@ -474,8 +505,254 @@ def run_fast_path_numba(
 
 
 # =============================================================================
+# OPTIMIZATION 1: ng-PATH LOWER BOUND WITH SUFFIX SUMS
+# =============================================================================
+# Pre-compute suffix sums of maximum dual gains for aggressive state pruning
+
+@njit(cache=True)
+def compute_suffix_sums(pi_matrix, candidate_workers, max_time):
+    """
+    Compute suffix sums of maximum dual gains.
+    
+    suffix_sum[t] = sum of max(-pi[j, tau]) for tau from t to max_time
+    
+    This allows O(1) lookup of the maximum possible remaining dual gain
+    from any time t to the end.
+    """
+    n_workers = len(candidate_workers)
+    
+    # Max dual gain per time step
+    max_dual_per_time = np.zeros(max_time + 2, dtype=np.float64)
+    for t in range(1, max_time + 1):
+        max_gain = 0.0
+        for w_idx in range(n_workers):
+            j = candidate_workers[w_idx]
+            gain = -pi_matrix[j, t]
+            if gain > max_gain:
+                max_gain = gain
+        max_dual_per_time[t] = max_gain
+    
+    # Suffix sums (from end to start)
+    suffix_sum = np.zeros(max_time + 2, dtype=np.float64)
+    for t in range(max_time, 0, -1):
+        suffix_sum[t] = suffix_sum[t + 1] + max_dual_per_time[t]
+    
+    return suffix_sum
+
+
+@njit(cache=True, parallel=True)
+def run_fast_path_with_lb_numba(
+    r_k, s_k, gamma_k, obj_mode_float, 
+    pi_matrix,
+    candidate_workers,
+    max_time, 
+    MS, MIN_MS, 
+    theta_lookup,
+    epsilon,
+    suffix_sum  # Pre-computed suffix sums for LB pruning
+):
+    """
+    Parallel DP with ng-path Lower Bound pruning.
+    States are pruned when their optimistic bound cannot yield negative RC.
+    
+    Pruning condition: cost + suffix_sum[t+1] + remaining_obj - gamma >= 0
+    """
+    obj_mode = obj_mode_float
+    n_workers = len(candidate_workers)
+    
+    MAX_COLS_PER_WORKER = 200
+    result_buffer = np.empty((n_workers, MAX_COLS_PER_WORKER, 6), dtype=np.float64)
+    result_counts = np.zeros(n_workers, dtype=np.int64)
+    
+    for worker_idx in prange(n_workers):
+        j = candidate_workers[worker_idx]
+        col_count = 0
+        
+        time_until_end = max_time - r_k + 1
+        effective_min_duration = min(int(s_k), time_until_end)
+        start_tau = r_k + effective_min_duration - 1
+        
+        for tau in range(start_tau, max_time + 1):
+            if col_count >= MAX_COLS_PER_WORKER:
+                break
+                
+            is_timeout_scenario = (tau == max_time)
+            start_cost = -pi_matrix[j, r_k]
+            
+            current_states = Dict.empty(key_type, val_list_type)
+            
+            init_key = pack_key(0, 1, 1)
+            val_list = List.empty_list(val_tuple_type)
+            val_list.append((float64(start_cost), float64(1.0), int64(1)))
+            current_states[init_key] = val_list
+            
+            # DP Loop
+            for t in range(r_k + 1, tau):
+                next_states = Dict.empty(key_type, val_list_type)
+                
+                for key, bucket in current_states.items():
+                    ai_count, hist_mask, hist_len = unpack_key(key)
+                    
+                    for state in bucket:
+                        cost, prog, path_mask = state
+                        
+                        # === LOWER BOUND PRUNING ===
+                        # Optimistic bound: assume we get max dual gain at every future step
+                        remaining_steps = tau - t + 1
+                        optimistic_obj = remaining_steps * obj_mode
+                        optimistic_cost = cost + suffix_sum[t + 1]
+                        lower_bound = optimistic_cost + optimistic_obj - gamma_k
+                        
+                        if lower_bound >= -epsilon:
+                            continue  # Prune: cannot achieve negative RC
+                        
+                        # Progress pruning (existing)
+                        if not is_timeout_scenario and obj_mode > 0.5:
+                            if prog + remaining_steps * 1.0 < s_k - epsilon:
+                                continue
+                        
+                        # A: Therapist
+                        feasible_ther, new_mask_ther, new_len_ther = check_strict_feasibility_numba(
+                            hist_mask, hist_len, 1, MS, MIN_MS
+                        )
+                        
+                        if feasible_ther:
+                            cost_ther = cost - pi_matrix[j, t]
+                            prog_ther = prog + 1.0
+                            new_key_ther = pack_key(ai_count, new_mask_ther, new_len_ther)
+                            new_val_ther = (cost_ther, prog_ther, path_mask | (1 << (t - r_k)))
+                            
+                            if new_key_ther not in next_states:
+                                l = List.empty_list(val_tuple_type)
+                                l.append(new_val_ther)
+                                next_states[new_key_ther] = l
+                            else:
+                                bucket_t = next_states[new_key_ther]
+                                is_dominated = False
+                                for i in range(len(bucket_t)):
+                                    c_old, p_old, _ = bucket_t[i]
+                                    if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
+                                        is_dominated = True
+                                        break
+                                if not is_dominated:
+                                    clean_bucket = List.empty_list(val_tuple_type)
+                                    for i in range(len(bucket_t)):
+                                        c_old, p_old, path_old = bucket_t[i]
+                                        if not (cost_ther <= c_old + epsilon and prog_ther >= p_old - epsilon):
+                                            clean_bucket.append((c_old, p_old, path_old))
+                                    clean_bucket.append(new_val_ther)
+                                    next_states[new_key_ther] = clean_bucket
+                        
+                        # B: AI
+                        feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
+                            hist_mask, hist_len, 0, MS, MIN_MS
+                        )
+                        
+                        if feasible_ai:
+                            cost_ai = cost
+                            eff = 1.0
+                            if ai_count < len(theta_lookup):
+                                eff = theta_lookup[ai_count]
+                            prog_ai = prog + eff
+                            new_ai_count = ai_count + 1
+                            new_key_ai = pack_key(new_ai_count, new_mask_ai, new_len_ai)
+                            new_val_ai = (cost_ai, prog_ai, path_mask)
+                            
+                            if new_key_ai not in next_states:
+                                l = List.empty_list(val_tuple_type)
+                                l.append(new_val_ai)
+                                next_states[new_key_ai] = l
+                            else:
+                                bucket_a = next_states[new_key_ai]
+                                is_dominated = False
+                                for i in range(len(bucket_a)):
+                                    c_old, p_old, _ = bucket_a[i]
+                                    if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
+                                        is_dominated = True
+                                        break
+                                if not is_dominated:
+                                    clean_bucket = List.empty_list(val_tuple_type)
+                                    for i in range(len(bucket_a)):
+                                        c_old, p_old, path_old = bucket_a[i]
+                                        if not (cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon):
+                                            clean_bucket.append((c_old, p_old, path_old))
+                                    clean_bucket.append(new_val_ai)
+                                    next_states[new_key_ai] = clean_bucket
+                
+                current_states = next_states
+                if len(current_states) == 0:
+                    break
+            
+            # Final Step
+            for key, bucket in current_states.items():
+                ai_count, hist_mask, hist_len = unpack_key(key)
+                
+                for state in bucket:
+                    cost, prog, path_mask = state
+                    
+                    # End with Therapist
+                    feasible_ther, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 1, MS, MIN_MS)
+                    if feasible_ther:
+                        final_cost = cost - pi_matrix[j, tau]
+                        final_prog = prog + 1.0
+                        final_path_mask = path_mask | (1 << (tau - r_k))
+                        
+                        condition_met = final_prog >= s_k - epsilon
+                        is_valid = condition_met if obj_mode > 0.5 else (condition_met or tau == max_time)
+                        
+                        if is_valid:
+                            duration_val = tau - r_k + 1
+                            rc = final_cost + duration_val * obj_mode - gamma_k
+                            if rc < -1e-6 and col_count < MAX_COLS_PER_WORKER:
+                                result_buffer[worker_idx, col_count, 0] = float64(j)
+                                result_buffer[worker_idx, col_count, 1] = rc
+                                result_buffer[worker_idx, col_count, 2] = float64(r_k)
+                                result_buffer[worker_idx, col_count, 3] = float64(tau)
+                                result_buffer[worker_idx, col_count, 4] = float64(final_path_mask)
+                                result_buffer[worker_idx, col_count, 5] = final_prog
+                                col_count += 1
+                    
+                    # End with AI (timeout only)
+                    if is_timeout_scenario:
+                        feasible_ai, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 0, MS, MIN_MS)
+                        if feasible_ai:
+                            final_cost = cost
+                            eff = 1.0
+                            if ai_count < len(theta_lookup):
+                                eff = theta_lookup[ai_count]
+                            final_prog = prog + eff
+                            
+                            condition_met = final_prog >= s_k - epsilon
+                            is_valid = condition_met if obj_mode > 0.5 else (condition_met or tau == max_time)
+                            
+                            if is_valid:
+                                duration_val = tau - r_k + 1
+                                rc = final_cost + duration_val * obj_mode - gamma_k
+                                if rc < -1e-6 and col_count < MAX_COLS_PER_WORKER:
+                                    result_buffer[worker_idx, col_count, 0] = float64(j)
+                                    result_buffer[worker_idx, col_count, 1] = rc
+                                    result_buffer[worker_idx, col_count, 2] = float64(r_k)
+                                    result_buffer[worker_idx, col_count, 3] = float64(tau)
+                                    result_buffer[worker_idx, col_count, 4] = float64(path_mask)
+                                    result_buffer[worker_idx, col_count, 5] = final_prog
+                                    col_count += 1
+        
+        result_counts[worker_idx] = col_count
+    
+    # Collect results
+    all_columns = List.empty_list(result_tuple_type)
+    for worker_idx in range(n_workers):
+        for col_idx in range(result_counts[worker_idx]):
+            row = result_buffer[worker_idx, col_idx]
+            all_columns.append((row[0], row[1], int64(row[2]), int64(row[3]), int64(row[4]), row[5]))
+    
+    return all_columns
+
+
+# =============================================================================
 # OPTIMIZATION C: PARALLEL VERSION WITH prange
 # =============================================================================
+
 
 @njit(cache=True, parallel=True)
 def run_fast_path_parallel_numba(

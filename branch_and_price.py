@@ -98,7 +98,8 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         heuristic_max_labels=cg_solver_data.get('heuristic_max_labels', 20),
         use_relaxed_history=cg_solver_data.get('use_relaxed_history', False),
         use_numba_labeling=cg_solver_data.get('use_numba_labeling', False),
-        allow_gaps=cg_solver_data.get('allow_gaps', False)
+        allow_gaps=cg_solver_data.get('allow_gaps', False),
+        use_lower_bound=cg_solver_data.get('use_lower_bound', True)
     )
     
     return (profile, col_data_list)
@@ -179,6 +180,7 @@ class BranchAndPrice:
         self.use_relaxed_history = label_dict['use_relaxed_history'] if label_dict is not None else True
         self.use_numba_labeling = label_dict['use_numba_labeling'] if label_dict is not None else False
         self.allow_gaps = label_dict.get('allow_gaps', False) if label_dict is not None else False
+        self.use_lower_bound = label_dict.get('use_lower_bound', True) if label_dict is not None else True  # NEW: ng-path LB pruning
         
         # Create persistent multiprocessing pool
         self.pricing_pool = None
@@ -2231,7 +2233,8 @@ class BranchAndPrice:
                     'heuristic_max_labels': self.heuristic_max_labels,
                     'use_relaxed_history': self.use_relaxed_history,
                     'use_numba_labeling': self.use_numba_labeling,
-                    'allow_gaps': self.allow_gaps
+                    'allow_gaps': self.allow_gaps,
+                    'use_lower_bound': self.use_lower_bound
                 }
                 
                 # Prepare arguments for each profile
@@ -2980,7 +2983,8 @@ class BranchAndPrice:
             branching_constraints=node.branching_constraints,
             max_columns=self.max_columns_per_iter,  # Return up to N columns
             use_pure_dp_optimization=self.use_pure_dp_optimization,
-            use_numba_labeling=self.use_numba_labeling
+            use_numba_labeling=self.use_numba_labeling,
+            use_lower_bound=self.use_lower_bound
         )
         
         return col_data_list
