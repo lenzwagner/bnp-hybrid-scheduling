@@ -129,6 +129,87 @@ def compute_candidate_workers_numba(workers, r_k, tau_max, pi_matrix):
 
 
 @njit(cache=True)
+def find_identical_worker_groups_numba(workers, r_k, tau_max, pi_matrix, epsilon=1e-9):
+    """
+    Identify groups of workers with identical pi-values for symmetry breaking.
+    
+    Two workers j1 and j2 are considered identical if:
+    |π[j1, t] - π[j2, t]| < epsilon for all t in [r_k, tau_max]
+    
+    This enables solving the pricing subproblem only for one representative
+    per group and duplicating the found columns for all group members.
+    
+    Args:
+        workers: Array of worker IDs (after dominance elimination)
+        r_k: Release time
+        tau_max: Maximum time horizon
+        pi_matrix: 2D array [worker, time] of pi values
+        epsilon: Tolerance for floating-point comparison
+    
+    Returns:
+        Tuple of (representatives, group_members, group_sizes):
+        - representatives: Array of representative worker IDs (one per group)
+        - group_members: 2D array where group_members[g, :] contains worker IDs in group g
+        - group_sizes: Array with the size of each group
+    """
+    n_workers = len(workers)
+    
+    if n_workers == 0:
+        return (np.empty(0, dtype=np.int64), 
+                np.empty((0, 0), dtype=np.int64), 
+                np.empty(0, dtype=np.int64))
+    
+    # Track which workers have been assigned to a group
+    assigned = np.zeros(n_workers, dtype=np.bool_)
+    
+    # Max possible groups = n_workers
+    representatives = np.empty(n_workers, dtype=np.int64)
+    group_members = np.full((n_workers, n_workers), -1, dtype=np.int64)  # -1 = empty slot
+    group_sizes = np.zeros(n_workers, dtype=np.int64)
+    num_groups = 0
+    
+    for i in range(n_workers):
+        if assigned[i]:
+            continue
+        
+        # Start new group with worker i as representative
+        rep_worker = workers[i]
+        representatives[num_groups] = rep_worker
+        group_members[num_groups, 0] = rep_worker
+        group_sizes[num_groups] = 1
+        assigned[i] = True
+        
+        # Find all other workers identical to this representative
+        for k in range(i + 1, n_workers):
+            if assigned[k]:
+                continue
+            
+            other_worker = workers[k]
+            is_identical = True
+            
+            # Compare pi values across time horizon
+            for t in range(r_k, tau_max + 1):
+                diff = abs(pi_matrix[rep_worker, t] - pi_matrix[other_worker, t])
+                if diff > epsilon:
+                    is_identical = False
+                    break
+            
+            if is_identical:
+                # Add to current group
+                idx = group_sizes[num_groups]
+                group_members[num_groups, idx] = other_worker
+                group_sizes[num_groups] += 1
+                assigned[k] = True
+        
+        num_groups += 1
+    
+    # Return trimmed arrays
+    return (representatives[:num_groups], 
+            group_members[:num_groups], 
+            group_sizes[:num_groups])
+
+
+@njit(cache=True)
 def generate_full_column_vector_numba(worker_id, path_mask, start_time, end_time, max_time, num_workers):
     """
     Numba-optimized generation of the full column vector for a schedule.

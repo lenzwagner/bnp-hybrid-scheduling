@@ -1615,6 +1615,13 @@ def solve_pricing_for_profile_bnp(
         has_nogood_cuts = False
         has_left_patterns = False
         
+        # === SYMMETRY BREAKING: Identify groups of identical workers ===
+        # Disabled when worker-specific SP branching constraints are active
+        use_symmetry_breaking = True
+        representatives = None
+        group_members = None
+        group_sizes = None
+        
         # Default empty arrays (will be passed even if not used)
         forbidden_mask = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.bool_)
         required_mask = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.bool_)
@@ -1771,6 +1778,33 @@ def solve_pricing_for_profile_bnp(
         # Decide which Numba function to call
         use_branching_numba = has_sp_fixing or has_nogood_cuts or has_left_patterns or has_right_patterns
         
+        # === SYMMETRY BREAKING: Disable when branching constraints are active ===
+        # Branching constraints can be worker-specific, breaking pi-equivalence
+        if use_branching_numba:
+            use_symmetry_breaking = False
+        
+        # Apply symmetry breaking: group identical workers
+        if use_symmetry_breaking and len(workers_arr) > 1:
+            representatives, group_members, group_sizes = label_numba.find_identical_worker_groups_numba(
+                workers_arr, r_k, max_time, pi_matrix
+            )
+            
+            num_groups = len(representatives)
+            if num_groups < len(workers_arr):
+                # Log symmetry breaking results
+                groups_with_multiple = sum(1 for s in group_sizes if s > 1)
+                logger.info(f"[SYMMETRY] Profile {profile}: {len(workers_arr)} workers -> {num_groups} groups ({groups_with_multiple} with multiple members)")
+                
+                # Use only representatives for pricing
+                workers_arr_for_pricing = representatives
+            else:
+                # No groups found, all workers are unique
+                use_symmetry_breaking = False
+                workers_arr_for_pricing = workers_arr
+        else:
+            use_symmetry_breaking = False
+            workers_arr_for_pricing = workers_arr
+        
         if use_branching_numba:
             # Call extended Numba function with branching support
             raw_cols = label_numba.run_with_branching_constraints_numba(
@@ -1790,21 +1824,45 @@ def solve_pricing_for_profile_bnp(
             )
         else:
             # Call optimized fast path (no constraints)
+            # Use representatives only when symmetry breaking is active
             if use_lower_bound:
                 # With Lower Bound pruning (30-100x faster!)
-                suffix_sum = label_numba.compute_suffix_sums(pi_matrix, workers_arr, int(max_time))
+                suffix_sum = label_numba.compute_suffix_sums(pi_matrix, workers_arr_for_pricing, int(max_time))
                 raw_cols = label_numba.run_fast_path_with_lb_numba(
                     int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
-                    pi_matrix, workers_arr, int(max_time), 
+                    pi_matrix, workers_arr_for_pricing, int(max_time), 
                     int(MS), int(MIN_MS), theta_arr, 1e-6, suffix_sum
                 )
             else:
                 # Without Lower Bound (original parallel version)
                 raw_cols = label_numba.run_fast_path_parallel_numba(
                     int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
-                    pi_matrix, workers_arr, int(max_time), 
+                    pi_matrix, workers_arr_for_pricing, int(max_time), 
                     int(MS), int(MIN_MS), theta_arr, 1e-6
                 )
+        
+        # === SYMMETRY BREAKING: Expand columns for all group members ===
+        if use_symmetry_breaking and representatives is not None:
+            expanded_raw_cols = []
+            for col_tuple in raw_cols:
+                rep_worker_id = int(col_tuple[0])
+                
+                # Find which group this representative belongs to
+                for g_idx in range(len(representatives)):
+                    if representatives[g_idx] == rep_worker_id:
+                        # Duplicate for all members in this group
+                        for m_idx in range(group_sizes[g_idx]):
+                            member_id = group_members[g_idx, m_idx]
+                            if member_id < 0:
+                                break
+                            # Create column copy with new worker ID
+                            expanded_raw_cols.append((
+                                float(member_id), col_tuple[1], col_tuple[2],
+                                col_tuple[3], col_tuple[4], col_tuple[5]
+                            ))
+                        break
+            raw_cols = expanded_raw_cols
+
 
         
         # Convert to best_columns format
