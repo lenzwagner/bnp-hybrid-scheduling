@@ -187,6 +187,29 @@ def path_mask_to_list(path_mask, duration):
 # We store states in a list.
 # Optimisation: We group states by (ai_count, history_mask, history_len) for dominance.
 
+# =============================================================================
+# STATE PACKING HELPERS (Optimization A)
+# =============================================================================
+# Pack (ai_count, hist_mask, hist_len) into single int64 for faster Dict hashing
+# Bit layout:
+#   Bits 0-7:   hist_len (max 255)
+#   Bits 8-23:  hist_mask (max 65535, enough for MS up to 17)
+#   Bits 24-55: ai_count (max ~4 billion)
+
+@njit(cache=True, inline='always')
+def pack_key(ai_count, hist_mask, hist_len):
+    """Pack state key components into single int64."""
+    return (ai_count << 24) | (hist_mask << 8) | hist_len
+
+@njit(cache=True, inline='always')
+def unpack_key(key):
+    """Unpack int64 key back to components."""
+    hist_len = key & 0xFF
+    hist_mask = (key >> 8) & 0xFFFF
+    ai_count = key >> 24
+    return ai_count, hist_mask, hist_len
+
+
 @njit(cache=True)
 def check_strict_feasibility_numba(hist_mask, hist_len, next_val, MS, MIN_MS):
     """
@@ -238,12 +261,13 @@ def check_strict_feasibility_numba(hist_mask, hist_len, next_val, MS, MIN_MS):
         return True, trunc_mask, ms_minus_1
 
 # Type definitions for Dict
-# Key: (ai_count, hist_mask, hist_len)
-key_type = types.Tuple((types.int64, types.int64, types.int64))
+# Key: packed int64 (ai_count << 24 | hist_mask << 8 | hist_len)
+key_type = types.int64  # OPTIMIZATION A: Packed key for faster hashing
 # Value: List of (cost, prog, path_mask)
 # Note: We must define the tuple type inside the list
 val_tuple_type = types.Tuple((types.float64, types.float64, types.int64))
 val_list_type = types.ListType(val_tuple_type)
+
 
 # Return list type
 # (j, rc, start, end, path_mask, prog)
@@ -287,7 +311,7 @@ def run_fast_path_numba(
             init_hlen = 1
             init_path = 1 # Bit 0 is set
             
-            init_key = (int64(init_ai), int64(init_hist), int64(init_hlen))
+            init_key = pack_key(init_ai, init_hist, init_hlen)
             
             # Create list for this bucket
             val_list = List.empty_list(val_tuple_type)
@@ -300,7 +324,7 @@ def run_fast_path_numba(
                 
                 # Iterate over current buckets
                 for key, bucket in current_states.items():
-                    ai_count, hist_mask, hist_len = key
+                    ai_count, hist_mask, hist_len = unpack_key(key)
                     
                     for state in bucket:
                         cost, prog, path_mask = state
@@ -321,7 +345,7 @@ def run_fast_path_numba(
                             cost_ther = cost - pi_matrix[j, t]
                             prog_ther = prog + 1.0
                             
-                            new_key_ther = (ai_count, new_mask_ther, new_len_ther)
+                            new_key_ther = pack_key(ai_count, new_mask_ther, new_len_ther)
                             new_val_ther = (cost_ther, prog_ther, (path_mask | (1 << (t - r_k))))
                             
                             if new_key_ther not in next_states:
@@ -362,7 +386,7 @@ def run_fast_path_numba(
                             prog_ai = prog + eff
                             new_ai_count = ai_count + 1
                             
-                            new_key_ai = (new_ai_count, new_mask_ai, new_len_ai)
+                            new_key_ai = pack_key(new_ai_count, new_mask_ai, new_len_ai)
                             new_val_ai = (cost_ai, prog_ai, (path_mask))
                             
                             if new_key_ai not in next_states:
@@ -395,7 +419,7 @@ def run_fast_path_numba(
             
             # Final Step (Transition to Tau)
             for key, bucket in current_states.items():
-                ai_count, hist_mask, hist_len = key
+                ai_count, hist_mask, hist_len = unpack_key(key)
                 
                 for state in bucket:
                     cost, prog, path_mask = state
@@ -449,7 +473,462 @@ def run_fast_path_numba(
     return best_columns
 
 
+# =============================================================================
+# OPTIMIZATION C: PARALLEL VERSION WITH prange
+# =============================================================================
+
+@njit(cache=True, parallel=True)
+def run_fast_path_parallel_numba(
+    r_k, s_k, gamma_k, obj_mode_float, 
+    pi_matrix,
+    candidate_workers,
+    max_time, 
+    MS, MIN_MS, 
+    theta_lookup,
+    epsilon
+):
+    """
+    Parallel DP loop using Numba's prange.
+    Each worker is processed in parallel, with results stored in thread-local buffers.
+    """
+    obj_mode = obj_mode_float
+    n_workers = len(candidate_workers)
+    
+    # Pre-allocate result buffer: max 200 columns per worker
+    MAX_COLS_PER_WORKER = 200
+    result_buffer = np.empty((n_workers, MAX_COLS_PER_WORKER, 6), dtype=np.float64)
+    result_counts = np.zeros(n_workers, dtype=np.int64)
+    
+    for worker_idx in prange(n_workers):
+        j = candidate_workers[worker_idx]
+        col_count = 0
+        
+        time_until_end = max_time - r_k + 1
+        effective_min_duration = min(int(s_k), time_until_end)
+        start_tau = r_k + effective_min_duration - 1
+        
+        for tau in range(start_tau, max_time + 1):
+            if col_count >= MAX_COLS_PER_WORKER:
+                break
+                
+            is_timeout_scenario = (tau == max_time)
+            start_cost = -pi_matrix[j, r_k]
+            
+            current_states = Dict.empty(key_type, val_list_type)
+            
+            init_key = pack_key(0, 1, 1)
+            val_list = List.empty_list(val_tuple_type)
+            val_list.append((float64(start_cost), float64(1.0), int64(1)))
+            current_states[init_key] = val_list
+            
+            # DP Loop
+            for t in range(r_k + 1, tau):
+                next_states = Dict.empty(key_type, val_list_type)
+                
+                for key, bucket in current_states.items():
+                    ai_count, hist_mask, hist_len = unpack_key(key)
+                    
+                    for state in bucket:
+                        cost, prog, path_mask = state
+                        
+                        remaining_steps = tau - t + 1
+                        if not is_timeout_scenario and obj_mode > 0.5:
+                            if prog + remaining_steps * 1.0 < s_k - epsilon:
+                                continue
+                        
+                        # A: Therapist
+                        feasible_ther, new_mask_ther, new_len_ther = check_strict_feasibility_numba(
+                            hist_mask, hist_len, 1, MS, MIN_MS
+                        )
+                        
+                        if feasible_ther:
+                            cost_ther = cost - pi_matrix[j, t]
+                            prog_ther = prog + 1.0
+                            new_key_ther = pack_key(ai_count, new_mask_ther, new_len_ther)
+                            new_val_ther = (cost_ther, prog_ther, path_mask | (1 << (t - r_k)))
+                            
+                            if new_key_ther not in next_states:
+                                l = List.empty_list(val_tuple_type)
+                                l.append(new_val_ther)
+                                next_states[new_key_ther] = l
+                            else:
+                                bucket_t = next_states[new_key_ther]
+                                is_dominated = False
+                                for i in range(len(bucket_t)):
+                                    c_old, p_old, _ = bucket_t[i]
+                                    if c_old <= cost_ther + epsilon and p_old >= prog_ther - epsilon:
+                                        is_dominated = True
+                                        break
+                                if not is_dominated:
+                                    clean_bucket = List.empty_list(val_tuple_type)
+                                    for i in range(len(bucket_t)):
+                                        c_old, p_old, path_old = bucket_t[i]
+                                        if not (cost_ther <= c_old + epsilon and prog_ther >= p_old - epsilon):
+                                            clean_bucket.append((c_old, p_old, path_old))
+                                    clean_bucket.append(new_val_ther)
+                                    next_states[new_key_ther] = clean_bucket
+                        
+                        # B: AI
+                        feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
+                            hist_mask, hist_len, 0, MS, MIN_MS
+                        )
+                        
+                        if feasible_ai:
+                            cost_ai = cost
+                            eff = 1.0
+                            if ai_count < len(theta_lookup):
+                                eff = theta_lookup[ai_count]
+                            prog_ai = prog + eff
+                            new_ai_count = ai_count + 1
+                            new_key_ai = pack_key(new_ai_count, new_mask_ai, new_len_ai)
+                            new_val_ai = (cost_ai, prog_ai, path_mask)
+                            
+                            if new_key_ai not in next_states:
+                                l = List.empty_list(val_tuple_type)
+                                l.append(new_val_ai)
+                                next_states[new_key_ai] = l
+                            else:
+                                bucket_a = next_states[new_key_ai]
+                                is_dominated = False
+                                for i in range(len(bucket_a)):
+                                    c_old, p_old, _ = bucket_a[i]
+                                    if c_old <= cost_ai + epsilon and p_old >= prog_ai - epsilon:
+                                        is_dominated = True
+                                        break
+                                if not is_dominated:
+                                    clean_bucket = List.empty_list(val_tuple_type)
+                                    for i in range(len(bucket_a)):
+                                        c_old, p_old, path_old = bucket_a[i]
+                                        if not (cost_ai <= c_old + epsilon and prog_ai >= p_old - epsilon):
+                                            clean_bucket.append((c_old, p_old, path_old))
+                                    clean_bucket.append(new_val_ai)
+                                    next_states[new_key_ai] = clean_bucket
+                
+                current_states = next_states
+                if len(current_states) == 0:
+                    break
+            
+            # Final Step
+            for key, bucket in current_states.items():
+                ai_count, hist_mask, hist_len = unpack_key(key)
+                
+                for state in bucket:
+                    cost, prog, path_mask = state
+                    
+                    # End with Therapist
+                    feasible_ther, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 1, MS, MIN_MS)
+                    if feasible_ther:
+                        final_cost = cost - pi_matrix[j, tau]
+                        final_prog = prog + 1.0
+                        final_path_mask = path_mask | (1 << (tau - r_k))
+                        
+                        condition_met = final_prog >= s_k - epsilon
+                        is_valid = condition_met if obj_mode > 0.5 else (condition_met or tau == max_time)
+                        
+                        if is_valid:
+                            duration_val = tau - r_k + 1
+                            rc = final_cost + duration_val * obj_mode - gamma_k
+                            if rc < -1e-6 and col_count < MAX_COLS_PER_WORKER:
+                                result_buffer[worker_idx, col_count, 0] = float64(j)
+                                result_buffer[worker_idx, col_count, 1] = rc
+                                result_buffer[worker_idx, col_count, 2] = float64(r_k)
+                                result_buffer[worker_idx, col_count, 3] = float64(tau)
+                                result_buffer[worker_idx, col_count, 4] = float64(final_path_mask)
+                                result_buffer[worker_idx, col_count, 5] = final_prog
+                                col_count += 1
+                    
+                    # End with AI (timeout only)
+                    if is_timeout_scenario:
+                        feasible_ai, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 0, MS, MIN_MS)
+                        if feasible_ai:
+                            final_cost = cost
+                            eff = 1.0
+                            if ai_count < len(theta_lookup):
+                                eff = theta_lookup[ai_count]
+                            final_prog = prog + eff
+                            
+                            condition_met = final_prog >= s_k - epsilon
+                            is_valid = condition_met if obj_mode > 0.5 else (condition_met or tau == max_time)
+                            
+                            if is_valid:
+                                duration_val = tau - r_k + 1
+                                rc = final_cost + duration_val * obj_mode - gamma_k
+                                if rc < -1e-6 and col_count < MAX_COLS_PER_WORKER:
+                                    result_buffer[worker_idx, col_count, 0] = float64(j)
+                                    result_buffer[worker_idx, col_count, 1] = rc
+                                    result_buffer[worker_idx, col_count, 2] = float64(r_k)
+                                    result_buffer[worker_idx, col_count, 3] = float64(tau)
+                                    result_buffer[worker_idx, col_count, 4] = float64(path_mask)
+                                    result_buffer[worker_idx, col_count, 5] = final_prog
+                                    col_count += 1
+        
+        result_counts[worker_idx] = col_count
+    
+    # Collect results into list
+    total_cols = int(np.sum(result_counts))
+    all_columns = List.empty_list(result_tuple_type)
+    for worker_idx in range(n_workers):
+        for col_idx in range(result_counts[worker_idx]):
+            row = result_buffer[worker_idx, col_idx]
+            all_columns.append((row[0], row[1], int64(row[2]), int64(row[3]), int64(row[4]), row[5]))
+    
+    return all_columns
+
+
+# =============================================================================
+# OPTIMIZATION D: DOUBLE BUFFERING WITH FLAT ARRAYS
+# =============================================================================
+# Combined A+C+D: State-packing, parallel prange, and double-buffered flat arrays
+
+# State buffer layout: [cost, prog, path_mask, packed_key]
+# Using 2D arrays and counters instead of Dict+List
+
+@njit(cache=True, parallel=True)
+def run_fast_path_optimized_numba(
+    r_k, s_k, gamma_k, obj_mode_float, 
+    pi_matrix,
+    candidate_workers,
+    max_time, 
+    MS, MIN_MS, 
+    theta_lookup,
+    epsilon
+):
+    """
+    Fully optimized DP with:
+    - A: State-packing (int64 keys)
+    - C: prange parallelization
+    - D: Double buffering with flat arrays
+    """
+    obj_mode = obj_mode_float
+    n_workers = len(candidate_workers)
+    
+    # Constants for buffer sizing
+    MAX_STATES = 2000      # Max states per worker per tau iteration
+    MAX_PARETO = 8         # Max Pareto-optimal points per bucket
+    MAX_COLS_PER_WORKER = 200
+    
+    # Result buffer
+    result_buffer = np.empty((n_workers, MAX_COLS_PER_WORKER, 6), dtype=np.float64)
+    result_counts = np.zeros(n_workers, dtype=np.int64)
+    
+    for worker_idx in prange(n_workers):
+        j = candidate_workers[worker_idx]
+        col_count = 0
+        
+        time_until_end = max_time - r_k + 1
+        effective_min_duration = min(int(s_k), time_until_end)
+        start_tau = r_k + effective_min_duration - 1
+        
+        # Double buffer: current and next state arrays
+        # Each row: [cost, prog, path_mask, packed_key]
+        buffer_a = np.empty((MAX_STATES, 4), dtype=np.float64)
+        buffer_b = np.empty((MAX_STATES, 4), dtype=np.float64)
+        
+        for tau in range(start_tau, max_time + 1):
+            if col_count >= MAX_COLS_PER_WORKER:
+                break
+                
+            is_timeout_scenario = (tau == max_time)
+            start_cost = -pi_matrix[j, r_k]
+            
+            # Initialize with first state
+            current = buffer_a
+            current_count = 1
+            current[0, 0] = start_cost  # cost
+            current[0, 1] = 1.0         # prog
+            current[0, 2] = 1.0         # path_mask (bit 0 set)
+            current[0, 3] = float64(pack_key(0, 1, 1))  # packed key
+            
+            # DP Loop
+            for t in range(r_k + 1, tau):
+                # Swap buffers
+                if current is buffer_a:
+                    next_buf = buffer_b
+                else:
+                    next_buf = buffer_a
+                next_count = 0
+                
+                for state_idx in range(current_count):
+                    cost = current[state_idx, 0]
+                    prog = current[state_idx, 1]
+                    path_mask = int64(current[state_idx, 2])
+                    packed_key = int64(current[state_idx, 3])
+                    ai_count, hist_mask, hist_len = unpack_key(packed_key)
+                    
+                    # Reachability pruning
+                    remaining_steps = tau - t + 1
+                    if not is_timeout_scenario and obj_mode > 0.5:
+                        if prog + remaining_steps * 1.0 < s_k - epsilon:
+                            continue
+                    
+                    # A: Therapist
+                    feasible_ther, new_mask_ther, new_len_ther = check_strict_feasibility_numba(
+                        hist_mask, hist_len, 1, MS, MIN_MS
+                    )
+                    
+                    if feasible_ther and next_count < MAX_STATES:
+                        cost_ther = cost - pi_matrix[j, t]
+                        prog_ther = prog + 1.0
+                        new_key = pack_key(ai_count, new_mask_ther, new_len_ther)
+                        new_path = path_mask | (1 << (t - r_k))
+                        
+                        # Simple dominance check against existing states with same key
+                        is_dominated = False
+                        for k in range(next_count):
+                            if int64(next_buf[k, 3]) == new_key:
+                                if next_buf[k, 0] <= cost_ther + epsilon and next_buf[k, 1] >= prog_ther - epsilon:
+                                    is_dominated = True
+                                    break
+                        
+                        if not is_dominated:
+                            next_buf[next_count, 0] = cost_ther
+                            next_buf[next_count, 1] = prog_ther
+                            next_buf[next_count, 2] = float64(new_path)
+                            next_buf[next_count, 3] = float64(new_key)
+                            next_count += 1
+                    
+                    # B: AI
+                    feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
+                        hist_mask, hist_len, 0, MS, MIN_MS
+                    )
+                    
+                    if feasible_ai and next_count < MAX_STATES:
+                        cost_ai = cost
+                        eff = 1.0
+                        if ai_count < len(theta_lookup):
+                            eff = theta_lookup[ai_count]
+                        prog_ai = prog + eff
+                        new_ai_count = ai_count + 1
+                        new_key = pack_key(new_ai_count, new_mask_ai, new_len_ai)
+                        
+                        is_dominated = False
+                        for k in range(next_count):
+                            if int64(next_buf[k, 3]) == new_key:
+                                if next_buf[k, 0] <= cost_ai + epsilon and next_buf[k, 1] >= prog_ai - epsilon:
+                                    is_dominated = True
+                                    break
+                        
+                        if not is_dominated:
+                            next_buf[next_count, 0] = cost_ai
+                            next_buf[next_count, 1] = prog_ai
+                            next_buf[next_count, 2] = float64(path_mask)
+                            next_buf[next_count, 3] = float64(new_key)
+                            next_count += 1
+                
+                # Swap
+                current = next_buf
+                current_count = next_count
+                
+                if current_count == 0:
+                    break
+            
+            # Final Step
+            for state_idx in range(current_count):
+                cost = current[state_idx, 0]
+                prog = current[state_idx, 1]
+                path_mask = int64(current[state_idx, 2])
+                packed_key = int64(current[state_idx, 3])
+                ai_count, hist_mask, hist_len = unpack_key(packed_key)
+                
+                # End with Therapist
+                feasible_ther, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 1, MS, MIN_MS)
+                if feasible_ther:
+                    final_cost = cost - pi_matrix[j, tau]
+                    final_prog = prog + 1.0
+                    final_path = path_mask | (1 << (tau - r_k))
+                    
+                    condition_met = final_prog >= s_k - epsilon
+                    is_valid = condition_met if obj_mode > 0.5 else (condition_met or tau == max_time)
+                    
+                    if is_valid:
+                        duration_val = tau - r_k + 1
+                        rc = final_cost + duration_val * obj_mode - gamma_k
+                        if rc < -1e-6 and col_count < MAX_COLS_PER_WORKER:
+                            result_buffer[worker_idx, col_count, 0] = float64(j)
+                            result_buffer[worker_idx, col_count, 1] = rc
+                            result_buffer[worker_idx, col_count, 2] = float64(r_k)
+                            result_buffer[worker_idx, col_count, 3] = float64(tau)
+                            result_buffer[worker_idx, col_count, 4] = float64(final_path)
+                            result_buffer[worker_idx, col_count, 5] = final_prog
+                            col_count += 1
+                
+                # End with AI (timeout only)
+                if is_timeout_scenario:
+                    feasible_ai, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 0, MS, MIN_MS)
+                    if feasible_ai:
+                        final_cost = cost
+                        eff = 1.0
+                        if ai_count < len(theta_lookup):
+                            eff = theta_lookup[ai_count]
+                        final_prog = prog + eff
+                        
+                        condition_met = final_prog >= s_k - epsilon
+                        is_valid = condition_met if obj_mode > 0.5 else (condition_met or tau == max_time)
+                        
+                        if is_valid:
+                            duration_val = tau - r_k + 1
+                            rc = final_cost + duration_val * obj_mode - gamma_k
+                            if rc < -1e-6 and col_count < MAX_COLS_PER_WORKER:
+                                result_buffer[worker_idx, col_count, 0] = float64(j)
+                                result_buffer[worker_idx, col_count, 1] = rc
+                                result_buffer[worker_idx, col_count, 2] = float64(r_k)
+                                result_buffer[worker_idx, col_count, 3] = float64(tau)
+                                result_buffer[worker_idx, col_count, 4] = float64(path_mask)
+                                result_buffer[worker_idx, col_count, 5] = final_prog
+                                col_count += 1
+        
+        result_counts[worker_idx] = col_count
+    
+    # Collect results
+    all_columns = List.empty_list(result_tuple_type)
+    for worker_idx in range(n_workers):
+        for col_idx in range(result_counts[worker_idx]):
+            row = result_buffer[worker_idx, col_idx]
+            all_columns.append((row[0], row[1], int64(row[2]), int64(row[3]), int64(row[4]), row[5]))
+    
+    return all_columns
+
+
+# =============================================================================
+# AUTO-SELECTING WRAPPER (Best of both worlds)
+# =============================================================================
+
+def run_fast_path_auto_numba(
+    r_k, s_k, gamma_k, obj_mode_float, 
+    pi_matrix,
+    candidate_workers,
+    max_time, 
+    MS, MIN_MS, 
+    theta_lookup,
+    epsilon
+):
+    """
+    Auto-selecting wrapper that chooses the best implementation:
+    - Small/Medium problems (<=12 workers, T<=22): Optimized (A+C+D)
+    - Large problems: Parallel (A+C)
+    
+    This provides optimal performance across all problem sizes.
+    """
+    n_workers = len(candidate_workers)
+    duration = max_time - r_k
+    
+    # Heuristic: Use optimized for smaller state spaces
+    if n_workers <= 12 and duration <= 20:
+        return run_fast_path_optimized_numba(
+            r_k, s_k, gamma_k, obj_mode_float,
+            pi_matrix, candidate_workers, max_time,
+            MS, MIN_MS, theta_lookup, epsilon
+        )
+    else:
+        return run_fast_path_parallel_numba(
+            r_k, s_k, gamma_k, obj_mode_float,
+            pi_matrix, candidate_workers, max_time,
+            MS, MIN_MS, theta_lookup, epsilon
+        )
+
+
 @njit(cache=True)
+
 def run_fast_path_single_worker_numba(
     j,  # Single worker ID
     r_k, s_k, gamma_k, obj_mode_float, 
@@ -484,7 +963,7 @@ def run_fast_path_single_worker_numba(
         init_hlen = 1
         init_path = 1
         
-        init_key = (int64(init_ai), int64(init_hist), int64(init_hlen))
+        init_key = pack_key(init_ai, init_hist, init_hlen)
         val_list = List.empty_list(val_tuple_type)
         val_list.append((float64(start_cost), float64(1.0), int64(init_path)))
         current_states[init_key] = val_list
@@ -494,7 +973,7 @@ def run_fast_path_single_worker_numba(
             next_states = Dict.empty(key_type, val_list_type)
             
             for key, bucket in current_states.items():
-                ai_count, hist_mask, hist_len = key
+                ai_count, hist_mask, hist_len = unpack_key(key)
                 
                 for state in bucket:
                     cost, prog, path_mask = state
@@ -515,7 +994,7 @@ def run_fast_path_single_worker_numba(
                         cost_ther = cost - pi_matrix[j, t]
                         prog_ther = prog + 1.0
                         
-                        new_key_ther = (ai_count, new_mask_ther, new_len_ther)
+                        new_key_ther = pack_key(ai_count, new_mask_ther, new_len_ther)
                         new_val_ther = (cost_ther, prog_ther, (path_mask | (1 << (t - r_k))))
                         
                         if new_key_ther not in next_states:
@@ -555,7 +1034,7 @@ def run_fast_path_single_worker_numba(
                         prog_ai = prog + eff
                         new_ai_count = ai_count + 1
                         
-                        new_key_ai = (new_ai_count, new_mask_ai, new_len_ai)
+                        new_key_ai = pack_key(new_ai_count, new_mask_ai, new_len_ai)
                         new_val_ai = (cost_ai, prog_ai, path_mask)
                         
                         if new_key_ai not in next_states:
@@ -588,7 +1067,7 @@ def run_fast_path_single_worker_numba(
         
         # Final Step
         for key, bucket in current_states.items():
-            ai_count, hist_mask, hist_len = key
+            ai_count, hist_mask, hist_len = unpack_key(key)
             
             for state in bucket:
                 cost, prog, path_mask = state
