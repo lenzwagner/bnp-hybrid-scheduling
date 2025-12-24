@@ -11,19 +11,9 @@ logger = get_logger(__name__)
 def main(allow_gaps=False):
     """
     Main function to run Column Generation or Branch-and-Price algorithm.
-
     Labeling Algorithm Performance Optimizations:
-    
-    1 JIT Compilation (Cython / Numba)
-       Problem: Pure Python is slow for tight DP loops with millions of iterations.
-       Solution: Compile performance-critical functions with Cython or Numba:
-       - Target: check_strict_feasibility, compute_lower_bound, inner DP loops
-       - Requires refactoring to use NumPy arrays instead of tuples/dicts
-       - Alternative: Cython for entire DP module with C-level performance
-       Status: NOT IMPLEMENTED
-       Benefit: 10-100x speedup for DP expansion, but high refactoring effort
-       Challenge: Current code uses dynamic structures (dicts, tuples) incompatible with Numba
     """
+
     # ===========================
     # LOGGING CONFIGURATION
     # ===========================
