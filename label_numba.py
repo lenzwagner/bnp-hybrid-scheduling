@@ -273,7 +273,17 @@ def run_fast_path_numba(
         effective_min_duration = min(int(s_k), time_until_end)
         start_tau = r_k + effective_min_duration - 1
         
-        for tau in range(start_tau, max_time + 1):
+        # BITMASK SAFETY: path_mask is int64 (64 bits, positions 0-63)
+        # Since we store paths via (1 << (t - r_k)), the maximum safe shift is 63
+        # Therefore, tau must satisfy: (tau - r_k) <= 63
+        BITMASK_LIMIT = 63
+        max_tau = min(max_time, r_k + BITMASK_LIMIT)
+        
+        # Warning if bitmask limit is active
+        if max_tau < max_time:
+            print(f"  [BITMASK WARNING] Worker {j}: Duration capped at {BITMASK_LIMIT+1} days (r_k={r_k}, max_tau={max_tau} instead of {max_time})")
+        
+        for tau in range(start_tau, max_tau + 1):
             is_timeout_scenario = (tau == max_time)
             
             # Initial state setup
@@ -473,7 +483,17 @@ def run_fast_path_single_worker_numba(
     effective_min_duration = min(int(s_k), time_until_end)
     start_tau = r_k + effective_min_duration - 1
     
-    for tau in range(start_tau, max_time + 1):
+    # BITMASK SAFETY: path_mask is int64 (64 bits, positions 0-63)
+    # Since we store paths via (1 << (t - r_k)), the maximum safe shift is 63
+    # Therefore, tau must satisfy: (tau - r_k) <= 63
+    BITMASK_LIMIT = 63
+    max_tau = min(max_time, r_k + BITMASK_LIMIT)
+    
+    # Warning if bitmask limit is active
+    if max_tau < max_time:
+        print(f"  [BITMASK WARNING] Worker {j}: Duration capped at {BITMASK_LIMIT+1} days (r_k={r_k}, max_tau={max_tau} instead of {max_time})")
+    
+    for tau in range(start_tau, max_tau + 1):
         is_timeout_scenario = (tau == max_time)
         start_cost = -pi_matrix[j, r_k]
         
@@ -708,7 +728,17 @@ def run_with_branching_constraints_numba(
         effective_min_duration = min(int(s_k), time_until_end)
         start_tau = r_k + effective_min_duration - 1
         
-        for tau in range(start_tau, max_time + 1):
+        # BITMASK SAFETY: path_mask is int64 (64 bits, positions 0-63)
+        # Since we store paths via (1 << (t - r_k)), the maximum safe shift is 63
+        # Therefore, tau must satisfy: (tau - r_k) <= 63
+        BITMASK_LIMIT = 63
+        max_tau = min(max_time, r_k + BITMASK_LIMIT)
+        
+        # Warning if bitmask limit is active
+        if max_tau < max_time:
+            print(f"  [BITMASK WARNING] Worker {j}: Duration capped at {BITMASK_LIMIT+1} days (r_k={r_k}, max_tau={max_tau} instead of {max_time})")
+        
+        for tau in range(start_tau, max_tau + 1):
             is_timeout_scenario = (tau == max_time)
             start_cost = -pi_matrix[j, r_k]
             
