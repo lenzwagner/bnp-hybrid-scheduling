@@ -98,7 +98,8 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         heuristic_max_labels=cg_solver_data.get('heuristic_max_labels', 20),
         use_relaxed_history=cg_solver_data.get('use_relaxed_history', False),
         use_numba_labeling=cg_solver_data.get('use_numba_labeling', False),
-        allow_gaps=cg_solver_data.get('allow_gaps', False)
+        allow_gaps=cg_solver_data.get('allow_gaps', False),
+        stop_at_first_negative=(node.depth > 0)  # Early termination in child nodes only
     )
     
     return (profile, col_data_list)
@@ -2980,7 +2981,8 @@ class BranchAndPrice:
             branching_constraints=node.branching_constraints,
             max_columns=self.max_columns_per_iter,  # Return up to N columns
             use_pure_dp_optimization=self.use_pure_dp_optimization,
-            use_numba_labeling=self.use_numba_labeling
+            use_numba_labeling=self.use_numba_labeling,
+            stop_at_first_negative=(node.depth > 0)  # Early termination in child nodes only
         )
         
         return col_data_list

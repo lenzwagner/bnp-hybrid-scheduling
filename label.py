@@ -1516,7 +1516,8 @@ def solve_pricing_for_profile_bnp(
     heuristic_max_labels=20,
     use_relaxed_history=False,
     use_numba_labeling=False,
-    allow_gaps=False
+    allow_gaps=False,
+    stop_at_first_negative=False  # Early termination for child nodes
 ):
     """
     Wrapper function for Branch-and-Price integration.
@@ -1757,14 +1758,16 @@ def solve_pricing_for_profile_bnp(
                 # SP Left Patterns
                 left_pattern_elements, left_pattern_limits, num_left_patterns, has_left_patterns,
                 # SP Right Patterns
-                right_pattern_elements, right_pattern_starts, right_pattern_duals, right_pattern_counts, num_right_patterns, has_right_patterns
+                right_pattern_elements, right_pattern_starts, right_pattern_duals, right_pattern_counts, num_right_patterns, has_right_patterns,
+                stop_at_first_negative
             )
         else:
             # Call original fast path (no constraints)
             raw_cols = label_numba.run_fast_path_numba(
                 int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
                 pi_matrix, workers_arr, int(max_time), 
-                int(MS), int(MIN_MS), theta_arr, 1e-6
+                int(MS), int(MIN_MS), theta_arr, 1e-6,
+                stop_at_first_negative
             )
 
         

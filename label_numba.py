@@ -257,7 +257,8 @@ def run_fast_path_numba(
     max_time, 
     MS, MIN_MS, 
     theta_lookup, # Array
-    epsilon
+    epsilon,
+    stop_at_first_negative=False  # Early termination for child nodes
 ):
     """
     Optimized DP loop using Numba.
@@ -280,8 +281,8 @@ def run_fast_path_numba(
         max_tau = min(max_time, r_k + BITMASK_LIMIT)
         
         # Warning if bitmask limit is active
-        if max_tau < max_time:
-            print(f"  [BITMASK WARNING] Worker {j}: Duration capped at {BITMASK_LIMIT+1} days (r_k={r_k}, max_tau={max_tau} instead of {max_time})")
+        #if max_tau < max_time:
+            #print(f"  [BITMASK WARNING] Worker {j}: Duration capped at {BITMASK_LIMIT+1} days (r_k={r_k}, max_tau={max_tau} instead of {max_time})")
         
         for tau in range(start_tau, max_tau + 1):
             is_timeout_scenario = (tau == max_time)
@@ -431,6 +432,8 @@ def run_fast_path_numba(
                             rc = final_cost + (duration_val * obj_mode) - gamma_k
                             if rc < -1e-6:
                                 best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                                if stop_at_first_negative:
+                                    return best_columns  # Early termination: found negative RC
 
                     # Option 2: End with App (0) - ONLY if Timeout
                     if is_timeout_scenario:
@@ -455,6 +458,8 @@ def run_fast_path_numba(
                                 rc = final_cost + (duration_val * obj_mode) - gamma_k
                                 if rc < -1e-6:
                                     best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                                    if stop_at_first_negative:
+                                        return best_columns  # Early termination: found negative RC
 
     return best_columns
 
@@ -467,7 +472,8 @@ def run_fast_path_single_worker_numba(
     max_time, 
     MS, MIN_MS, 
     theta_lookup,
-    epsilon
+    epsilon,
+    stop_at_first_negative=False  # Early termination for child nodes
 ):
     """
     Optimized DP loop for a SINGLE worker.
@@ -633,6 +639,8 @@ def run_fast_path_single_worker_numba(
                         rc = final_cost + (duration_val * obj_mode) - gamma_k
                         if rc < -1e-6:
                             best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                            if stop_at_first_negative:
+                                return best_columns  # Early termination: found negative RC
                 
                 # Option 2: End with AI (only on timeout)
                 if is_timeout_scenario:
@@ -657,6 +665,8 @@ def run_fast_path_single_worker_numba(
                             rc = final_cost + (duration_val * obj_mode) - gamma_k
                             if rc < -1e-6:
                                 best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                                if stop_at_first_negative:
+                                    return best_columns  # Early termination: found negative RC
     
     return best_columns
 
@@ -702,7 +712,8 @@ def run_with_branching_constraints_numba(
     right_pattern_duals,     # 1D array [pat_idx] dual reward
     right_pattern_counts,    # 1D array [pat_idx] number of elements in pattern
     num_right_patterns,      # int
-    has_right_patterns       # bool
+    has_right_patterns,      # bool
+    stop_at_first_negative=False  # Early termination for child nodes
 ):
     """
     Extended DP loop with branching constraint support.
@@ -1218,6 +1229,8 @@ def run_with_branching_constraints_numba(
                                 rc = final_cost + (duration_val * obj_mode) - gamma_k - right_reward
                                 if rc < -1e-6:
                                     best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                                    if stop_at_first_negative:
+                                        return best_columns  # Early termination: found negative RC
                     
                     # === Option 2: End with AI (only if timeout) ===
                     if is_timeout_scenario:
@@ -1293,5 +1306,7 @@ def run_with_branching_constraints_numba(
                                     rc = final_cost + (duration_val * obj_mode) - gamma_k - right_reward
                                     if rc < -1e-6:
                                         best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                                        if stop_at_first_negative:
+                                            return best_columns  # Early termination: found negative RC
     
     return best_columns
