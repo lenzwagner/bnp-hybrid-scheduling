@@ -1489,7 +1489,6 @@ def solve_pricing_for_profile_bnp(
     profile,
     duals_pi,
     duals_gamma,
-    duals_delta,
     r_k,
     s_k,
     obj_multiplier,
@@ -1518,7 +1517,6 @@ def solve_pricing_for_profile_bnp(
         profile: Profile index (k)
         duals_pi: Dict of (worker, time) -> dual value
         duals_gamma: Float, dual value for this profile's convexity constraint
-        duals_delta: Float, sum of branching constraint duals
         r_k: Release time for this profile
         s_k: Service requirement
         obj_multiplier: Objective mode (0 or 1)

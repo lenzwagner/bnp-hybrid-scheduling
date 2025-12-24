@@ -11,19 +11,9 @@ logger = get_logger(__name__)
 def main(allow_gaps=False):
     """
     Main function to run Column Generation or Branch-and-Price algorithm.
-
     Labeling Algorithm Performance Optimizations:
-    
-    1 JIT Compilation (Cython / Numba)
-       Problem: Pure Python is slow for tight DP loops with millions of iterations.
-       Solution: Compile performance-critical functions with Cython or Numba:
-       - Target: check_strict_feasibility, compute_lower_bound, inner DP loops
-       - Requires refactoring to use NumPy arrays instead of tuples/dicts
-       - Alternative: Cython for entire DP module with C-level performance
-       Status: NOT IMPLEMENTED
-       Benefit: 10-100x speedup for DP expansion, but high refactoring effort
-       Challenge: Current code uses dynamic structures (dicts, tuples) incompatible with Numba
     """
+
     # ===========================
     # LOGGING CONFIGURATION
     # ===========================
@@ -64,7 +54,7 @@ def main(allow_gaps=False):
     # ===========================
 
     # Random seed
-    seed = 13
+    seed = 133
 
     # Learning parameters
     app_data = {
@@ -81,8 +71,8 @@ def main(allow_gaps=False):
     }
 
     # Instance parameters
-    T = 3  # Number of therapists
-    D_focus = 5  # Number of focus days
+    T = 4  # Number of therapists
+    D_focus = 32  # Number of focus days
 
     # Algorithm parameters
     dual_improvement_iter = 20  # Max Iterations without dual improvement
@@ -120,9 +110,6 @@ def main(allow_gaps=False):
 
     # Visualization settings
     visualize_tree = False  # Enable tree visualization
-    tree_layout = 'hierarchical'  # 'hierarchical' or 'radial'
-    detailed_tree = False  # Show detailed info on nodes
-    save_tree_path = 'bnp_tree.png'  # Path to save (None to not save)
 
     # Define labeling specs
     # TODO: TREATMENT GAPS (Relaxing x+y=1 constraint)
@@ -139,7 +126,7 @@ def main(allow_gaps=False):
 
     labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 'use_parallel_pricing': use_parallel_pricing,
                      'n_pricing_workers': n_pricing_workers,
-                     'debug_mode': True, 'use_apriori_pruning': False, 'use_pure_dp_optimization': True,
+                     'debug_mode': True, 'use_apriori_pruning': True, 'use_pure_dp_optimization': True,
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
                      'use_numba_labeling': True,
@@ -278,15 +265,6 @@ def main(allow_gaps=False):
                 save_path='Pictures/Tree/tree_academic.png',
                 dpi=600  # High resolution for papers
             )
-
-            # Other options:
-            # Standard hierarchical: layout='hierarchical', save_path='Pictures/Tree/tree_hierarchical.png'
-            # Radial layout: layout='radial', save_path='Pictures/Tree/tree_radial.png'
-            # Detailed view: detailed=True, save_path='Pictures/Tree/tree_detailed.png'
-            # Custom colors: academic=True, node_color='#ADD8E6', fathomed_color='#FFB6C1'
-
-            # Export for LaTeX:
-            # bnp_solver.export_tree_tikz('Pictures/Tree/bnp_tree.tex')
 
     else:
         # Standard Column Generation
