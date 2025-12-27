@@ -54,7 +54,7 @@ def main(allow_gaps=False):
     # ===========================
 
     # Random seed
-    seed = 1321
+    seed = 12
 
     # Learning parameters
     app_data = {
@@ -123,6 +123,34 @@ def main(allow_gaps=False):
     # - [ ] Implement Gap-specific metrics (E.5) in extra_values.py.
     # - [ ] Port Gap logic to Numba for performance.
 
+    # ===================================================================================
+    # TODO: LABELING WARM-START OPTIMIZATIONS
+    # ===================================================================================
+    # 
+    # Context:
+    # --------
+    # The labeling algorithm (DP for pricing) is the computational bottleneck.
+    # Unlike LP solvers (Gurobi) which can warm-start from a previous basis,
+    # the current labeling implementation starts fresh for each pricing call.
+    #
+    # IMPLEMENTED:
+    # - Label Recycling: use_label_recycling in labeling_spec (shares prefix states)
+    #
+    # REMAINING OPTIMIZATIONS:
+    #
+    # OPTIMIZATION 1: State Caching Between CG Iterations (MEDIUM)
+    # -------------------------------------------------------------
+    # What: Cache Pareto-frontier states when duals change only slightly.
+    # Benefit: Skip full DP when duals are stable (common in later CG iterations)
+    # Estimated speedup: 20-40% after iteration 5+
+    #
+    # OPTIMIZATION 2: Incremental DP for Branching (ADVANCED)
+    # --------------------------------------------------------
+    # What: Reuse parent node's states in child nodes after branching.
+    # Estimated speedup: 30-50% in child nodes
+    # Complexity: HIGH (requires significant refactoring)
+    # ===================================================================================
+
 
     labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 'use_parallel_pricing': use_parallel_pricing,
                      'n_pricing_workers': n_pricing_workers,
@@ -130,7 +158,8 @@ def main(allow_gaps=False):
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
                      'use_numba_labeling': True,
-                     'allow_gaps': False}
+                     'allow_gaps': False,
+                     'use_label_recycling': False}
 
     # ===========================
     # CONFIGURATION SUMMARY

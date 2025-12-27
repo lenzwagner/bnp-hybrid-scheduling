@@ -2250,7 +2250,7 @@ class BranchAndPrice:
                 
                 # Solve all pricing problems in parallel using the GLOBAL function
                 if self.use_persistent_pool and self.pricing_pool:
-                    # Use persistent pool (TODO #3)
+                    # Use persistent pool
                     pricing_results = self.pricing_pool.starmap(_parallel_pricing_worker, profile_args)
                 else:
                     # Fallback: create temporary pool (backward compatibility)

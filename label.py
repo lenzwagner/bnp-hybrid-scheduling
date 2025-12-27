@@ -406,7 +406,321 @@ def compute_candidate_workers(workers, r_k, tau_max, pi_dict):
             candidate_workers.append(j1)
 
 
+
     return candidate_workers
+
+
+# --- Label Recycling Helper Functions ---
+
+def group_recipients_by_shared_prefix(recipients_r, recipients_s, ms, min_ms):
+    """
+    Group recipients by (r_k, MS, MIN_MS) for shared prefix computation.
+    
+    Recipients in the same group can share early DP states since they:
+    - Start at the same time (r_k)
+    - Have the same rolling window constraints (MS, MIN_MS)
+    
+    Args:
+        recipients_r: Dict {recipient_id: r_k (start time)}
+        recipients_s: Dict {recipient_id: s_k (target progress)}
+        ms: Rolling window size
+        min_ms: Minimum therapist sessions in window
+        
+    Returns:
+        Dict mapping (r_k, ms, min_ms) -> List of (recipient_id, s_k) tuples
+    """
+    groups = {}
+    
+    for recipient_id in recipients_r:
+        r_k = recipients_r[recipient_id]
+        s_k = recipients_s[recipient_id]
+        
+        # Group key: (start_time, window_size, min_sessions)
+        key = (r_k, ms, min_ms)
+        
+        if key not in groups:
+            groups[key] = []
+        groups[key].append((recipient_id, s_k))
+    
+    # Debug: Log groups with multiple recipients (where recycling helps)
+    for key, recipients_list in groups.items():
+        if len(recipients_list) > 1:
+            r_k, ms_val, min_ms_val = key
+            recipient_ids = [r[0] for r in recipients_list]
+            logger.info(f"  [LABEL RECYCLING] Group r_k={r_k}: {len(recipients_list)} recipients sharing prefix → {recipient_ids}")
+    
+    return groups
+
+
+def compute_shared_prefix_states(r_k, worker, max_time, ms, min_ms, pi_dict, 
+                                  theta_lookup, max_prefix_length):
+    """
+    Compute shared prefix DP states up to a certain depth.
+    
+    These states can be reused for all recipients in a group.
+    
+    Args:
+        r_k: Start time
+        worker: Worker ID
+        max_time: Planning horizon
+        ms: Rolling window size
+        min_ms: Min therapist sessions
+        pi_dict: Dual values {(worker, time): value}
+        theta_lookup: AI efficiency lookup table
+        max_prefix_length: How many time steps to compute as shared prefix
+        
+    Returns:
+        Dict mapping bucket_key -> list of (cost, prog, ai_count, hist, path)
+    """
+    logger.debug(f"  [LABEL RECYCLING] Computing shared prefix for worker {worker}, r_k={r_k}, length={max_prefix_length}")
+    epsilon = 1e-9
+    
+    # Initialize with start state
+    start_cost = -pi_dict.get((worker, r_k), 0.0)
+    initial_history = (1,)  # First action is always therapist
+    
+    # State structure: bucket_key = (ai_count, hist)
+    # Item: (cost, prog, path_list)
+    current_states = {
+        (0, initial_history): [(start_cost, 1.0, [1])]
+    }
+    
+    # Expand for prefix_length steps
+    for t in range(r_k + 1, r_k + max_prefix_length):
+        if t > max_time:
+            break
+            
+        next_states = {}
+        
+        for bucket_key, bucket_list in current_states.items():
+            ai_count, hist = bucket_key
+            
+            for cost, prog, path in bucket_list:
+                # Try therapist action (1)
+                if check_strict_feasibility(hist, 1, ms, min_ms):
+                    cost_ther = cost - pi_dict.get((worker, t), 0.0)
+                    prog_ther = prog + 1.0
+                    new_hist_ther = (hist + (1,))
+                    if len(new_hist_ther) > ms - 1:
+                        new_hist_ther = new_hist_ther[-(ms - 1):]
+                    
+                    new_key = (ai_count, new_hist_ther)
+                    if new_key not in next_states:
+                        next_states[new_key] = []
+                    
+                    # Simple dominance: keep if not dominated
+                    dominated = False
+                    for existing in next_states[new_key]:
+                        if existing[0] <= cost_ther + epsilon and existing[1] >= prog_ther - epsilon:
+                            dominated = True
+                            break
+                    
+                    if not dominated:
+                        # Remove states dominated by new one
+                        next_states[new_key] = [
+                            s for s in next_states[new_key]
+                            if not (cost_ther <= s[0] + epsilon and prog_ther >= s[1] - epsilon)
+                        ]
+                        next_states[new_key].append((cost_ther, prog_ther, path + [1]))
+                
+                # Try AI action (0)
+                if check_strict_feasibility(hist, 0, ms, min_ms):
+                    cost_ai = cost
+                    efficiency = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                    prog_ai = prog + efficiency
+                    ai_count_new = ai_count + 1
+                    new_hist_ai = (hist + (0,))
+                    if len(new_hist_ai) > ms - 1:
+                        new_hist_ai = new_hist_ai[-(ms - 1):]
+                    
+                    new_key = (ai_count_new, new_hist_ai)
+                    if new_key not in next_states:
+                        next_states[new_key] = []
+                    
+                    dominated = False
+                    for existing in next_states[new_key]:
+                        if existing[0] <= cost_ai + epsilon and existing[1] >= prog_ai - epsilon:
+                            dominated = True
+                            break
+                    
+                    if not dominated:
+                        next_states[new_key] = [
+                            s for s in next_states[new_key]
+                            if not (cost_ai <= s[0] + epsilon and prog_ai >= s[1] - epsilon)
+                        ]
+                        next_states[new_key].append((cost_ai, prog_ai, path + [0]))
+        
+        current_states = next_states
+        if not current_states:
+            break
+    
+    return current_states
+
+
+def continue_from_prefix(prefix_states, prefix_end_time, target_end, s_k, 
+                         worker, max_time, ms, min_ms, pi_dict, theta_lookup,
+                         gamma_k, obj_mode, recipient_id, workers):
+    """
+    Continue DP from prefix states to find complete columns.
+    
+    Args:
+        prefix_states: Pre-computed states from shared prefix
+        prefix_end_time: Time at which prefix states end
+        target_end: End time for this column (tau)
+        s_k: Target progress
+        worker: Worker ID
+        max_time: Planning horizon
+        ms, min_ms: Rolling window params
+        pi_dict: Dual values
+        theta_lookup: AI efficiency lookup
+        gamma_k: Dual value gamma
+        obj_mode: Objective multiplier
+        recipient_id: Recipient ID for output
+        workers: List of all workers (for column vector generation)
+        
+    Returns:
+        List of column dictionaries with negative reduced cost
+    """
+    epsilon = 1e-9
+    columns = []
+    
+    # Debug: Log recycling usage
+    prefix_state_count = sum(len(b) for b in prefix_states.values()) if prefix_states else 0
+    
+    # Start from prefix states
+    current_states = {}
+    for bucket_key, bucket_list in prefix_states.items():
+        current_states[bucket_key] = [(c, p, path[:]) for c, p, path in bucket_list]
+    
+    # Get r_k from path length
+    first_bucket_list = list(prefix_states.values())[0]
+    if not first_bucket_list:
+        return columns
+    r_k = prefix_end_time - len(first_bucket_list[0][2]) + 1
+    
+    # Continue DP from prefix_end_time + 1 to target_end - 1
+    for t in range(prefix_end_time + 1, target_end):
+        next_states = {}
+        
+        for bucket_key, bucket_list in current_states.items():
+            ai_count, hist = bucket_key
+            
+            for cost, prog, path in bucket_list:
+                # Lower bound pruning
+                duration = target_end - r_k + 1
+                lb = cost + duration * obj_mode - gamma_k
+                if lb >= 0:
+                    continue
+                
+                # Feasibility check
+                remaining_steps = target_end - t
+                if obj_mode > 0.5:  # Focus patient
+                    if prog + remaining_steps * 1.0 < s_k - epsilon:
+                        continue
+                
+                # Try therapist action
+                if check_strict_feasibility(hist, 1, ms, min_ms):
+                    cost_ther = cost - pi_dict.get((worker, t), 0.0)
+                    prog_ther = prog + 1.0
+                    new_hist = (hist + (1,))
+                    if len(new_hist) > ms - 1:
+                        new_hist = new_hist[-(ms - 1):]
+                    
+                    new_key = (ai_count, new_hist)
+                    if new_key not in next_states:
+                        next_states[new_key] = []
+                    
+                    # Dominance check
+                    dominated = False
+                    for existing in next_states[new_key]:
+                        if existing[0] <= cost_ther + epsilon and existing[1] >= prog_ther - epsilon:
+                            dominated = True
+                            break
+                    if not dominated:
+                        next_states[new_key] = [
+                            s for s in next_states[new_key]
+                            if not (cost_ther <= s[0] + epsilon and prog_ther >= s[1] - epsilon)
+                        ]
+                        next_states[new_key].append((cost_ther, prog_ther, path + [1]))
+                
+                # Try AI action
+                if check_strict_feasibility(hist, 0, ms, min_ms):
+                    cost_ai = cost
+                    eff = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                    prog_ai = prog + eff
+                    ai_new = ai_count + 1
+                    new_hist = (hist + (0,))
+                    if len(new_hist) > ms - 1:
+                        new_hist = new_hist[-(ms - 1):]
+                    
+                    new_key = (ai_new, new_hist)
+                    if new_key not in next_states:
+                        next_states[new_key] = []
+                    
+                    dominated = False
+                    for existing in next_states[new_key]:
+                        if existing[0] <= cost_ai + epsilon and existing[1] >= prog_ai - epsilon:
+                            dominated = True
+                            break
+                    if not dominated:
+                        next_states[new_key] = [
+                            s for s in next_states[new_key]
+                            if not (cost_ai <= s[0] + epsilon and prog_ai >= s[1] - epsilon)
+                        ]
+                        next_states[new_key].append((cost_ai, prog_ai, path + [0]))
+        
+        current_states = next_states
+        if not current_states:
+            break
+    
+    # Final step: extract columns
+    is_timeout = (target_end == max_time)
+    
+    for bucket_key, bucket_list in current_states.items():
+        ai_count, hist = bucket_key
+        
+        for cost, prog, path in bucket_list:
+            possible_moves = []
+            if check_strict_feasibility(hist, 1, ms, min_ms):
+                possible_moves.append(1)
+            if is_timeout and check_strict_feasibility(hist, 0, ms, min_ms):
+                possible_moves.append(0)
+            
+            for move in possible_moves:
+                if move == 1:
+                    final_cost = cost - pi_dict.get((worker, target_end), 0.0)
+                    final_prog = prog + 1.0
+                else:
+                    final_cost = cost
+                    eff = theta_lookup[ai_count] if ai_count < len(theta_lookup) else 1.0
+                    final_prog = prog + eff
+                
+                final_path = path + [move]
+                
+                # Check completion
+                is_focus = (obj_mode > 0.5)
+                condition_met = (final_prog >= s_k - epsilon)
+                is_valid_end = condition_met if is_focus else (condition_met or is_timeout)
+                
+                if is_valid_end:
+                    duration = len(final_path)
+                    start = target_end - duration + 1
+                    reduced_cost = (obj_mode * duration) + final_cost - gamma_k
+                    
+                    if reduced_cost < -epsilon:
+                        columns.append({
+                            'k': recipient_id,
+                            'worker': worker,
+                            'start': start,
+                            'end': target_end,
+                            'duration': duration,
+                            'reduced_cost': reduced_cost,
+                            'final_progress': final_prog,
+                            'x_vector': generate_full_column_vector(worker, final_path, start, target_end, max_time, len(workers)),
+                            'path_pattern': final_path
+                        })
+    
+    return columns
 
 
 # --- Core Labeling Algorithm ---
