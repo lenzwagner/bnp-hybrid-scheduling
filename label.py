@@ -340,26 +340,42 @@ def generate_full_column_vector(worker_id, path_assignments, start_time, end_tim
     return full_vector
 
 
-def compute_lower_bound(current_cost, start_time, end_time, gamma_k, obj_mode):
+def compute_lower_bound(current_cost, start_time, end_time, gamma_k, obj_mode,
+                         worker=None, pi_dict=None, max_time=None):
     """
-    Calculates Lower Bound for Bound Pruning.
+    Calculates Enhanced Lower Bound for Bound Pruning.
 
-    Assumption: Maximum productivity (only therapists with efficiency = 1.0)
-    This guarantees that we don't miss any optimal solutions.
-    compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+    Includes:
+    1. Naive bound: current_cost + duration * obj_mode - gamma_k
+    2. Completion cost: If end_time < max_time, we MUST end with therapist,
+       so -π_{j,end_time} is a guaranteed cost component.
+
+    Args:
+        current_cost: Accumulated -π values so far
+        start_time: r_k (release time)
+        end_time: τ (target end time)
+        gamma_k: Dual value γ_k
+        obj_mode: Objective multiplier (0 or 1)
+        worker: Worker ID (for completion cost)
+        pi_dict: Dual values {(worker, time): value}
+        max_time: Planning horizon |T|
+
     Returns:
-        float: Minimum achievable final Reduced Cost (optimistic)
+        float: Minimum achievable final Reduced Cost (optimistic but tighter)
     """
-    import math
-
-    # Time Cost is fixed for the specific column length (end_time - start_time + 1)
+    # Time Cost is fixed for the specific column length
     duration = end_time - start_time + 1
     time_cost = duration * obj_mode
 
-    # Current cost contains the accumulated -pi values so far.
-    # We assume future -pi values are 0 (optimistic, since -pi >= 0).
-
+    # Naive lower bound
     lower_bound = current_cost + time_cost - gamma_k
+
+    # Enhanced: Add completion cost if we know final therapist visit is required
+    if worker is not None and pi_dict is not None and max_time is not None:
+        if end_time < max_time:
+            # Final action MUST be therapist → this cost is guaranteed
+            completion_cost = -pi_dict.get((worker, end_time), 0.0)
+            lower_bound += completion_cost
 
     return lower_bound
 
@@ -879,7 +895,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                             cost, prog, path = item
 
                             if use_bound_pruning:
-                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode,
+                                                         worker=j, pi_dict=pi_dict, max_time=max_time)
                                 if lb >= 0:
                                     pruning_stats['lb'] += 1
                                     continue
@@ -1036,7 +1053,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                             cost, prog, path = item  # Always 3 elements
 
                             if use_bound_pruning:
-                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode,
+                                                         worker=j, pi_dict=pi_dict, max_time=max_time)
                                 if lb >= 0:
                                     pruning_stats['lb'] += 1
                                     continue
@@ -1165,7 +1183,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                         
                         for cost, prog, path in bucket_list:
                             if use_bound_pruning:
-                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+                                lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode,
+                                                         worker=j, pi_dict=pi_dict, max_time=max_time)
                                 if lb >= 0:
                                     pruning_stats['lb'] += 1
                                     continue
@@ -1440,7 +1459,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
 
                         # BOUND PRUNING: Check if state is promising
                         if use_bound_pruning:
-                            lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode)
+                            lb = compute_lower_bound(cost, r_k, tau, gamma_k, obj_mode,
+                                                     worker=j, pi_dict=pi_dict, max_time=max_time)
                             if lb >= 0:
                                 pruned_count_this_period += 1
                                 pruned_count_total += 1
