@@ -180,6 +180,7 @@ class BranchAndPrice:
         self.use_relaxed_history = label_dict['use_relaxed_history'] if label_dict is not None else True
         self.use_numba_labeling = label_dict['use_numba_labeling'] if label_dict is not None else False
         self.allow_gaps = label_dict.get('allow_gaps', False) if label_dict is not None else False
+        self.use_label_recycling = label_dict.get('use_label_recycling', False) if label_dict is not None else False
         
         # Create persistent multiprocessing pool
         self.pricing_pool = None
@@ -3004,6 +3005,7 @@ class BranchAndPrice:
         # Add to node pool
         node.column_pool[(profile, col_id)] = {
             'schedules_x': col_data['schedules_x'],
+            'schedules_y': col_data.get('schedules_y', {}),
             'schedules_los': col_data['schedules_los'],
             'x_list': col_data['x_list'],
             'los_list': col_data['los_list'],
@@ -3019,6 +3021,9 @@ class BranchAndPrice:
             # Fallback for labeling which doesn't provide solution_vars
             self.cg_solver.global_solutions['x'][solution_key] = col_data['schedules_x']
             self.cg_solver.global_solutions['LOS'][solution_key] = col_data['schedules_los']
+            # Store y values from labeling
+            if 'schedules_y' in col_data and col_data['schedules_y']:
+                self.cg_solver.global_solutions['y'][solution_key] = col_data['schedules_y']
         
         # Add to master
         master.addSchedule(col_data['schedules_x'])

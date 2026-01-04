@@ -83,265 +83,74 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     therapist_workload = defaultdict(int)
     for (p, t, d), val in x_agg.items():
         therapist_workload[t] += val
-
-    print('2therapist_workload:', therapist_workload, sum(list(therapist_workload.values())))
         
     metrics['avg_therapist_workload'] = sum(list(therapist_workload.values())) * (1/len(T)) if therapist_workload else 0
     metrics['peak_therapist_workload'] = max(therapist_workload.values()) if therapist_workload else 0
     
-    # Total Capacity: C_total = sum_{t in T, d in D} Max_t[t, d] (Assuming Max_t is available in cg_solver)
-    # T is time horizon passed in, D is therapist list.
-    # Max_t is typically (T, D) array or similar.
-    # If Max_t is accessible via cg_solver.Max_t:
+    # Total Capacity: C_total = sum_{t in T, d in D} Max_t[t, d]
+    # IMPORTANT: Use the ACTUAL date range from patient assignments (x_agg) 
+    # so that N_human and C_total are calculated over the same horizon.
+    
+    # Determine date range from actual assignments
+    if x_agg:
+        actual_days = set(d for (p, t, d) in x_agg.keys())
+        s_day = min(actual_days)
+        e_day = max(actual_days)
+    else:
+        # Fallback to passed parameters or cg_solver.D
+        s_day = start_day if start_day is not None else min(cg_solver.D)
+        e_day = end_day if end_day is not None else max(cg_solver.D)
+    
+    date_range = range(s_day, e_day + 1)
+    
     if hasattr(cg_solver, 'Max_t'):
-         # Max_t shape: [therapist, day] based on analysis
          relevant_capacity = 0
-         
-         # Determine date range
-         s_day = start_day if start_day is not None else min(cg_solver.D)
-         e_day = end_day if end_day is not None else max(cg_solver.D)
-         date_range = range(s_day, e_day + 1)
-         
-         for t_id in T: # Iterate over therapist IDs supplied
+         for t_id in T:
              for d in date_range:
-                 # Check if Day 'd' is in Max_t keys (Max_t has keys (t, d))
                  if (t_id, d) in cg_solver.Max_t:
                      relevant_capacity += cg_solver.Max_t[(t_id, d)]
-                     
          metrics['total_capacity'] = relevant_capacity
     else:
          metrics['total_capacity'] = 0
-
-    # ==============================================================================
-    # E.3 AI Learning Dynamics Metrics
-    # ==============================================================================
-    # Initial/Final/Max Theta per patient
-    theta_initial = {}
-    theta_final = {}
-    theta_max = {}
-    time_to_proficiency = {} # First day > 0.7
     
-    ai_sessions_per_patient = defaultdict(int)
-    for (p, d), val in y_filtered.items():
-        ai_sessions_per_patient[p] += val
+    # Store the actual date range used for transparency
+    metrics['capacity_start_day'] = s_day
+    metrics['capacity_end_day'] = e_day
 
-    for p in patients_list:
-        # Get patient timeline
-        days = sorted([d for (pat, d) in theta_dict.keys() if pat == p])
-        if not days:
-            continue
-            
-        first_day = days[0]
-        last_day = days[-1]
-        
-        theta_initial[p] = theta_dict.get((p, first_day), 0)
-        theta_final[p] = theta_dict.get((p, last_day), 0)
-        
-        p_thetas = [theta_dict.get((p, d), 0) for d in days]
-        theta_max[p] = max(p_thetas) if p_thetas else 0
-        
-        # Time to proficiency
-        # Use entry day from solver
-        entry_day = cg_solver.Entry_agg.get(p, first_day)
-        
-        prof_days = [d for d in days if theta_dict.get((p, d), 0) > 0.7]
-        if prof_days:
-            # Time from entry (ensure non-negative)
-            first_prof_day = prof_days[0]
-            if first_prof_day >= entry_day:
-                time_to_proficiency[p] = first_prof_day - entry_day
-            else:
-                # Should not happen if theta is 0 before entry, but for safety
-                time_to_proficiency[p] = 0
-        else:
-            time_to_proficiency[p] = None
-
-    metrics['theta_initial_avg'] = np.mean(list(theta_initial.values())) if theta_initial else 0
-    metrics['theta_final_avg'] = np.mean(list(theta_final.values())) if theta_final else 0
-    metrics['theta_max_avg'] = np.mean(list(theta_max.values())) if theta_max else 0
+    # Human Utilization (%): N_human / C_total * 100
+    metrics['human_utilization_pct'] = (total_human / metrics['total_capacity'] * 100) if metrics.get('total_capacity', 0) > 0 else 0
     
-    valid_ttp = [v for v in time_to_proficiency.values() if v is not None]
-    metrics['avg_time_to_proficiency'] = np.mean(valid_ttp) if valid_ttp else None
-    metrics['completion_rate_proficiency'] = len(valid_ttp) / len(patients_list) if patients_list else 0
-
-    # Avg Theta when AI used
-    theta_ai_sum = 0
-    ai_count = 0
-    for (p, d), val in y_filtered.items():
-        if val > 0.5:
-             theta = theta_dict.get((p, d), 0)
-             theta_ai_sum += theta
-             ai_count += 1
-    metrics['avg_theta_when_ai_used'] = (theta_ai_sum / ai_count) if ai_count > 0 else 0
-
-    # Consecutive AI sessions
-    max_consecutive = {}
-    for p in patients_list:
-        days = sorted([d for (pat, d) in y_filtered.keys() if pat == p and y_filtered[(pat, d)] > 0.5])
-        if not days:
-            max_consecutive[p] = 0
-            continue
-            
-        current_streak = 1
-        max_streak = 1
-        for i in range(1, len(days)):
-            if days[i] == days[i-1] + 1:
-                current_streak += 1
-            else:
-                max_streak = max(max_streak, current_streak)
-                current_streak = 1
-        max_streak = max(max_streak, current_streak)
-        max_consecutive[p] = max_streak
-        
-    metrics['avg_max_consecutive_ai'] = np.mean(list(max_consecutive.values())) if max_consecutive else 0
-    metrics['global_max_consecutive_ai'] = max(max_consecutive.values()) if max_consecutive else 0
-
-    # ==============================================================================
-    # E.5 Treatment Gap Metrics
-    # ==============================================================================
-    # gap = e_it - sum(x) - y
-    gap_days = defaultdict(int)
-    total_gaps = 0
-    
-    # Iterate over all active patient-days
-    for (p, d), is_present in e_dict.items():
-        if is_present > 0.5 and p in patients_list:
-            # Check if treated
-            treated_human = any(x_agg.get((p, t, d), 0) > 0.5 for t in range(1, 100)) # naive t range, optimize later?
-            # actually we can sum x_agg for (p, *, d)
-            # Efficient check:
-            is_human = 0
-            # A bit slow to iterate all t. Better: compute treated days set first.
-            
-            is_ai = y_filtered.get((p, d), 0) > 0.5
-            
-            # Since we don't have a quick (p,d)->human index here, we iterate x_agg for this p?
-            # No, let's pre-process x_agg
-            pass
-
-    # Pre-process treated days
-    treated_human_days = set()
+    # Peak Therapist Workload per Day: max_{j,t} sum_i x_ijt
+    therapist_day_workload = defaultdict(int)  # (t, d) -> sum of x_ijt
     for (p, t, d), val in x_agg.items():
-        if val > 0.5:
-            treated_human_days.add((p, d))
-            
-    for (p, d), is_present in e_dict.items():
-         if is_present > 0.5 and p in patients_list:
-             has_human = (p, d) in treated_human_days
-             has_ai = y_filtered.get((p, d), 0) > 0.5
-             
-             if not has_human and not has_ai:
-                 gap_days[p] += 1
-                 total_gaps += 1
-                 
-    metrics['total_gap_days_all'] = total_gaps
-    metrics['avg_gap_days_per_patient'] = total_gaps / len(patients_list) if patients_list else 0
-
-    # ==============================================================================
-    # E.6 DRG-Specific Metrics
-    # ==============================================================================
-    # Infer DRG from Mean LOS (M_p)
-    # E65A: ~17.9, E65B: ~8.0, E65C: ~6.1
-    drg_map = {}
-    drg_stats = defaultdict(lambda: {'count': 0, 'los_sum': 0, 'req_sum': 0, 'ai_sum': 0, 'total_treat_sum': 0})
+        therapist_day_workload[(t, d)] += val
+    metrics['peak_therapist_day_workload'] = max(therapist_day_workload.values()) if therapist_day_workload else 0
     
-    for p in patients_list:
-        mean_los = cg_solver.M_p.get(p, 0)
-        # Approximate matching using simple buckets
-        if mean_los > 12:
-            drg = 'E65A'
-        elif mean_los > 7:
-            drg = 'E65B'
-        else:
-            drg = 'E65C'
-        
-        drg_map[p] = drg
-        
-        # Gather stats
-        # We need actual LOS and Req
-        # Req is in cg_solver.Req_agg
-        req = cg_solver.Req_agg.get(p, 0)
-        
-        # Realized LOS? From x/y or just count e_it?
-        # derived_vars should normally contain LOS dict, but here we only have e_dict/x/y?
-        # Calculating realized LOS from e_dict
-        p_days = [d for (pat, d), val in e_dict.items() if pat == p and val > 0.5]
-        realized_los = len(p_days)
-        
-        drg_stats[drg]['count'] += 1
-        drg_stats[drg]['los_sum'] += realized_los
-        drg_stats[drg]['req_sum'] += req
-        
-        # AI/Human counts
-        p_ai = ai_sessions_per_patient[p]
-        p_human = sum(x_agg[(p, t, d)] for t in range(1, 200) for d in p_days if (p,t,d) in x_agg) # approx
-        # Better: use the pre-calculated total_human/ai per patient if we had it.
-        # Let's sum x_agg properly above
-        
-        drg_stats[drg]['ai_sum'] += p_ai
-        
-    # Correct human sum per patient
-    pat_human_count = defaultdict(int)
-    for (p, t, d), val in x_agg.items():
-        pat_human_count[p] += val
-        
-    for p, drg in drg_map.items():
-        drg_stats[drg]['total_treat_sum'] += (pat_human_count[p] + ai_sessions_per_patient[p])
-
-    # Compute DRG averages
-    for drg, s in drg_stats.items():
-        count = s['count']
-        if count > 0:
-            metrics[f'DRG_{drg}_count'] = count
-            metrics[f'DRG_{drg}_avg_los'] = s['los_sum'] / count
-            metrics[f'DRG_{drg}_avg_req'] = s['req_sum'] / count
-            metrics[f'DRG_{drg}_ai_share_pct'] = (s['ai_sum'] / s['total_treat_sum'] * 100) if s['total_treat_sum'] > 0 else 0
-
-    # ==============================================================================
-    # E.7 Session Pattern Analysis
-    # ==============================================================================
-    # Trigrams
-    trigrams = defaultdict(int)
+    # Peak Period Utilization (%): max_t (sum_{i,j} x_ijt / sum_j Q_jt) * 100
+    period_utilization = {}
+    for d in date_range:
+        sessions_on_day = sum(val for (p, t, day), val in x_agg.items() if day == d)
+        capacity_on_day = sum(cg_solver.Max_t.get((t_id, d), 0) for t_id in T) if hasattr(cg_solver, 'Max_t') else 0
+        if capacity_on_day > 0:
+            period_utilization[d] = sessions_on_day / capacity_on_day * 100
     
-    for p in patients_list:
-        # Build sequence string
-        days = sorted([d for (pat, d) in e_dict.items() if pat == p and e_dict[(pat, d)] > 0.5])
-        if not days:
-            continue
-            
-        seq_str = ""
-        for d in days:
-            is_h = (p, d) in treated_human_days
-            is_a = y_filtered.get((p, d), 0) > 0.5
-            
-            if is_h:
-                seq_str += "H"
-            elif is_a:
-                seq_str += "A"
-            else:
-                seq_str += "_" 
-        
-        # Extract trigrams
-        if len(seq_str) >= 3:
-            for i in range(len(seq_str) - 2):
-                tri = seq_str[i:i+3]
-                trigrams[tri] += 1
-                
-    metrics['top_trigrams'] = dict(sorted(trigrams.items(), key=lambda item: item[1], reverse=True)[:5])
+    metrics['peak_period_utilization_pct'] = max(period_utilization.values()) if period_utilization else 0
 
     # ==============================================================================
-    # E.8 Therapist Continuity Metrics
+    # CONSOLIDATED OUTPUT - All Metrics Summary
     # ==============================================================================
-    # z_ij is in derived_data['z'] (p, j) -> 1
-    # Count assigned per patient
-    therapists_per_patient = defaultdict(int)
-    for (p, j), val in z_dict.items():
-        if val > 0.5:
-            therapists_per_patient[p] += 1
-            
-    continuity_violations = sum(1 for c in therapists_per_patient.values() if c > 1)
+    print(f"\n{'='*70}")
+    print(f" METRICS SUMMARY (Patients: {len(patients_list)}, Days: {s_day}-{e_day}) ".center(70, '='))
+    print(f"{'='*70}")
     
-    metrics['avg_therapists_per_patient'] = np.mean(list(therapists_per_patient.values())) if therapists_per_patient else 0
-    metrics['continuity_violations_count'] = continuity_violations
+    print(f"\n--- E.2 Resource Utilization ---")
+    print(f"  Total Capacity (C_total):     {metrics['total_capacity']}")
+    print(f"  N_human (sessions):           {total_human}")
+    print(f"  N_ai (sessions):              {total_ai}")
+    print(f"  Human Utilization:            {metrics['human_utilization_pct']:.2f}%")
+    print(f"  Peak Therapist Day Workload:  {metrics['peak_therapist_day_workload']}")
+    print(f"  Peak Period Utilization:      {metrics['peak_period_utilization_pct']:.2f}%")
+
+    print(f"{'='*70}\n")
 
     return metrics

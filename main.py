@@ -71,8 +71,8 @@ def main(allow_gaps=False):
     }
 
     # Instance parameters
-    T = 4  # Number of therapists
-    D_focus = 32  # Number of focus days
+    T = 2  # Number of therapists
+    D_focus = 4  # Number of focus days
 
     # Algorithm parameters
     dual_improvement_iter = 20  # Max Iterations without dual improvement
@@ -134,7 +134,8 @@ def main(allow_gaps=False):
     # the current labeling implementation starts fresh for each pricing call.
     #
     # IMPLEMENTED:
-    # - Label Recycling: use_label_recycling in labeling_spec (shares prefix states)
+    # - Label Recycling: use_label_recycling (shares prefix states among recipients)
+    # - Enhanced Lower Bound: includes completion cost for tighter pruning
     #
     # REMAINING OPTIMIZATIONS:
     #
@@ -142,11 +143,13 @@ def main(allow_gaps=False):
     # -------------------------------------------------------------
     # What: Cache Pareto-frontier states when duals change only slightly.
     # Benefit: Skip full DP when duals are stable (common in later CG iterations)
+    # ⚠️ Note: Requires careful RC revalidation to maintain optimality!
     # Estimated speedup: 20-40% after iteration 5+
     #
     # OPTIMIZATION 2: Incremental DP for Branching (ADVANCED)
     # --------------------------------------------------------
     # What: Reuse parent node's states in child nodes after branching.
+    # ⚠️ Note: MP/SP branching on λ-variables (not x) makes state-sharing complex!
     # Estimated speedup: 30-50% in child nodes
     # Complexity: HIGH (requires significant refactoring)
     # ===================================================================================
@@ -323,7 +326,7 @@ def main(allow_gaps=False):
         print(" COMPUTING DERIVED VARIABLES FOR FOCUS PATIENTS ".center(100, "-"))
         print("-" * 100)
         f_e, f_Y, f_theta, f_omega, f_g, f_z = compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=cg_solver.P_F)
-        
+        print("Gesg" ,f_e, f_Y, f_theta, f_omega, f_g, f_z, sep = "\n")
         # Calculate derived variables for Post Patients
         print("\n" + "-" * 100)
         print(" COMPUTING DERIVED VARIABLES FOR POST PATIENTS ".center(100, "-"))
@@ -339,34 +342,9 @@ def main(allow_gaps=False):
         
         # Pack data for Post
         p_derived_data = {'e': p_e, 'Y': p_Y, 'theta': p_theta, 'omega': p_omega, 'g': p_g, 'z': p_z}
-        # Prepare Post Horizon: Days D_focus+1 to End of Planning Horizon (D_focus + D_max)
-        # Note: We use cg_solver.D to find max day, or cg_solver.D_planning
-        max_d = max(cg_solver.D) # This is usually D_focus. Wait, D in cg_solver is Focus horizon!
-        # D_planning is the full horizon? Check instance_setup returns.
-        # But Max_t keys go up to D_full.
-        # Let's use D_focus+1 to max key in Max_t or approximation.
-        # Better: Post starts at D_focus + 1. End is max(T for Post patients).
-        # We'll use D_focus+1 to max(cg_solver.D_full) if available, or just a large number handled by loop checks.
-        
-        # Accessing D_full or similar from cg_solver might be needed?
-        # cg_solver setup has self.D = D_focus list.
-        # But Max_t has keys beyond D_focus.
-        
-        # Let's inspect accessible attributes later if needed. For now, assume Max_t logic handles missing keys.
-        # We'll use start=D_focus+1, end=None (defaults to max(D) in extra_values, which is WRONG if D is only focus).
-        
-        # FIX: We need max horizon day.
-        # extra_values uses max(cg_solver.D) as default end.
-        
         p_start = D_focus + 1
-        p_end = 1000 # Temporary Safe Upper Bound if D_full not accessible? 
-        # Or better: check max key in Max_t inside extra_values if end is None?
-        # But we are in main.py.
-        
-        # Let's try to get D_full max from keys of Max_t if possible, or just pass a sufficient horizon.
-        # The calculation loop checks `if (t, d) in Max_t`. So passing a large end_day is safe.
-        p_end = 200 # Sufficiently large covers most instances
-        
+        p_end = 200
+
         p_metrics = calculate_extra_metrics(cg_solver, inc_sol, cg_solver.P_Post, p_derived_data, cg_solver.T, start_day=p_start, end_day=p_end)
         
         # Aggregate X and LOS variables (stripping col_id)
@@ -382,6 +360,8 @@ def main(allow_gaps=False):
                     key = (p, t_ther, d)
                     if p in cg_solver.P_F:
                         agg_focus_x[key] = agg_focus_x.get(key, 0) + v
+                    elif p in cg_solver.P_Post:
+                        agg_post_x[key] = agg_post_x.get(key, 0) + v
         # Calculate Total Columns Count
         total_columns = 0
         if cg_solver.master and hasattr(cg_solver.master, 'lmbda'):
@@ -396,6 +376,39 @@ def main(allow_gaps=False):
                     agg_focus_los[p] = v
                 elif p in cg_solver.P_Post:
                     agg_post_los[p] = v
+
+         # DEBUG: Print focus x, y, LOS and exit
+        import sys
+        raw_y = inc_sol.get('y', {})
+        # Initialize focus_y with 0 for all (p, d) in P_F × D_Ext
+        focus_y = {}
+        for p in cg_solver.P_F:
+            for d in cg_solver.D_Ext:
+                focus_y[(p, d)] = 0.0
+        # Set y=1 for AI sessions (where raw_y has value 1)
+        for k, v in raw_y.items():
+            p, d = k[0], k[1]  # k is (p, d, col_id)
+            if p in cg_solver.P_F and abs(v - 1.0) < 1e-6:
+                focus_y[(p, d)] = 1.0
+        
+        # Initialize post_y with 0 for all (p, d) in P_Post × D_Ext
+        post_y = {}
+        for p in cg_solver.P_Post:
+            for d in cg_solver.D_Ext:
+                post_y[(p, d)] = 0.0
+        # Set y=1 for AI sessions
+        for k, v in raw_y.items():
+            p, d = k[0], k[1]
+            if p in cg_solver.P_Post and abs(v - 1.0) < 1e-6:
+                post_y[(p, d)] = 1.0
+        
+        print("focus_x:", agg_focus_x)
+        print("focus_y:", focus_y)
+        print("focus_LOS:", agg_focus_los)
+        print("post_x:", agg_post_x)
+        print("post_y:", post_y)
+        print("post_LOS:", agg_post_los)
+        sys.exit(0)
 
     # Add derived variables to DataFrame row
     new_row_data = {
@@ -618,6 +631,8 @@ def main(allow_gaps=False):
     # ===========================
     # Old derived variable block removed as it is now integrated above
     pass
+
+    print(cg_solver.Max_t, cg_solver.Max_t_cg)
 
     return results
 
