@@ -326,7 +326,127 @@ def main(allow_gaps=False):
         print(" COMPUTING DERIVED VARIABLES FOR FOCUS PATIENTS ".center(100, "-"))
         print("-" * 100)
         f_e, f_Y, f_theta, f_omega, f_g, f_z = compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=cg_solver.P_F)
-        print("Gesg" ,f_e, f_Y, f_theta, f_omega, f_g, f_z, sep = "\n")
+        
+        # Get raw data from inc_sol
+        raw_x = inc_sol.get('x', {})
+        raw_y = inc_sol.get('y', {})
+        raw_los = inc_sol.get('LOS', {})
+        
+        # Helper: Aggregate x by (p, t, d), stripping col_id - include all (t, d) combinations
+        def aggregate_x_for_patient(raw_x, p, all_therapists, all_days):
+            """Aggregate x values: (p, t, d, col_id) -> (p, t, d) summed, include zeros"""
+            # Initialize all combinations with 0
+            result = {(p, t, d): 0 for t in all_therapists for d in all_days}
+            for k, v in raw_x.items():
+                if len(k) >= 4 and k[0] == p:
+                    key = (k[0], k[1], k[2])  # (p, t, d)
+                    result[key] = result.get(key, 0) + v
+            return result
+        
+        # Helper: Aggregate y by (p, d), stripping col_id - include all days
+        def aggregate_y_for_patient(raw_y, p, all_days):
+            """Aggregate y values: (p, d, col_id) -> (p, d) = 1 if any col has y=1, else 0"""
+            result = {(p, d): 0 for d in all_days}  # Initialize all with 0
+            for k, v in raw_y.items():
+                if k[0] == p:
+                    key = (k[0], k[1])  # (p, d)
+                    if v > 0.5:
+                        result[key] = 1
+            return result
+        
+        # Helper: Aggregate LOS by p
+        def aggregate_los_for_patient(raw_los, p):
+            """Get LOS for patient (take max across columns)"""
+            los_vals = [v for k, v in raw_los.items() if k[0] == p]
+            return max(los_vals) if los_vals else None
+        
+        # ========================================
+        # FOCUS PATIENTS - per-patient dicts (aggregated)
+        # ========================================
+        print("\n" + "=" * 80)
+        print(" PER-PATIENT DICTS FOR FOCUS PATIENTS (aggregated) ".center(80, "="))
+        print("=" * 80)
+        
+        for p in cg_solver.P_F:
+            print(f"\n{'─'*70}")
+            print(f" FOCUS PATIENT {p} ".center(70, "─"))
+            print(f"{'─'*70}")
+            
+            # x: aggregated (p, t, d) -> value
+            p_x = aggregate_x_for_patient(raw_x, p, cg_solver.T, cg_solver.D_Ext)
+            print(f"x:     {p_x}")
+            
+            # y: aggregated (p, d) -> 0/1 (all days)
+            p_y = aggregate_y_for_patient(raw_y, p, cg_solver.D_Ext)
+            print(f"y:     {p_y}")
+            
+            # Y: (p, d) -> cumulative sessions (all)
+            p_Y_all = {k: v for k, v in f_Y.items() if k[0] == p}
+            print(f"Y:     {p_Y_all}")
+            
+            # LOS: single value
+            p_los = aggregate_los_for_patient(raw_los, p)
+            print(f"LOS:   {p_los}")
+            
+            # e: (p, d) -> presence (all)
+            p_e_all = {k: v for k, v in f_e.items() if k[0] == p}
+            print(f"e:     {p_e_all}")
+            
+            # theta: (p, d) -> effectiveness (all)
+            p_th_all = {k: round(v, 4) for k, v in f_theta.items() if k[0] == p}
+            print(f"theta: {p_th_all}")
+        
+        # ========================================
+        # POST PATIENTS - per-patient dicts (5 selected, aggregated)
+        # ========================================
+        print("\n" + "=" * 80)
+        print(" PER-PATIENT DICTS FOR 5 SELECTED POST PATIENTS (aggregated) ".center(80, "="))
+        print("=" * 80)
+        
+        # Compute derived for Post patients
+        p_e_all_dict, p_Y_all_dict, p_theta_all_dict, p_omega_all_dict, p_g_all_dict, p_z_all_dict = compute_derived_variables(
+            cg_solver, inc_sol, app_data, patients_list=cg_solver.P_Post
+        )
+        
+        selected_post = list(cg_solver.P_Post)[:5]
+        print(f"\nSelected: {selected_post}")
+        
+        for p in selected_post:
+            print(f"\n{'─'*70}")
+            print(f" POST PATIENT {p} ".center(70, "─"))
+            print(f"{'─'*70}")
+            
+            # x: aggregated
+            p_x = aggregate_x_for_patient(raw_x, p, cg_solver.T, cg_solver.D_Ext)
+            print(f"x:     {p_x}")
+            
+            # y: aggregated (all days)
+            p_y = aggregate_y_for_patient(raw_y, p, cg_solver.D_Ext)
+            print(f"y:     {p_y}")
+            
+            # Y (all)
+            p_Y_all = {k: v for k, v in p_Y_all_dict.items() if k[0] == p}
+            print(f"Y:     {p_Y_all}")
+            
+            # LOS
+            p_los = aggregate_los_for_patient(raw_los, p)
+            print(f"LOS:   {p_los}")
+            
+            # e (all)
+            p_e_all = {k: v for k, v in p_e_all_dict.items() if k[0] == p}
+            print(f"e:     {p_e_all}")
+            
+            # theta (all)
+            p_th_all = {k: round(v, 4) for k, v in p_theta_all_dict.items() if k[0] == p}
+            print(f"theta: {p_th_all}")
+        
+        print("\n" + "=" * 80)
+        print(" END OF PER-PATIENT DICTS DEBUG ")
+        print("=" * 80)
+        
+        import sys
+        sys.exit("DEBUG: Exiting after per-patient dicts")
+        
         # Calculate derived variables for Post Patients
         print("\n" + "-" * 100)
         print(" COMPUTING DERIVED VARIABLES FOR POST PATIENTS ".center(100, "-"))
@@ -413,11 +533,11 @@ def main(allow_gaps=False):
     # Add derived variables to DataFrame row
     new_row_data = {
          # Focus
-        'focus_x': agg_focus_x, 'focus_los': agg_focus_los,
+        'focus_x': agg_focus_x, 'focus_y': focus_y, 'focus_los': agg_focus_los,
         'focus_e': f_e, 'focus_Y': f_Y, 'focus_theta': f_theta, 
         'focus_omega': f_omega, 'focus_g': f_g, 'focus_z': f_z,
         # Post
-        'post_x': agg_post_x, 'post_los': agg_post_los,
+        'post_x': agg_post_x, 'post_y': post_y, 'post_los': agg_post_los,
         'post_e': p_e, 'post_Y': p_Y, 'post_theta': p_theta,
         'post_omega': p_omega, 'post_g': p_g, 'post_z': p_z,
         # Add Extra Metrics with prefixes
