@@ -343,15 +343,14 @@ def main(allow_gaps=False):
                     result[key] = result.get(key, 0) + v
             return result
         
-        # Helper: Aggregate y by (p, d), stripping col_id - include all days
+        # Helper: Aggregate y by (p, d), stripping col_id - SUM across columns
         def aggregate_y_for_patient(raw_y, p, all_days):
-            """Aggregate y values: (p, d, col_id) -> (p, d) = 1 if any col has y=1, else 0"""
+            """Aggregate y values: (p, d, col_id) -> (p, d) = SUM of all y values"""
             result = {(p, d): 0 for d in all_days}  # Initialize all with 0
             for k, v in raw_y.items():
                 if k[0] == p:
                     key = (k[0], k[1])  # (p, d)
-                    if v > 0.5:
-                        result[key] = 1
+                    result[key] = result.get(key, 0) + v  # SUM instead of setting to 1
             return result
         
         # Helper: Aggregate LOS by p
@@ -412,33 +411,114 @@ def main(allow_gaps=False):
         print(f"\nSelected: {selected_post}")
         
         for p in selected_post:
-            print(f"\n{'─'*70}")
-            print(f" POST PATIENT {p} ".center(70, "─"))
-            print(f"{'─'*70}")
+            # Check how many schedules (col_ids) this patient has
+            col_ids_for_p = set()
+            for k in raw_x.keys():
+                if len(k) >= 4 and k[0] == p:
+                    col_ids_for_p.add(k[3])
             
-            # x: aggregated
-            p_x = aggregate_x_for_patient(raw_x, p, cg_solver.T, cg_solver.D_Ext)
-            print(f"x:     {p_x}")
-            
-            # y: aggregated (all days)
-            p_y = aggregate_y_for_patient(raw_y, p, cg_solver.D_Ext)
-            print(f"y:     {p_y}")
-            
-            # Y (all)
-            p_Y_all = {k: v for k, v in p_Y_all_dict.items() if k[0] == p}
-            print(f"Y:     {p_Y_all}")
-            
-            # LOS
-            p_los = aggregate_los_for_patient(raw_los, p)
-            print(f"LOS:   {p_los}")
-            
-            # e (all)
-            p_e_all = {k: v for k, v in p_e_all_dict.items() if k[0] == p}
-            print(f"e:     {p_e_all}")
-            
-            # theta (all)
-            p_th_all = {k: round(v, 4) for k, v in p_theta_all_dict.items() if k[0] == p}
-            print(f"theta: {p_th_all}")
+            if len(col_ids_for_p) <= 1:
+                # Single schedule - print normally
+                print(f"\n{'─'*70}")
+                print(f" POST PATIENT {p} ".center(70, "─"))
+                print(f"{'─'*70}")
+                
+                p_x = aggregate_x_for_patient(raw_x, p, cg_solver.T, cg_solver.D_Ext)
+                print(f"x:     {p_x}")
+                p_y = aggregate_y_for_patient(raw_y, p, cg_solver.D_Ext)
+                print(f"y:     {p_y}")
+                p_Y_all = {k: v for k, v in p_Y_all_dict.items() if k[0] == p}
+                print(f"Y:     {p_Y_all}")
+                p_los = aggregate_los_for_patient(raw_los, p)
+                print(f"LOS:   {p_los}")
+                p_e_all = {k: v for k, v in p_e_all_dict.items() if k[0] == p}
+                print(f"e:     {p_e_all}")
+                p_th_all = {k: round(v, 4) for k, v in p_theta_all_dict.items() if k[0] == p}
+                print(f"theta: {p_th_all}")
+            else:
+                # Multiple schedules - disaggregate into sub-patients
+                print(f"\n{'═'*70}")
+                print(f" POST PATIENT {p} HAS {len(col_ids_for_p)} SCHEDULES - DISAGGREGATING ".center(70, "═"))
+                print(f"{'═'*70}")
+                
+                for idx, col_id in enumerate(sorted(col_ids_for_p)):
+                    suffix = chr(ord('a') + idx)  # 'a', 'b', 'c', ...
+                    sub_patient_id = f"{p}_{suffix}"
+                    
+                    print(f"\n{'─'*70}")
+                    print(f" SUB-PATIENT {sub_patient_id} (col_id={col_id}) ".center(70, "─"))
+                    print(f"{'─'*70}")
+                    
+                    # x for this specific col_id only
+                    sub_x = {}
+                    for t in cg_solver.T:
+                        for d in cg_solver.D_Ext:
+                            key = (p, t, d, col_id)
+                            val = raw_x.get(key, 0)
+                            sub_x[(sub_patient_id, t, d)] = val
+                    # Only print non-zero for readability
+                    sub_x_nonzero = {k: v for k, v in sub_x.items() if v > 0.01}
+                    print(f"x:     {sub_x_nonzero}")
+                    
+                    # y for this specific col_id only
+                    sub_y = {}
+                    for d in cg_solver.D_Ext:
+                        key = (p, d, col_id)
+                        val = raw_y.get(key, 0)
+                        sub_y[(sub_patient_id, d)] = val
+                    print(f"y:     {sub_y}")
+                    
+                    # Compute cumulative Y for this sub-patient
+                    sub_Y = {}
+                    Y_cum = 0
+                    for d in sorted(cg_solver.D_Ext):
+                        key = (p, d, col_id)
+                        y_val = raw_y.get(key, 0)
+                        Y_cum += y_val
+                        sub_Y[(sub_patient_id, d)] = Y_cum
+                    print(f"Y:     {sub_Y}")
+                    
+                    # LOS for this col_id
+                    sub_los = raw_los.get((p, col_id), None)
+                    print(f"LOS:   {sub_los}")
+                    
+                    # Compute e for this sub-patient
+                    entry = cg_solver.Entry_agg.get(p, min(cg_solver.D_Ext))
+                    sub_e = {}
+                    for d in cg_solver.D_Ext:
+                        if sub_los:
+                            sub_e[(sub_patient_id, d)] = 1 if entry <= d < entry + sub_los else 0
+                        else:
+                            sub_e[(sub_patient_id, d)] = 0
+                    print(f"e:     {sub_e}")
+                    
+                    # Compute theta for this sub-patient based on Y
+                    # Get learning parameters
+                    learn_type = app_data['learn_type'][0]
+                    theta_base = app_data['theta_base'][0]
+                    lin_increase = app_data['lin_increase'][0]
+                    k_learn = app_data['k_learn'][0]
+                    infl_point = app_data['infl_point'][0]
+                    
+                    def compute_theta_local(Y_count):
+                        if learn_type == 'lin':
+                            return min(1.0, theta_base + lin_increase * Y_count)
+                        elif learn_type == 'exp':
+                            return theta_base + (1 - theta_base) * (1 - math.exp(-k_learn * Y_count))
+                        elif learn_type == 'sigmoid':
+                            return theta_base + (1 - theta_base) / (1 + math.exp(-k_learn * (Y_count - infl_point)))
+                        else:
+                            return theta_base
+                    
+                    sub_theta = {}
+                    for d in cg_solver.D_Ext:
+                        Y_val = sub_Y.get((sub_patient_id, d), 0)
+                        e_val = sub_e.get((sub_patient_id, d), 0)
+                        if e_val:
+                            sub_theta[(sub_patient_id, d)] = round(compute_theta_local(Y_val), 4)
+                        else:
+                            sub_theta[(sub_patient_id, d)] = 0.0
+                    print(f"theta: {sub_theta}")
         
         print("\n" + "=" * 80)
         print(" END OF PER-PATIENT DICTS DEBUG ")

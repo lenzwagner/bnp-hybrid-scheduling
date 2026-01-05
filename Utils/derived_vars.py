@@ -98,13 +98,12 @@ def compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=None):
             # x_{it}: therapy session (sum over all therapists)
             x_it = sum(v for k, v in x_dict.items() if k[0] == p and k[2] == t)
             
-            # y_{it}: AI session - check multiple key formats
-            y_it = y_dict.get((p, t), 0)
-            if y_it == 0:
-                for k, v in y_dict.items():
-                    if k[0] == p and k[1] == t:
-                        y_it = v
-                        break
+            # y_{it}: AI session - sum over all columns (col_ids)
+            # y_dict keys can be (p, d, col_id) format
+            y_it = 0
+            for k, v in y_dict.items():
+                if k[0] == p and k[1] == t:
+                    y_it += v  # Sum across all columns
             
             # Y_{it}: cumulative AI sessions
             if y_it > 0:
