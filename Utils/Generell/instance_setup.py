@@ -251,7 +251,7 @@ def generate_patient_data(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scena
     # Generate therapist availability schedule
     Max_t = {}
 
-    start_days = [1, 2, 3, 4, 5]
+    start_days = [1, 2, 6, 7]  # Paper: weekend capacity ≈ 50% of weekday
     therapist_start_days = {}
 
     for t in range(1, T + 1):
@@ -602,7 +602,7 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     # Generate therapist availability schedule
     Max_t = {}
 
-    start_days = [1, 2, 3, 4, 5]
+    start_days = [1, 2, 6, 7]  # Paper: weekend capacity ≈ 50% of weekday
     therapist_start_days = {}
 
     for t in range(1, T + 1):
