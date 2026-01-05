@@ -30,7 +30,7 @@ setup_multi_level_logging(base_log_dir='logs/compact', enable_console=True, prin
 logger = get_logger(__name__)
 
 # Time limit for each solve (in seconds)
-TIME_LIMIT = 350
+TIME_LIMIT = 1800
 
 
 def find_latest_instance_file():
@@ -261,6 +261,27 @@ def main():
         print(f"\n✗ ERROR loading instances: {e}")
         return None
 
+    # ===========================
+    # FILTER INSTANCES
+    # ===========================
+    # Only solve specific parameter combinations
+    FILTER_T = [10, 15]
+    FILTER_D_FOCUS = [10, 20, 30]
+    FILTER_SEEDS = list(range(1, 11))  # Seeds 1-10
+    
+    # Apply filters
+    filtered_df = instances_df[
+        (instances_df['T_count'].isin(FILTER_T)) &
+        (instances_df['D_focus_count'].isin(FILTER_D_FOCUS)) &
+        (instances_df['seed'].isin(FILTER_SEEDS))
+    ]
+    
+    print(f"\n  - Filter: T ∈ {FILTER_T}, D_focus ∈ {FILTER_D_FOCUS}, seeds ∈ [1-10]")
+    print(f"  - Filtered instances: {len(filtered_df)} (from {total_instances} total)")
+    
+    total_instances = len(filtered_df)
+    instances_df = filtered_df
+    
     # ===========================
     # SOLVE ALL INSTANCES
     # ===========================
