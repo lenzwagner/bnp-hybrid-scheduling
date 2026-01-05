@@ -116,12 +116,16 @@ def main(allow_gaps=False):
     # Status:
     # - [x] Core Logic Implemented: 'allow_gaps' flag enables Gap action (2) in label.py.
     # - [x] Integration: MasterProblem correctly reconstructs AI/Gap usage from path_pattern.
+    # - [x] Path-pattern mapping: path=1→x=1, path=0→y=1, path=2→x=0,y=0 in label.py line 2176.
     # - [x] Optimization: Currently uses Python labeling (Numba disabled if allow_gaps=True).
     #
-    # Future Work (x+y < 1):
-    # - [ ] Verify gap usage in solutions (x=0, y=0).
-    # - [ ] Implement Gap-specific metrics (E.5) in extra_values.py.
-    # - [ ] Port Gap logic to Numba for performance.
+    # Remaining Work:
+    # - [ ] Subproblem (MIP): Update to allow x+y < 1 (currently x+y=1 is enforced).
+    # - [ ] Derived Variables: Update compute_derived_variables to handle gaps (g_it indicator).
+    # - [ ] Gap Metrics (E.5): Update extra_values.py to calculate gap-related metrics.
+    # - [ ] Port Gap logic to Numba (label_numba.py) for performance.
+    # - [ ] Add gap indicator g_dict to inc_sol and results_df storage.
+    # - [ ] Test with capacity-constrained instances to verify gaps appear.
 
     # ===================================================================================
     # TODO: LABELING WARM-START OPTIMIZATIONS
@@ -161,7 +165,7 @@ def main(allow_gaps=False):
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
                      'use_numba_labeling': True,
-                     'allow_gaps': False,
+                     'allow_gaps': allow_gaps,  # Use function parameter
                      'use_label_recycling': False}
 
     # ===========================
@@ -327,205 +331,6 @@ def main(allow_gaps=False):
         print("-" * 100)
         f_e, f_Y, f_theta, f_omega, f_g, f_z = compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=cg_solver.P_F)
         
-        # Get raw data from inc_sol
-        raw_x = inc_sol.get('x', {})
-        raw_y = inc_sol.get('y', {})
-        raw_los = inc_sol.get('LOS', {})
-        
-        # Helper: Aggregate x by (p, t, d), stripping col_id - include all (t, d) combinations
-        def aggregate_x_for_patient(raw_x, p, all_therapists, all_days):
-            """Aggregate x values: (p, t, d, col_id) -> (p, t, d) summed, include zeros"""
-            # Initialize all combinations with 0
-            result = {(p, t, d): 0 for t in all_therapists for d in all_days}
-            for k, v in raw_x.items():
-                if len(k) >= 4 and k[0] == p:
-                    key = (k[0], k[1], k[2])  # (p, t, d)
-                    result[key] = result.get(key, 0) + v
-            return result
-        
-        # Helper: Aggregate y by (p, d), stripping col_id - SUM across columns
-        def aggregate_y_for_patient(raw_y, p, all_days):
-            """Aggregate y values: (p, d, col_id) -> (p, d) = SUM of all y values"""
-            result = {(p, d): 0 for d in all_days}  # Initialize all with 0
-            for k, v in raw_y.items():
-                if k[0] == p:
-                    key = (k[0], k[1])  # (p, d)
-                    result[key] = result.get(key, 0) + v  # SUM instead of setting to 1
-            return result
-        
-        # Helper: Aggregate LOS by p
-        def aggregate_los_for_patient(raw_los, p):
-            """Get LOS for patient (take max across columns)"""
-            los_vals = [v for k, v in raw_los.items() if k[0] == p]
-            return max(los_vals) if los_vals else None
-        
-        # ========================================
-        # FOCUS PATIENTS - per-patient dicts (aggregated)
-        # ========================================
-        print("\n" + "=" * 80)
-        print(" PER-PATIENT DICTS FOR FOCUS PATIENTS (aggregated) ".center(80, "="))
-        print("=" * 80)
-        
-        for p in cg_solver.P_F:
-            print(f"\n{'─'*70}")
-            print(f" FOCUS PATIENT {p} ".center(70, "─"))
-            print(f"{'─'*70}")
-            
-            # x: aggregated (p, t, d) -> value
-            p_x = aggregate_x_for_patient(raw_x, p, cg_solver.T, cg_solver.D_Ext)
-            print(f"x:     {p_x}")
-            
-            # y: aggregated (p, d) -> 0/1 (all days)
-            p_y = aggregate_y_for_patient(raw_y, p, cg_solver.D_Ext)
-            print(f"y:     {p_y}")
-            
-            # Y: (p, d) -> cumulative sessions (all)
-            p_Y_all = {k: v for k, v in f_Y.items() if k[0] == p}
-            print(f"Y:     {p_Y_all}")
-            
-            # LOS: single value
-            p_los = aggregate_los_for_patient(raw_los, p)
-            print(f"LOS:   {p_los}")
-            
-            # e: (p, d) -> presence (all)
-            p_e_all = {k: v for k, v in f_e.items() if k[0] == p}
-            print(f"e:     {p_e_all}")
-            
-            # theta: (p, d) -> effectiveness (all)
-            p_th_all = {k: round(v, 4) for k, v in f_theta.items() if k[0] == p}
-            print(f"theta: {p_th_all}")
-        
-        # ========================================
-        # POST PATIENTS - per-patient dicts (5 selected, aggregated)
-        # ========================================
-        print("\n" + "=" * 80)
-        print(" PER-PATIENT DICTS FOR 5 SELECTED POST PATIENTS (aggregated) ".center(80, "="))
-        print("=" * 80)
-        
-        # Compute derived for Post patients
-        p_e_all_dict, p_Y_all_dict, p_theta_all_dict, p_omega_all_dict, p_g_all_dict, p_z_all_dict = compute_derived_variables(
-            cg_solver, inc_sol, app_data, patients_list=cg_solver.P_Post
-        )
-        
-        selected_post = list(cg_solver.P_Post)[:5]
-        print(f"\nSelected: {selected_post}")
-        
-        for p in selected_post:
-            # Check how many schedules (col_ids) this patient has
-            col_ids_for_p = set()
-            for k in raw_x.keys():
-                if len(k) >= 4 and k[0] == p:
-                    col_ids_for_p.add(k[3])
-            
-            if len(col_ids_for_p) <= 1:
-                # Single schedule - print normally
-                print(f"\n{'─'*70}")
-                print(f" POST PATIENT {p} ".center(70, "─"))
-                print(f"{'─'*70}")
-                
-                p_x = aggregate_x_for_patient(raw_x, p, cg_solver.T, cg_solver.D_Ext)
-                print(f"x:     {p_x}")
-                p_y = aggregate_y_for_patient(raw_y, p, cg_solver.D_Ext)
-                print(f"y:     {p_y}")
-                p_Y_all = {k: v for k, v in p_Y_all_dict.items() if k[0] == p}
-                print(f"Y:     {p_Y_all}")
-                p_los = aggregate_los_for_patient(raw_los, p)
-                print(f"LOS:   {p_los}")
-                p_e_all = {k: v for k, v in p_e_all_dict.items() if k[0] == p}
-                print(f"e:     {p_e_all}")
-                p_th_all = {k: round(v, 4) for k, v in p_theta_all_dict.items() if k[0] == p}
-                print(f"theta: {p_th_all}")
-            else:
-                # Multiple schedules - disaggregate into sub-patients
-                print(f"\n{'═'*70}")
-                print(f" POST PATIENT {p} HAS {len(col_ids_for_p)} SCHEDULES - DISAGGREGATING ".center(70, "═"))
-                print(f"{'═'*70}")
-                
-                for idx, col_id in enumerate(sorted(col_ids_for_p)):
-                    suffix = chr(ord('a') + idx)  # 'a', 'b', 'c', ...
-                    sub_patient_id = f"{p}_{suffix}"
-                    
-                    print(f"\n{'─'*70}")
-                    print(f" SUB-PATIENT {sub_patient_id} (col_id={col_id}) ".center(70, "─"))
-                    print(f"{'─'*70}")
-                    
-                    # x for this specific col_id only
-                    sub_x = {}
-                    for t in cg_solver.T:
-                        for d in cg_solver.D_Ext:
-                            key = (p, t, d, col_id)
-                            val = raw_x.get(key, 0)
-                            sub_x[(sub_patient_id, t, d)] = val
-                    # Only print non-zero for readability
-                    sub_x_nonzero = {k: v for k, v in sub_x.items() if v > 0.01}
-                    print(f"x:     {sub_x_nonzero}")
-                    
-                    # y for this specific col_id only
-                    sub_y = {}
-                    for d in cg_solver.D_Ext:
-                        key = (p, d, col_id)
-                        val = raw_y.get(key, 0)
-                        sub_y[(sub_patient_id, d)] = val
-                    print(f"y:     {sub_y}")
-                    
-                    # Compute cumulative Y for this sub-patient
-                    sub_Y = {}
-                    Y_cum = 0
-                    for d in sorted(cg_solver.D_Ext):
-                        key = (p, d, col_id)
-                        y_val = raw_y.get(key, 0)
-                        Y_cum += y_val
-                        sub_Y[(sub_patient_id, d)] = Y_cum
-                    print(f"Y:     {sub_Y}")
-                    
-                    # LOS for this col_id
-                    sub_los = raw_los.get((p, col_id), None)
-                    print(f"LOS:   {sub_los}")
-                    
-                    # Compute e for this sub-patient
-                    entry = cg_solver.Entry_agg.get(p, min(cg_solver.D_Ext))
-                    sub_e = {}
-                    for d in cg_solver.D_Ext:
-                        if sub_los:
-                            sub_e[(sub_patient_id, d)] = 1 if entry <= d < entry + sub_los else 0
-                        else:
-                            sub_e[(sub_patient_id, d)] = 0
-                    print(f"e:     {sub_e}")
-                    
-                    # Compute theta for this sub-patient based on Y
-                    # Get learning parameters
-                    learn_type = app_data['learn_type'][0]
-                    theta_base = app_data['theta_base'][0]
-                    lin_increase = app_data['lin_increase'][0]
-                    k_learn = app_data['k_learn'][0]
-                    infl_point = app_data['infl_point'][0]
-                    
-                    def compute_theta_local(Y_count):
-                        if learn_type == 'lin':
-                            return min(1.0, theta_base + lin_increase * Y_count)
-                        elif learn_type == 'exp':
-                            return theta_base + (1 - theta_base) * (1 - math.exp(-k_learn * Y_count))
-                        elif learn_type == 'sigmoid':
-                            return theta_base + (1 - theta_base) / (1 + math.exp(-k_learn * (Y_count - infl_point)))
-                        else:
-                            return theta_base
-                    
-                    sub_theta = {}
-                    for d in cg_solver.D_Ext:
-                        Y_val = sub_Y.get((sub_patient_id, d), 0)
-                        e_val = sub_e.get((sub_patient_id, d), 0)
-                        if e_val:
-                            sub_theta[(sub_patient_id, d)] = round(compute_theta_local(Y_val), 4)
-                        else:
-                            sub_theta[(sub_patient_id, d)] = 0.0
-                    print(f"theta: {sub_theta}")
-        
-        print("\n" + "=" * 80)
-        print(" END OF PER-PATIENT DICTS DEBUG ")
-        print("=" * 80)
-        
-        import sys
-        sys.exit("DEBUG: Exiting after per-patient dicts")
         
         # Calculate derived variables for Post Patients
         print("\n" + "-" * 100)
@@ -577,38 +382,45 @@ def main(allow_gaps=False):
                 elif p in cg_solver.P_Post:
                     agg_post_los[p] = v
 
-         # DEBUG: Print focus x, y, LOS and exit
-        import sys
+        # Build focus_y and post_y from raw_y
         raw_y = inc_sol.get('y', {})
-        # Initialize focus_y with 0 for all (p, d) in P_F × D_Ext
-        focus_y = {}
-        for p in cg_solver.P_F:
-            for d in cg_solver.D_Ext:
-                focus_y[(p, d)] = 0.0
-        # Set y=1 for AI sessions (where raw_y has value 1)
+        focus_y = {(p, d): 0.0 for p in cg_solver.P_F for d in cg_solver.D_Ext}
         for k, v in raw_y.items():
-            p, d = k[0], k[1]  # k is (p, d, col_id)
+            p, d = k[0], k[1]
             if p in cg_solver.P_F and abs(v - 1.0) < 1e-6:
                 focus_y[(p, d)] = 1.0
         
-        # Initialize post_y with 0 for all (p, d) in P_Post × D_Ext
-        post_y = {}
-        for p in cg_solver.P_Post:
-            for d in cg_solver.D_Ext:
-                post_y[(p, d)] = 0.0
-        # Set y=1 for AI sessions
+        post_y = {(p, d): 0.0 for p in cg_solver.P_Post for d in cg_solver.D_Ext}
         for k, v in raw_y.items():
             p, d = k[0], k[1]
             if p in cg_solver.P_Post and abs(v - 1.0) < 1e-6:
                 post_y[(p, d)] = 1.0
         
-        print("focus_x:", agg_focus_x)
-        print("focus_y:", focus_y)
-        print("focus_LOS:", agg_focus_los)
-        print("post_x:", agg_post_x)
-        print("post_y:", post_y)
-        print("post_LOS:", agg_post_los)
-        sys.exit(0)
+        # ========================================
+        # DEBUG OUTPUT - FOCUS PATIENTS
+        # ========================================
+        print("\n" + "=" * 100)
+        print(" FOCUS PATIENTS - SOLUTION DICTS ".center(100, "="))
+        print("=" * 100)
+        print(f"x: {agg_focus_x}")
+        print(f"y: {focus_y}")
+        print(f"LOS: {agg_focus_los}")
+        print(f"e: {f_e}")
+        print(f"Y: {f_Y}")
+        print(f"theta: {f_theta}")
+        
+        # ========================================
+        # DEBUG OUTPUT - POST PATIENTS
+        # ========================================
+        print("\n" + "=" * 100)
+        print(" POST PATIENTS - SOLUTION DICTS ".center(100, "="))
+        print("=" * 100)
+        print(f"x: {agg_post_x}")
+        print(f"y: {post_y}")
+        print(f"LOS: {agg_post_los}")
+        print(f"e: {p_e}")
+        print(f"Y: {p_Y}")
+        print(f"theta: {p_theta}")
 
     # Add derived variables to DataFrame row
     new_row_data = {
@@ -837,4 +649,4 @@ def main(allow_gaps=False):
     return results
 
 if __name__ == "__main__":
-    results = main()
+    results = main(allow_gaps=False)  # Set to True for gap support

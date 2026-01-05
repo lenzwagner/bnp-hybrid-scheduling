@@ -2174,16 +2174,19 @@ def solve_pricing_for_profile_bnp(
                 schedules_x[(profile, w, t, current_col_id)] = 0.0
         
         # Now set the actual values from the path_pattern
+        # path=1 → Human session (x=1), path=0 → AI session (x=0), path=2 → Gap (x=0)
         for t_idx, val in enumerate(path_pattern):
             current_time = start + t_idx
-            schedules_x[(profile, worker, current_time, current_col_id)] = float(val)
+            # val==1 means Human session -> x=1, val==0 means AI -> x=0, val==2 means Gap -> x=0
+            x_val = 1.0 if val == 1 else 0.0
+            schedules_x[(profile, worker, current_time, current_col_id)] = x_val
         
         # Build schedules_y: {(profile, time, col_id): value}
-        # y=1 for AI sessions (path_pattern value 0), y=0 for Human sessions (path_pattern value 1)
+        # path=0 → AI session (y=1), path=1 → Human session (y=0), path=2 → Gap (y=0)
         schedules_y = {}
         for t_idx, val in enumerate(path_pattern):
             current_time = start + t_idx
-            # val==0 means AI session -> y=1, val==1 means Human session -> y=0
+            # val==0 means AI session -> y=1, val==1 means Human -> y=0, val==2 means Gap -> y=0
             y_val = 1.0 if val == 0 else 0.0
             schedules_y[(profile, current_time, current_col_id)] = y_val
         
