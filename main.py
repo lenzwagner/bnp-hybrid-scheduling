@@ -357,6 +357,16 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     p_e, p_Y, p_theta, p_omega, p_g, p_z = None, None, None, None, None, None
     agg_focus_x, agg_focus_los = None, None
     agg_post_x, agg_post_los = None, None
+    
+    # Default to profile lists
+    save_P_F = cg_solver.P_F
+    save_P_Post = cg_solver.P_Post
+    save_P_Pre = cg_solver.P_Pre
+    save_P_Join = cg_solver.P_Join
+    save_pre_x = cg_solver.pre_x
+    save_pre_los = cg_solver.pre_los
+    save_Entry = cg_solver.Entry_agg
+    save_Req = cg_solver.Req_agg
 
 
     if use_branch_and_price and results.get('incumbent_solution'):
@@ -368,6 +378,22 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
         print("\n" + "=" * 100)
         print(" DISAGGREGATING SOLUTION TO ORIGINAL PATIENT IDs ".center(100, "="))
         print("=" * 100)
+        
+        # Prepare Disaggregated Dicts for Entry and Req (needed globally)
+        disagg_Entry = {}
+        disagg_Req = {}
+        # Iterate over ALL profiles (P_Pre + P_F + P_Post + P_Join) - actually just use profile_to_all_patients
+        for profile_id, patients in cg_solver.profile_to_all_patients.items():
+            p_entry = cg_solver.Entry_agg.get(profile_id, 1)
+            p_req = cg_solver.Req_agg.get(profile_id, 0)
+            for p_orig in patients:
+                disagg_Entry[p_orig] = p_entry
+                disagg_Req[p_orig] = p_req
+        
+        save_Entry = disagg_Entry
+        save_Req = disagg_Req
+        
+
         
         disagg_x, disagg_y, disagg_los = disaggregate_solution(
             inc_sol, 
@@ -391,10 +417,42 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
             if profile_id in cg_solver.profile_to_all_patients:
                 original_P_F.extend(cg_solver.profile_to_all_patients[profile_id])
                 
+
         original_P_Post = []
         for profile_id in cg_solver.P_Post:
             if profile_id in cg_solver.profile_to_all_patients:
                 original_P_Post.extend(cg_solver.profile_to_all_patients[profile_id])
+                
+        original_P_Pre = []
+        disagg_pre_x_dict = {}
+        disagg_pre_los_dict = {}
+
+        for profile_id in cg_solver.P_Pre:
+            if profile_id in cg_solver.profile_to_all_patients:
+                patients = cg_solver.profile_to_all_patients[profile_id]
+                original_P_Pre.extend(patients)
+                
+                # Disaggregate history
+                # Note: pre_x uses profile_ID as key in cg_solver.pre_x
+                p_hist_x = cg_solver.pre_x.get(profile_id, {})
+                p_hist_los = cg_solver.pre_los.get(profile_id, 0)
+                
+                for p_orig in patients:
+                    disagg_pre_x_dict[p_orig] = p_hist_x
+                    disagg_pre_los_dict[p_orig] = p_hist_los
+
+        original_P_Join = []
+        for profile_id in cg_solver.P_Join:
+            if profile_id in cg_solver.profile_to_all_patients:
+                original_P_Join.extend(cg_solver.profile_to_all_patients[profile_id])
+
+        # Use original patient IDs for output
+        save_P_F = original_P_F
+        save_P_Post = original_P_Post
+        save_P_Pre = original_P_Pre
+        save_P_Join = original_P_Join
+        save_pre_x = disagg_pre_x_dict
+        save_pre_los = disagg_pre_los_dict
 
         # Calculate derived variables for Focus Patients using DISAGGREGATED data
         print("\n" + "-" * 100)
@@ -541,17 +599,17 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
         'time_overhead': results.get('time_overhead'),
         'pattern_size_counts': results.get('pattern_size_counts'),
         'total_columns': total_columns,
-        'P_Pre': cg_solver.P_Pre,
-        'P_F': cg_solver.P_F,
-        'P_Post': cg_solver.P_Post,
-        'P_Join': cg_solver.P_Join,
+        'P_Pre': save_P_Pre,
+        'P_F': save_P_F,
+        'P_Post': save_P_Post,
+        'P_Join': save_P_Join,
         'Nr_agg': cg_solver.Nr_agg,
         'E_dict': cg_solver.E_dict,
         'Q_jt': cg_solver.Max_t,
-        'Req': cg_solver.Req_agg,
-        'Entry': cg_solver.Entry_agg,
-        'pre_x': cg_solver.pre_x,
-        'pre_los': cg_solver.pre_los,
+        'Req': save_Req,
+        'Entry': save_Entry,
+        'pre_x': save_pre_x,
+        'pre_los': save_pre_los,
         **new_row_data
     }
 
@@ -706,7 +764,7 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     # ===========================
     # Old derived variable block removed as it is now integrated above
     pass
-
+    print(cg_solver.Nr_agg, cg_solver.agg_to_patient, sep="\n")
     return results
 
 
