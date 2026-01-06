@@ -20,7 +20,8 @@ class ColumnGeneration:
     def __init__(self, seed, app_data, T, D_focus, max_itr=100, threshold=1e-5,
                  pttr='medium', show_plots=False, pricing_filtering=True, therapist_agg=False,
                  max_stagnation_itr=5, stagnation_threshold=1e-4, learn_method='pwl', callback_after_iteration=None,
-                 save_lps=True, verbose=True, deterministic=False, use_warmstart=True):
+                 save_lps=True, verbose=True, deterministic=False, use_warmstart=True,
+                 dual_smoothing_alpha=0.5):
         """
         Initialize Column Generation solver.
 
@@ -60,6 +61,9 @@ class ColumnGeneration:
         self.verbose = verbose
         self.deterministic = deterministic
         self.use_warmstart = use_warmstart
+        self.dual_smoothing_alpha = dual_smoothing_alpha
+        self.smoothed_duals_pi = None
+        self.smoothed_duals_gamma = None
 
         # Initialize random seed
         random.seed(seed)
@@ -111,7 +115,7 @@ class ColumnGeneration:
         # Generate patient and therapist data
         if self.verbose:
             print("\n[Setup] Generating patient and therapist data...")
-        self.Req, self.Entry, self.Max_t, self.P, self.D, self.D_Ext, self.D_Full, self.T, self.M_p, self.W_coeff = \
+        self.Req, self.Entry, self.Max_t, self.P, self.D, self.D_Ext, self.D_Full, self.T, self.M_p, self.W_coeff, self.DRG = \
             generate_patient_data_log(
                 T=self.T_param,
                 D_focus=self.D_focus,
@@ -132,6 +136,12 @@ class ColumnGeneration:
 
         self.P_Pre, self.P_F, self.P_Post, self.P_Join, self.E_dict = \
             categorize_patients_full(self.Entry_agg, self.D)
+
+        # Create DRG mapping for aggregated profiles
+        # Map each profile to the DRG group of one of its original patients
+        self.DRG_agg = {}
+        for profile_id, original_patient_id in self.agg_to_patient.items():
+            self.DRG_agg[profile_id] = self.DRG.get(original_patient_id, 'Unknown')
 
         self.G_C, self.g_j_C, self.Q_jd_Agg, self.therapist_to_type = \
             aggregate_therapists(self.T, self.Max_t, self.app_data["W_on"][0],
@@ -270,6 +280,30 @@ class ColumnGeneration:
             duals_pi, duals_gamma = self.master.getDuals()
             master_time = time.time() - master_start_time
 
+            # Dual Stabilization (Wentges Smoothing)
+            # Update smoothed duals: π_smooth = α * π_raw + (1-α) * π_smooth_prev
+            if self.dual_smoothing_alpha is not None and 0 < self.dual_smoothing_alpha < 1:
+                if self.smoothed_duals_pi is None:
+                    # First iteration: Initialize with raw duals
+                    self.smoothed_duals_pi = duals_pi.copy()
+                    self.smoothed_duals_gamma = duals_gamma.copy()
+                    if self.verbose:
+                        print(f"[Dual Stabilization] Initialized (α={self.dual_smoothing_alpha})")
+                else:
+                    # Apply smoothing formula
+                    alpha = self.dual_smoothing_alpha
+                    # Smooth pi (capacity constraints)
+                    for k, v in duals_pi.items():
+                        self.smoothed_duals_pi[k] = alpha * v + (1 - alpha) * self.smoothed_duals_pi.get(k, 0)
+                    
+                    # Smooth gamma (convexity constraints)
+                    for k, v in duals_gamma.items():
+                        self.smoothed_duals_gamma[k] = alpha * v + (1 - alpha) * self.smoothed_duals_gamma.get(k, 0)
+            else:
+                # No smoothing (or alpha=1)
+                self.smoothed_duals_pi = duals_pi
+                self.smoothed_duals_gamma = duals_gamma
+
             # Store LP objective history
             self.lp_obj_history.append(current_lp_obj)
 
@@ -326,7 +360,7 @@ class ColumnGeneration:
                 print(f"Filtered out patients: {sorted(filtered_out_patients)}")
             subproblem_start_time = time.time()
             results_from_workers_with_time = self._solve_subproblems_parallel(
-                patients_to_solve, duals_gamma, duals_pi
+                patients_to_solve, self.smoothed_duals_gamma, self.smoothed_duals_pi
             )
             subproblem_time = time.time() - subproblem_start_time
 

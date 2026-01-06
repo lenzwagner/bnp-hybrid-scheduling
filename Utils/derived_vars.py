@@ -64,16 +64,26 @@ def compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=None):
         if p_los is None:
             continue
         
-        # z_{ij}: therapist assignment
-        z_dict = inc_sol.get('z', {})
-        assigned_therapists = [k[1] for k, v in z_dict.items() if k[0] == p and v > 0.5]
+        # z_{ij}: therapist assignment - DERIVED FROM x
+        # Since Labeling algorithm doesn't compute z explicitly, we derive it from x:
+        # z_{i,j} = 1 if patient i has ANY session with therapist j (i.e., ∃d: x_{i,j,d} > 0)
+        
+        # Find all therapists from x_dict assignments for this patient
+        assigned_therapists = set()
+        for k, v in x_dict.items():
+            if k[0] == p and v > 0.5:
+                # k is (p, t, d, col_id) - extract therapist t
+                therapist = k[1]
+                assigned_therapists.add(therapist)
+        
+        # Get all available therapists from Max_t or T
+        all_J = set()
+        if hasattr(cg_solver, 'Max_t') and cg_solver.Max_t:
+            all_J = set(k[0] for k in cg_solver.Max_t.keys())
+        elif hasattr(cg_solver, 'T') and cg_solver.T:
+            all_J = set(cg_solver.T)
         
         # Store z derived for all therapists (default 0)
-        # Find all relevant therapists from Q_jt keys or z_dict keys
-        all_J = set(k[0] for k in cg_solver.Q_jt.keys()) if hasattr(cg_solver, 'Q_jt') else set()
-        if not all_J and z_dict:
-            all_J = set(k[1] for k in z_dict.keys())
-        
         for j in all_J:
             all_z[(p, j)] = 0
         

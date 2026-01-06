@@ -806,9 +806,7 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
 
     requirements_dict = df.set_index("patient_id")["requirements"].to_dict()
     entry_day_dict = df.set_index("patient_id")["entry_day"].to_dict()
-
-    requirements_dict = df.set_index("patient_id")["requirements"].to_dict()
-    entry_day_dict = df.set_index("patient_id")["entry_day"].to_dict()
+    drg_dict = df.set_index("patient_id")["drg_group"].to_dict()  # DRG group mapping
 
     # ============================================================================
     # ✅ NEW: FEASIBILITY CHECK BEFORE RETURNING
@@ -884,4 +882,4 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
             print("✅ INSTANCE IS FEASIBLE - PROCEEDING WITH OPTIMIZATION".center(100))
             print("=" * 100 + "\n")
 
-    return requirements_dict, entry_day_dict, Max_t, P, D, D_planning, D_full, list(range(1, T + 1)), M_p, W_coeff
+    return requirements_dict, entry_day_dict, Max_t, P, D, D_planning, D_full, list(range(1, T + 1)), M_p, W_coeff, drg_dict

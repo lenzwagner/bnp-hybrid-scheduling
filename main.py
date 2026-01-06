@@ -8,7 +8,7 @@ from Utils.extra_values import calculate_extra_metrics
 
 logger = get_logger(__name__)
 
-def main(allow_gaps=False, use_warmstart=True):
+def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     """
     Main function to run Column Generation or Branch-and-Price algorithm.
     Labeling Algorithm Performance Optimizations:
@@ -127,46 +127,13 @@ def main(allow_gaps=False, use_warmstart=True):
     # - [ ] Add gap indicator g_dict to inc_sol and results_df storage.
     # - [ ] Test with capacity-constrained instances to verify gaps appear.
 
-    # ===================================================================================
-    # TODO: LABELING WARM-START OPTIMIZATIONS
-    # ===================================================================================
-    # 
-    # Context:
-    # --------
-    # The labeling algorithm (DP for pricing) is the computational bottleneck.
-    # Unlike LP solvers (Gurobi) which can warm-start from a previous basis,
-    # the current labeling implementation starts fresh for each pricing call.
-    #
-    # IMPLEMENTED:
-    # - Label Recycling: use_label_recycling (shares prefix states among recipients)
-    # - Enhanced Lower Bound: includes completion cost for tighter pruning
-    #
-    # REMAINING OPTIMIZATIONS:
-    #
-    # OPTIMIZATION 1: State Caching Between CG Iterations (MEDIUM)
-    # -------------------------------------------------------------
-    # What: Cache Pareto-frontier states when duals change only slightly.
-    # Benefit: Skip full DP when duals are stable (common in later CG iterations)
-    # ⚠️ Note: Requires careful RC revalidation to maintain optimality!
-    # Estimated speedup: 20-40% after iteration 5+
-    #
-    # OPTIMIZATION 2: Incremental DP for Branching (ADVANCED)
-    # --------------------------------------------------------
-    # What: Reuse parent node's states in child nodes after branching.
-    # ⚠️ Note: MP/SP branching on λ-variables (not x) makes state-sharing complex!
-    # Estimated speedup: 30-50% in child nodes
-    # Complexity: HIGH (requires significant refactoring)
-    # ===================================================================================
-
-
     labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 'use_parallel_pricing': use_parallel_pricing,
                      'n_pricing_workers': n_pricing_workers,
                      'debug_mode': True, 'use_apriori_pruning': False, 'use_pure_dp_optimization': True,
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
                      'use_numba_labeling': True,
-                     'allow_gaps': allow_gaps,  # Use function parameter
-                     'use_label_recycling': False}
+                     'allow_gaps': allow_gaps, 'use_label_recycling': False}
 
     # ===========================
     # CONFIGURATION SUMMARY
@@ -218,7 +185,8 @@ def main(allow_gaps=False, use_warmstart=True):
         save_lps=save_lps,
         verbose=verbose_output,
         deterministic=deterministic,
-        use_warmstart=use_warmstart
+        use_warmstart=use_warmstart,
+        dual_smoothing_alpha=dual_smoothing_alpha
     )
 
     # Setup
@@ -349,7 +317,7 @@ def main(allow_gaps=False, use_warmstart=True):
         # Pack data for Post
         p_derived_data = {'e': p_e, 'Y': p_Y, 'theta': p_theta, 'omega': p_omega, 'g': p_g, 'z': p_z}
         p_start = D_focus + 1
-        p_end = 200
+        p_end = max(cg_solver.D_Ext)
 
         p_metrics = calculate_extra_metrics(cg_solver, inc_sol, cg_solver.P_Post, p_derived_data, cg_solver.T, start_day=p_start, end_day=p_end)
         
@@ -423,6 +391,25 @@ def main(allow_gaps=False, use_warmstart=True):
         print(f"Y: {p_Y}")
         print(f"theta: {p_theta}")
 
+    # ==============================================================================
+    # COMBINED METRICS (Focus + Post together)
+    # ==============================================================================
+    
+    # DRG patient lists combined (Focus + Post)
+    drg_patients_E65A = f_metrics.get('drg_patients', {}).get('E65A', []) + p_metrics.get('drg_patients', {}).get('E65A', [])
+    drg_patients_E65B = f_metrics.get('drg_patients', {}).get('E65B', []) + p_metrics.get('drg_patients', {}).get('E65B', [])
+    drg_patients_E65C = f_metrics.get('drg_patients', {}).get('E65C', []) + p_metrics.get('drg_patients', {}).get('E65C', [])
+    
+    # Continuity violations combined (Focus + Post)
+    combined_continuity_violations = f_metrics.get('continuity_violations', []) + p_metrics.get('continuity_violations', [])
+    
+    # Patients per therapist combined (Focus + Post)
+    # {therapist_id: count_of_patients}
+    from collections import Counter
+    f_ppt = f_metrics.get('patients_per_therapist', {})
+    p_ppt = p_metrics.get('patients_per_therapist', {})
+    combined_patients_per_therapist = dict(Counter(f_ppt) + Counter(p_ppt))
+
     # Add derived variables to DataFrame row
     new_row_data = {
          # Focus
@@ -435,7 +422,14 @@ def main(allow_gaps=False, use_warmstart=True):
         'post_omega': p_omega, 'post_g': p_g, 'post_z': p_z,
         # Add Extra Metrics with prefixes
         **{f"focus_{k}": v for k, v in f_metrics.items()},
-        **{f"post_{k}": v for k, v in p_metrics.items()}
+        **{f"post_{k}": v for k, v in p_metrics.items()},
+        # Combined metrics (not split by Focus/Post)
+        'drg_patients_E65A': drg_patients_E65A,
+        'drg_patients_E65B': drg_patients_E65B,
+        'drg_patients_E65C': drg_patients_E65C,
+        'combined_continuity_violations': combined_continuity_violations,
+        'combined_num_continuity_violations': len(combined_continuity_violations),
+        'combined_patients_per_therapist': combined_patients_per_therapist,
     }
     
     # ===========================
@@ -636,7 +630,7 @@ def main(allow_gaps=False, use_warmstart=True):
     print("\n" + "=" * 100)
     print(" RESULTS DATAFRAME ".center(100, "="))
     print("=" * 100)
-    print(results_df.to_string())
+    #print(results_df.to_string())
     print("=" * 100 + "\n")
 
     # ===========================
@@ -645,9 +639,7 @@ def main(allow_gaps=False, use_warmstart=True):
     # Old derived variable block removed as it is now integrated above
     pass
 
-    print(cg_solver.Max_t, cg_solver.Max_t_cg)
-
     return results
 
 if __name__ == "__main__":
-    results = main(allow_gaps=False, use_warmstart=True)  # Set use_warmstart=False to disable
+    results = main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None)  # Set alpha=None to disable
