@@ -20,7 +20,7 @@ class ColumnGeneration:
     def __init__(self, seed, app_data, T, D_focus, max_itr=100, threshold=1e-5,
                  pttr='medium', show_plots=False, pricing_filtering=True, therapist_agg=False,
                  max_stagnation_itr=5, stagnation_threshold=1e-4, learn_method='pwl', callback_after_iteration=None,
-                 save_lps=True, verbose=True, deterministic=False):
+                 save_lps=True, verbose=True, deterministic=False, use_warmstart=True):
         """
         Initialize Column Generation solver.
 
@@ -59,6 +59,7 @@ class ColumnGeneration:
         self.save_lps = save_lps
         self.verbose = verbose
         self.deterministic = deterministic
+        self.use_warmstart = use_warmstart
 
         # Initialize random seed
         random.seed(seed)
@@ -227,7 +228,7 @@ class ColumnGeneration:
             print("[Setup] Building master problem...")
         self.master = MasterProblem_d(
             self.data, self.Max_t_cg, self.Nr_agg, self.Req_agg, self.pre_x, self.E_dict,
-            verbose=self.verbose, deterministic=self.deterministic
+            verbose=self.verbose, deterministic=self.deterministic, use_warmstart=self.use_warmstart
         )
         self.master.buildModel()
         self.master.startSol(self.start_x, self.start_los)

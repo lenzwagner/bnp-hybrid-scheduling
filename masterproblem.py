@@ -2,7 +2,7 @@ import gurobipy as gu
 from Utils.Generell.utils import *
 
 class MasterProblem_d:
-    def __init__(self, df, T_Max, Nr_agg, Req, pre_x, E_dict, verbose=False, deterministic=False):
+    def __init__(self, df, T_Max, Nr_agg, Req, pre_x, E_dict, verbose=False, deterministic=False, use_warmstart=True):
         self.P_Full = df['P_Full'].dropna().astype(int).unique().tolist()
         self.P_Pre = df['P_Pre'].dropna().astype(int).unique().tolist()
         self.P_Join = df['P_Join'].dropna().astype(int).unique().tolist()
@@ -44,6 +44,7 @@ class MasterProblem_d:
         self.all_patterns = {} # Stores path_pattern for reconstruction
         self.aggregated = defaultdict(int)
         self.verbose = verbose
+        self.use_warmstart = use_warmstart
         for (p, t, d), value in self.pre_x.items():
             self.aggregated[(t, d)] += value
 
@@ -115,9 +116,24 @@ class MasterProblem_d:
 
     def solRelModel(self):
         self.Model.Params.OutputFlag = 0 if self.verbose else 0
-        self.Model.Params.Method = 2
         self._solve_counter += 1
 
+        # Warm-Start Optimization (optional):
+        # - First solve: Barrier (Method=2) - good for fresh LPs
+        # - Subsequent solves: Dual Simplex (Method=1) - leverages basis warm-start
+        if self._solve_counter == 1 and self.verbose:
+            print(f"    [RMP] Warm-Start: {'ENABLED' if self.use_warmstart else 'DISABLED'}")
+        
+        if self.use_warmstart:
+            if self._solve_counter == 1:
+                self.Model.Params.Method = 2  # Barrier for first solve
+            else:
+                self.Model.Params.Method = 1  # Dual Simplex for warm-start
+                self.Model.Params.LPWarmStart = 2  # Use provided start vectors
+        else:
+            self.Model.Params.Method = 2  # Always Barrier if warm-start disabled
+
+        # Relax to LP and restore branching bounds
         for var in self.Model.getVars():
             var.VType = gu.GRB.CONTINUOUS
 
@@ -131,9 +147,6 @@ class MasterProblem_d:
                           f"LB={var.LB}, UB={var.UB}")
             else:
                 var.LB = 0.0
-
-        if self._solve_counter > 1:
-            self.Model.Params.LPWarmStart = 2
 
         self.Model.optimize()
         if self.Model.status != gu.GRB.OPTIMAL:

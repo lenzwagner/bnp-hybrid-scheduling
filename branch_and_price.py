@@ -2541,7 +2541,8 @@ class BranchAndPrice:
             self.cg_solver.Nr_agg,
             self.cg_solver.Req_agg,
             self.cg_solver.pre_x,
-            self.cg_solver.E_dict
+            self.cg_solver.E_dict,
+            use_warmstart=self.cg_solver.use_warmstart
         )
 
         # Build model with start sol (creates basic constraints)

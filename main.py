@@ -8,7 +8,7 @@ from Utils.extra_values import calculate_extra_metrics
 
 logger = get_logger(__name__)
 
-def main(allow_gaps=False):
+def main(allow_gaps=False, use_warmstart=True):
     """
     Main function to run Column Generation or Branch-and-Price algorithm.
     Labeling Algorithm Performance Optimizations:
@@ -217,7 +217,8 @@ def main(allow_gaps=False):
         learn_method=learn_method,
         save_lps=save_lps,
         verbose=verbose_output,
-        deterministic=deterministic
+        deterministic=deterministic,
+        use_warmstart=use_warmstart
     )
 
     # Setup
@@ -649,4 +650,4 @@ def main(allow_gaps=False):
     return results
 
 if __name__ == "__main__":
-    results = main(allow_gaps=False)  # Set to True for gap support
+    results = main(allow_gaps=False, use_warmstart=True)  # Set use_warmstart=False to disable
