@@ -5,8 +5,76 @@ from branch_and_price import BranchAndPrice
 from logging_config import setup_multi_level_logging, get_logger
 from Utils.derived_vars import compute_derived_variables
 from Utils.extra_values import calculate_extra_metrics
+from collections import defaultdict
 
 logger = get_logger(__name__)
+
+
+def disaggregate_solution(inc_sol, profile_to_all_patients, global_solutions):
+    """
+    Convert profile-based solution to original patient IDs.
+    
+    For each profile with Nr_agg > 1:
+    1. Find active columns (lambda=1) for this profile from inc_sol
+    2. Get schedules from global_solutions for each column
+    3. Assign one schedule to each original patient (round-robin)
+    
+    Args:
+        inc_sol: Incumbent solution dict with 'x', 'y', 'LOS', etc.
+        profile_to_all_patients: {profile_id: [original_patient_ids]}
+        global_solutions: Global solutions dict containing all column data
+        
+    Returns:
+        Tuple of (disagg_x, disagg_y, disagg_los) with original patient IDs
+    """
+    disagg_x = {}
+    disagg_y = {}
+    disagg_los = {}
+    
+    # Get active solution dicts
+    x_dict = inc_sol.get('x', {})
+    y_dict = inc_sol.get('y', {})
+    los_dict = inc_sol.get('LOS', {})
+    
+    # Group active columns by profile
+    # x_dict keys are (profile, therapist, day, col_id)
+    active_cols_by_profile = defaultdict(list)
+    
+    for key in x_dict.keys():
+        if len(key) == 4:
+            profile_id, t, d, col_id = key
+            if col_id not in active_cols_by_profile[profile_id]:
+                active_cols_by_profile[profile_id].append(col_id)
+    
+    # For each profile, assign columns to original patients
+    for profile_id, original_patients in profile_to_all_patients.items():
+        active_cols = active_cols_by_profile.get(profile_id, [])
+        
+        if not active_cols:
+            # No active columns for this profile, skip
+            continue
+        
+        # Assign columns to patients round-robin
+        for i, patient_id in enumerate(original_patients):
+            col_idx = i % len(active_cols)
+            assigned_col = active_cols[col_idx]
+            
+            # Copy x values for this patient from the assigned column
+            for (p, t, d, c), val in x_dict.items():
+                if p == profile_id and c == assigned_col and val > 0.5:
+                    disagg_x[(patient_id, t, d)] = val
+            
+            # Copy y values
+            for (p, d, c), val in y_dict.items():
+                if p == profile_id and c == assigned_col and val > 0.5:
+                    disagg_y[(patient_id, d)] = val
+            
+            # Copy LOS value
+            for (p, c), val in los_dict.items():
+                if p == profile_id and c == assigned_col:
+                    disagg_los[patient_id] = val
+
+    return disagg_x, disagg_y, disagg_los
 
 def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     """
@@ -294,102 +362,102 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     if use_branch_and_price and results.get('incumbent_solution'):
         inc_sol = results['incumbent_solution']
         
-        # Calculate derived variables for Focus Patients
+        # ==============================================================================
+        # DISAGGREGATION: Convert profile-based solution to original patient IDs
+        # ==============================================================================
+        print("\n" + "=" * 100)
+        print(" DISAGGREGATING SOLUTION TO ORIGINAL PATIENT IDs ".center(100, "="))
+        print("=" * 100)
+        
+        disagg_x, disagg_y, disagg_los = disaggregate_solution(
+            inc_sol, 
+            cg_solver.profile_to_all_patients,
+            cg_solver.global_solutions
+        )
+        
+
+        
+        # Create a "virtual" solution dict with disaggregated values
+        # This will be passed to compute_derived_variables instead of inc_sol
+        disagg_sol = {
+            'x': disagg_x,
+            'y': disagg_y,
+            'LOS': disagg_los,
+        }
+        
+        # We also need to define the lists of ORIGINAL patients for Focus and Post groups
+        original_P_F = []
+        for profile_id in cg_solver.P_F:
+            if profile_id in cg_solver.profile_to_all_patients:
+                original_P_F.extend(cg_solver.profile_to_all_patients[profile_id])
+                
+        original_P_Post = []
+        for profile_id in cg_solver.P_Post:
+            if profile_id in cg_solver.profile_to_all_patients:
+                original_P_Post.extend(cg_solver.profile_to_all_patients[profile_id])
+
+        # Calculate derived variables for Focus Patients using DISAGGREGATED data
         print("\n" + "-" * 100)
-        print(" COMPUTING DERIVED VARIABLES FOR FOCUS PATIENTS ".center(100, "-"))
+        print(" COMPUTING DERIVED VARIABLES FOR FOCUS PATIENTS (DISAGGREGATED) ".center(100, "-"))
         print("-" * 100)
-        f_e, f_Y, f_theta, f_omega, f_g, f_z = compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=cg_solver.P_F)
+        f_e, f_Y, f_theta, f_omega, f_g, f_z = compute_derived_variables(cg_solver, disagg_sol, app_data, patients_list=original_P_F)
         
         
-        # Calculate derived variables for Post Patients
+        # Calculate derived variables for Post Patients using DISAGGREGATED data
         print("\n" + "-" * 100)
-        print(" COMPUTING DERIVED VARIABLES FOR POST PATIENTS ".center(100, "-"))
+        print(" COMPUTING DERIVED VARIABLES FOR POST PATIENTS (DISAGGREGATED) ".center(100, "-"))
         print("-" * 100)
-        p_e, p_Y, p_theta, p_omega, p_g, p_z = compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=cg_solver.P_Post)
+        p_e, p_Y, p_theta, p_omega, p_g, p_z = compute_derived_variables(cg_solver, disagg_sol, app_data, patients_list=original_P_Post)
         
         # Calculate EXTRA METRICS (E.2 - E.8)
         # Pack data for Focus
         f_derived_data = {'e': f_e, 'Y': f_Y, 'theta': f_theta, 'omega': f_omega, 'g': f_g, 'z': f_z}
+        print("\n" + "*" * 100)
+        print(" CALCULATING EXTRA METRICS FOR FOCUS PATIENTS ".center(100, "*"))
+        print("*" * 100)
         # Prepare Focus Horizon: Days 1 to D_focus
         f_start, f_end = 1, D_focus
-        f_metrics = calculate_extra_metrics(cg_solver, inc_sol, cg_solver.P_F, f_derived_data, cg_solver.T, start_day=f_start, end_day=f_end)
+        f_metrics = calculate_extra_metrics(cg_solver, disagg_sol, original_P_F, f_derived_data, cg_solver.T, start_day=f_start, end_day=f_end)
         
         # Pack data for Post
         p_derived_data = {'e': p_e, 'Y': p_Y, 'theta': p_theta, 'omega': p_omega, 'g': p_g, 'z': p_z}
+        print("\n" + "*" * 100)
+        print(" CALCULATING EXTRA METRICS FOR POST PATIENTS ".center(100, "*"))
+        print("*" * 100)
         p_start = D_focus + 1
         p_end = max(cg_solver.D_Ext)
 
-        p_metrics = calculate_extra_metrics(cg_solver, inc_sol, cg_solver.P_Post, p_derived_data, cg_solver.T, start_day=p_start, end_day=p_end)
+        p_metrics = calculate_extra_metrics(cg_solver, disagg_sol, original_P_Post, p_derived_data, cg_solver.T, start_day=p_start, end_day=p_end)
         
-        # Aggregate X and LOS variables (stripping col_id)
-        x_dict = inc_sol.get('x', {})
-        los_dict = inc_sol.get('LOS', {})
+        # Store disaggregated x and LOS for Excel output
+        # Filter x and LOS for Focus and Post patients
+        focus_x = {k: v for k, v in disagg_x.items() if k[0] in original_P_F}
+        focus_los = {k: v for k, v in disagg_los.items() if k in original_P_F}
         
-        agg_focus_x = {}
-        agg_post_x = {}
-        if x_dict:
-            for k, v in x_dict.items():
-                if len(k) >= 4: # (p, t, d, col_id)
-                    p, t_ther, d = k[0], k[1], k[2]
-                    key = (p, t_ther, d)
-                    if p in cg_solver.P_F:
-                        agg_focus_x[key] = agg_focus_x.get(key, 0) + v
-                    elif p in cg_solver.P_Post:
-                        agg_post_x[key] = agg_post_x.get(key, 0) + v
+        post_x = {k: v for k, v in disagg_x.items() if k[0] in original_P_Post}
+        post_los = {k: v for k, v in disagg_los.items() if k in original_P_Post}
+        
+        # We need aggregator variables (just to match variable names expected below)
+        agg_focus_x = focus_x 
+        agg_post_x = post_x
+        agg_focus_los = focus_los
+        agg_post_los = post_los
+        
         # Calculate Total Columns Count
         total_columns = 0
         if cg_solver.master and hasattr(cg_solver.master, 'lmbda'):
             total_columns = len(cg_solver.master.lmbda)
-        
-        agg_focus_los = {}
-        agg_post_los = {}
-        if los_dict:
-             for k, v in los_dict.items():
-                p = k[0] if isinstance(k, tuple) else k
-                if p in cg_solver.P_F:
-                    agg_focus_los[p] = v
-                elif p in cg_solver.P_Post:
-                    agg_post_los[p] = v
 
-        # Build focus_y and post_y from raw_y
-        raw_y = inc_sol.get('y', {})
-        focus_y = {(p, d): 0.0 for p in cg_solver.P_F for d in cg_solver.D_Ext}
-        for k, v in raw_y.items():
-            p, d = k[0], k[1]
-            if p in cg_solver.P_F and abs(v - 1.0) < 1e-6:
-                focus_y[(p, d)] = 1.0
-        
-        post_y = {(p, d): 0.0 for p in cg_solver.P_Post for d in cg_solver.D_Ext}
-        for k, v in raw_y.items():
-            p, d = k[0], k[1]
-            if p in cg_solver.P_Post and abs(v - 1.0) < 1e-6:
-                post_y[(p, d)] = 1.0
+        # Initialize dummy dicts to be overwritten below
+        agg_focus_los = focus_los
+        agg_post_los = post_los
+
+        # Build focus_y and post_y from disagg_y
+        focus_y = {k: v for k, v in disagg_y.items() if k[0] in original_P_F}
+        post_y = {k: v for k, v in disagg_y.items() if k[0] in original_P_Post}
         
         # ========================================
-        # DEBUG OUTPUT - FOCUS PATIENTS
-        # ========================================
-        print("\n" + "=" * 100)
-        print(" FOCUS PATIENTS - SOLUTION DICTS ".center(100, "="))
-        print("=" * 100)
-        print(f"x: {agg_focus_x}")
-        print(f"y: {focus_y}")
-        print(f"LOS: {agg_focus_los}")
-        print(f"e: {f_e}")
-        print(f"Y: {f_Y}")
-        print(f"theta: {f_theta}")
-        
-        # ========================================
-        # DEBUG OUTPUT - POST PATIENTS
-        # ========================================
-        print("\n" + "=" * 100)
-        print(" POST PATIENTS - SOLUTION DICTS ".center(100, "="))
-        print("=" * 100)
-        print(f"x: {agg_post_x}")
-        print(f"y: {post_y}")
-        print(f"LOS: {agg_post_los}")
-        print(f"e: {p_e}")
-        print(f"Y: {p_Y}")
-        print(f"theta: {p_theta}")
+
 
     # ==============================================================================
     # COMBINED METRICS (Focus + Post together)
@@ -640,6 +708,7 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     pass
 
     return results
+
 
 if __name__ == "__main__":
     results = main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None)  # Set alpha=None to disable

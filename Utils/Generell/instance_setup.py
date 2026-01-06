@@ -125,11 +125,13 @@ def get_unique_combinations_and_list_with_dicts(R_p, Entry_p, P, filter_entry_ge
     Entry_p_c = {}
     Profile_patient_count = {}
     patient_to_profile_mapping = {}
+    profile_to_all_patients = {}  # NEW: Maps profile -> ALL original patients
 
     for idx, (combo, patients) in enumerate(unique_combinations.items(), start=1):
         R_p_c[idx] = combo[0]  # Stay Duration
         Entry_p_c[idx] = combo[1]  # Entry Date
         Profile_patient_count[idx] = len(patients)
+        profile_to_all_patients[idx] = patients  # Store ALL patients for this profile
 
         # Map each original patient to their profile
         for patient in patients:
@@ -145,7 +147,7 @@ def get_unique_combinations_and_list_with_dicts(R_p, Entry_p, P, filter_entry_ge
         for patient, profile in patient_to_profile_mapping.items():
             print(f"Patient {patient} -> Profile {profile}")
 
-    return N_c, R_p_c, Entry_p_c, Profile_patient_count, patient_to_profile_mapping
+    return N_c, R_p_c, Entry_p_c, Profile_patient_count, patient_to_profile_mapping, profile_to_all_patients
 
 def categorize_patients_full(Entry_p, D):
     """

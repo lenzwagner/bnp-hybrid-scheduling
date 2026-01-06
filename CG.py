@@ -131,7 +131,7 @@ class ColumnGeneration:
         # Create mappings
         if self.verbose:
             print("[Setup] Creating patient and therapist mappings...")
-        self.Nr, self.Req_agg, self.Entry_agg, self.Nr_agg, self.agg_to_patient = \
+        self.Nr, self.Req_agg, self.Entry_agg, self.Nr_agg, self.agg_to_patient, self.profile_to_all_patients = \
             get_unique_combinations_and_list_with_dicts(self.Req, self.Entry, self.P, verbose=self.verbose)
 
         self.P_Pre, self.P_F, self.P_Post, self.P_Join, self.E_dict = \

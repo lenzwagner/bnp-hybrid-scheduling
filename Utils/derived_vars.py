@@ -52,7 +52,13 @@ def compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=None):
     target_patients = patients_list if patients_list is not None else cg_solver.P_F
 
     for p in target_patients:
-        entry = cg_solver.Entry_agg.get(p, min(D_ext))
+        # Try to get entry from original patient dict first (if available), then aggregated
+        entry = None
+        if hasattr(cg_solver, 'Entry'):
+            entry = cg_solver.Entry.get(p)
+        
+        if entry is None:
+            entry = cg_solver.Entry_agg.get(p, min(D_ext))
         
         # Get LOS for this patient
         p_los = None

@@ -239,8 +239,12 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     all_consecutive_streaks = []
 
     for p in patients_list:
-        # Get entry day for this patient
-        entry_day = cg_solver.Entry_agg.get(p, 1)
+        # Robust Entry lookup
+        entry_day = 1
+        if hasattr(cg_solver, 'Entry') and p in cg_solver.Entry:
+             entry_day = cg_solver.Entry[p]
+        else:
+             entry_day = cg_solver.Entry_agg.get(p, 1)
 
         # Find last day with e=1 (discharge day)
         patient_e_days = [(d, e_dict.get((p, d), 0)) for d in sorted(set(d for (pi, d) in e_dict.keys() if pi == p))]
@@ -468,7 +472,12 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     theta_during_gaps = {}     # {p: [theta values during gaps]}
 
     for p in patients_list:
-        entry_day = cg_solver.Entry_agg.get(p, 1)
+        # Robust Entry lookup
+        entry_day = 1
+        if hasattr(cg_solver, 'Entry') and p in cg_solver.Entry:
+             entry_day = cg_solver.Entry[p]
+        else:
+             entry_day = cg_solver.Entry_agg.get(p, 1)
 
         # Find all days where e=1 for this patient
         eligible_days = sorted([d for (pi, d) in e_dict.keys() if pi == p and e_dict.get((pi, d), 0) == 1])
@@ -571,14 +580,22 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     drg_patients = {g: [] for g in drg_groups}  # List of profile IDs per DRG
 
     for p in patients_list:
-        drg = drg_agg.get(p, 'Unknown')
+        # Robust DRG lookup
+        drg = 'Unknown'
+        if hasattr(cg_solver, 'DRG') and p in cg_solver.DRG:
+             drg = cg_solver.DRG[p]
+        else:
+             drg = drg_agg.get(p, 'Unknown')
+             
         if drg not in drg_groups:
             continue
 
-        # Track which profiles belong to this DRG
+        # Track which profiles/patients belong to this DRG
         drg_patients[drg].append(p)
 
-        # Patient count (weighted by Nr_agg)
+        # Patient count (weighted by Nr_agg). 
+        # If disaggregated, p is patient ID and not in nr_agg, so returns 1 (correct).
+        # If aggregated, p is profile ID, returns count (correct).
         n_patients = nr_agg.get(p, 1)
         drg_patient_count[drg] += n_patients
 
@@ -586,8 +603,13 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
         los_val = patient_los.get(p, 0)
         drg_los_sum[drg] += los_val * n_patients
 
-        # Requirements sum
-        req_val = req_agg.get(p, 0)
+        # Robust Requirements lookup
+        req_val = 0
+        if hasattr(cg_solver, 'Req') and p in cg_solver.Req:
+            req_val = cg_solver.Req[p]
+        else:
+            req_val = req_agg.get(p, 0)
+            
         drg_req_sum[drg] += req_val * n_patients
 
         # Human sessions for this patient
@@ -655,7 +677,12 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     session_string = {}     # {p: "HAH..."} for easy pattern analysis
 
     for p in patients_list:
-        entry_day = cg_solver.Entry_agg.get(p, 1)
+        # Robust Entry lookup
+        entry_day = 1
+        if hasattr(cg_solver, 'Entry') and p in cg_solver.Entry:
+             entry_day = cg_solver.Entry[p]
+        else:
+             entry_day = cg_solver.Entry_agg.get(p, 1)
 
         # Find all days where e=1 for this patient
         eligible_days = sorted([d for (pi, d) in e_dict.keys() if pi == p and e_dict.get((pi, d), 0) == 1])
