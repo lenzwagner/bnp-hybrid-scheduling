@@ -219,6 +219,10 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['patient_peak_day_workload'] = patient_peak_day_workload
     metrics['patient_peak_util_pct'] = patient_peak_util
 
+    # Avg Human Sessions per Patient (Outcome View)
+    patient_avg_human_sessions = patient_N_human / len(patients_list) if patients_list else 0
+    metrics['patient_avg_human_sessions'] = patient_avg_human_sessions
+
     # ==============================================================================
     # E.3 AI LEARNING DYNAMICS METRICS
     # ==============================================================================
@@ -368,6 +372,7 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     print(f"  Peak Therapist Workload: {patient_peak_workload:.1f}")
     print(f"  Peak Day Workload:    {patient_peak_day_workload:.1f}")
     print(f"  Peak Period Util:     {patient_peak_util:.2f}%")
+    print(f"  Avg Human Sessions:   {metrics['patient_avg_human_sessions']:.2f}")
 
     print(f"\n{'='*80}")
     print(f" E.3 AI LEARNING DYNAMICS METRICS ".center(80, '='))
@@ -614,6 +619,11 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
             drg_avg_req[g] = None
             drg_ai_share[g] = None
 
+    # Calculate Global Average LoS
+    total_los = sum(patient_los.values())
+    avg_los = total_los / len(patients_list) if patients_list else 0
+    metrics['avg_los'] = avg_los
+
     # Store E.6 metrics
     metrics['drg_patients'] = drg_patients
     metrics['drg_patient_count'] = drg_patient_count
@@ -625,6 +635,9 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     print(f"\n{'='*80}")
     print(f" E.6 DRG-SPECIFIC METRICS ".center(80, '='))
     print(f"{'='*80}")
+    
+    print(f"\n--- Global (All Patients) ---")
+    print(f"  Avg LoS:             {metrics['avg_los']:.2f}")
 
     for g in drg_groups:
         count = drg_patient_count[g]

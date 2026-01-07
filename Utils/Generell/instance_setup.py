@@ -251,13 +251,30 @@ def generate_patient_data(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scena
     # Generate therapist availability schedule
     Max_t = {}
 
-    start_days = [1, 2, 6, 7]  # Paper: weekend capacity ≈ 50% of weekday
+    # Dynamic WE balancing logic (User provided)
+    target_we_ratio = (T * W_on) / 6
+    we_contribution = {}
+    for offset in range(7):
+        # Check WE coverage (Index 5=Sa, 6=So) in a standard cycle of W_on days
+        we_days = sum(1 for d in range(W_on) if (offset + d) % 7 >= 5)
+        we_contribution[offset] = we_days
+
+    assigned_offsets = []
+    current_we_sum = 0
     therapist_start_days = {}
 
-    for t in range(1, T + 1):
-        therapist_start_days[t] = start_days[(t - 1) % len(start_days)]
-        #print(f'Start_day t{t}: {therapist_start_days[t]}')
-        start_offset = therapist_start_days[t]  # e.g. d=1
+    start_candidates = list(we_contribution.keys())
+
+    for i in range(T):
+        # Select best offset to match cumulative target ratio
+        best_offset = min(start_candidates, 
+                         key=lambda s: abs((current_we_sum + we_contribution[s]) - (target_we_ratio * (i+1)/T)))
+        assigned_offsets.append(best_offset)
+        current_we_sum += we_contribution[best_offset]
+        therapist_start_days[i+1] = best_offset
+
+    for t_idx, start_offset in enumerate(assigned_offsets):
+        t = t_idx + 1
 
         for d in D_full:
 
@@ -602,13 +619,30 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     # Generate therapist availability schedule
     Max_t = {}
 
-    start_days = [1, 2, 6, 7]  # Paper: weekend capacity ≈ 50% of weekday
+    # Dynamic WE balancing logic (User provided)
+    target_we_ratio = (T * W_on) / 6
+    we_contribution = {}
+    for offset in range(7):
+        # Check WE coverage (Index 5=Sa, 6=So) in a standard cycle of W_on days
+        we_days = sum(1 for d in range(W_on) if (offset + d) % 7 >= 5)
+        we_contribution[offset] = we_days
+
+    assigned_offsets = []
+    current_we_sum = 0
     therapist_start_days = {}
 
-    for t in range(1, T + 1):
-        therapist_start_days[t] = start_days[(t - 1) % len(start_days)]
-        #print(f'Start_day t{t}: {therapist_start_days[t]}')
-        start_offset = therapist_start_days[t]  # e.g. d=1
+    start_candidates = list(we_contribution.keys())
+
+    for i in range(T):
+        # Select best offset to match cumulative target ratio
+        best_offset = min(start_candidates, 
+                         key=lambda s: abs((current_we_sum + we_contribution[s]) - (target_we_ratio * (i+1)/T)))
+        assigned_offsets.append(best_offset)
+        current_we_sum += we_contribution[best_offset]
+        therapist_start_days[i+1] = best_offset
+
+    for t_idx, start_offset in enumerate(assigned_offsets):
+        t = t_idx + 1
 
         for d in D_full:
 

@@ -54,7 +54,7 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     # ===========================
 
     # Random seed
-    seed = 12
+    seed = 13
 
     # Learning parameters
     app_data = {
