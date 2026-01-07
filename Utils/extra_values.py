@@ -86,6 +86,11 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
 
     # N_human (period): Σ x_{ijt} for t ∈ period
     period_N_human = sum(period_x.values())
+    period_N_human_total = period_N_human # Alias if we want total shown
+    
+    # NOTE: User requested Option 2: Subtract Pre-Patients from Capacity (Denominator)
+    # So N_human remains just the Focus/Post sessions.
+
 
     # N_AI (period): Σ y_{it} for t ∈ period
     period_N_AI = sum(period_y.values())
@@ -97,16 +102,26 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     period_ai_share = (period_N_AI / period_N_total * 100) if period_N_total > 0 else 0
     period_human_share = (period_N_human / period_N_total * 100) if period_N_total > 0 else 0
 
-    # C_total (period): Σ Q_{jt} for t ∈ period
+    # C_total (period): Σ Q_{jt} for t ∈ period - PRE_X USAGE
     period_C_total = 0
     if hasattr(cg_solver, 'Max_t'):
         for t_id in T:
             for d in period_range:
                 if (t_id, d) in cg_solver.Max_t:
                     period_C_total += cg_solver.Max_t[(t_id, d)]
+    
+    # SUBTRACT PRE-PATIENT LOAD FROM CAPACITY (Option 2)
+    period_C_net = period_C_total
+    pre_load_period = 0
+    if hasattr(cg_solver, 'pre_x'):
+        for (p, t, d), val in cg_solver.pre_x.items():
+            if d in period_range and val > 0.5:
+                pre_load_period += val
+        period_C_net = max(0, period_C_total - pre_load_period)
 
-    # Human Utilization (period)
-    period_human_util = (period_N_human / period_C_total * 100) if period_C_total > 0 else 0
+    # Human Utilization (period) = Focus/Post Sessions / (Gross Capacity - Pre Sessions)
+    period_human_util = (period_N_human / period_C_net * 100) if period_C_net > 0 else 0
+
 
     # Therapist Workload (period): Σ_i x_{ijt} for each j
     period_therapist_workload = defaultdict(float)
@@ -130,10 +145,76 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     period_day_utilization = {}
     for d in period_range:
         sessions_on_day = sum(val for (p, t, day), val in period_x.items() if day == d)
-        capacity_on_day = sum(cg_solver.Max_t.get((t_id, d), 0) for t_id in T) if hasattr(cg_solver, 'Max_t') else 0
-        if capacity_on_day > 0:
-            period_day_utilization[d] = sessions_on_day / capacity_on_day * 100
+        
+        # Calculate Net Capacity for the day
+        capacity_on_day_gross = sum(cg_solver.Max_t.get((t_id, d), 0) for t_id in T) if hasattr(cg_solver, 'Max_t') else 0
+        pre_load_on_day = 0
+        if hasattr(cg_solver, 'pre_x'):
+             pre_load_on_day = sum(val for (p, t, day), val in cg_solver.pre_x.items() if day == d)
+        
+        capacity_on_day_net = max(0, capacity_on_day_gross - pre_load_on_day)
+
+        if capacity_on_day_net > 0:
+            period_day_utilization[d] = sessions_on_day / capacity_on_day_net * 100
     period_peak_util = max(period_day_utilization.values()) if period_day_utilization else 0
+
+    # NEW: DETAILED PER-THERAPIST DAILY UTILIZATION (Net Capacity)
+    # 1. Calculate Util_{j,t} = Sessions_{j,t} / (Cap_{j,t} - Pre_{j,t})
+    therapist_daily_util_dict = defaultdict(dict) # {t: {d: util}}
+    therapist_daily_util_values = defaultdict(list) # {t: [utils]} for easy aggression
+    therapist_max_util = {}
+    therapist_avg_util = {}
+
+    for t_id in T:
+        for d in period_range:
+            # Gross Capacity
+            cap_gross = cg_solver.Max_t.get((t_id, d), 0) if hasattr(cg_solver, 'Max_t') else 0
+            
+            # Skip if therapist not working that day
+            if cap_gross <= 0:
+                continue
+
+            # Pre-Load
+            pre_load = 0
+            if hasattr(cg_solver, 'pre_x'):
+                pre_load = sum(val for (p, t, day), val in cg_solver.pre_x.items() if t == t_id and day == d)
+            
+            # Net Capacity
+            cap_net = max(0, cap_gross - pre_load)
+
+            # Focus/Post Load
+            # Optimized lookup: period_x is {(p,t,d): val}
+            # This inner loop is okay for small T/D but could be optimized if needed
+            load_focus = sum(val for (p, t, day), val in period_x.items() if t == t_id and day == d)
+
+            if cap_net > 0:
+                util = (load_focus / cap_net) * 100
+                therapist_daily_util_dict[t_id][d] = util
+                therapist_daily_util_values[t_id].append(util)
+            else:
+                # Capacity was fully consumed by Pre-Patients or 0 net capacity
+                if load_focus > 0:
+                     therapist_daily_util_dict[t_id][d] = float('inf')
+                     therapist_daily_util_values[t_id].append(float('inf'))
+                # else: ignore undefined utilization
+    
+    # Aggregating per therapist
+    for t_id in T:
+        utils = therapist_daily_util_values[t_id]
+        if utils:
+            therapist_max_util[t_id] = max(utils)
+            therapist_avg_util[t_id] = sum(utils) / len(utils)
+        else:
+            therapist_max_util[t_id] = 0.0
+            therapist_avg_util[t_id] = 0.0
+
+    # Calculate global average of Max Daily Util per Therapist (e.g., "Avg Peak Load per Therapist")
+    avg_peak_daily_load_per_therapist = sum(therapist_max_util.values()) / len(T) if T else 0
+
+    metrics['therapist_daily_util_dict'] = dict(therapist_daily_util_dict)
+    metrics['therapist_max_util'] = therapist_max_util
+    metrics['therapist_avg_util'] = therapist_avg_util
+
 
     # Store period metrics
     metrics['period_start_day'] = period_start
@@ -149,6 +230,9 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['period_peak_workload'] = period_peak_workload
     metrics['period_peak_day_workload'] = period_peak_day_workload
     metrics['period_peak_util_pct'] = period_peak_util
+    metrics['therapist_daily_util_dict'] = dict(therapist_daily_util_dict)
+    metrics['therapist_max_daily_util'] = therapist_max_util
+    metrics['therapist_avg_daily_util'] = therapist_avg_util
 
     # ==============================================================================
     # E.2 RESOURCE UTILIZATION METRICS - PATIENT SCOPE (patient_*)
@@ -156,6 +240,10 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
 
     # N_human (patient): Σ x_{ijt} for all sessions of these patients
     patient_N_human = sum(x_agg.values())
+    patient_N_human_total = patient_N_human
+    
+    # NOTE: Option 2 - No Pre-Patients in numerator.
+
 
     # N_AI (patient): Σ y_{it} for all sessions of these patients
     patient_N_AI = sum(y_agg.values())
@@ -167,16 +255,26 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     patient_ai_share = (patient_N_AI / patient_N_total * 100) if patient_N_total > 0 else 0
     patient_human_share = (patient_N_human / patient_N_total * 100) if patient_N_total > 0 else 0
 
-    # C_total (patient): Σ Q_{jt} for t ∈ patient_range
+    # C_total (patient): Σ Q_{jt} for t ∈ patient_range - PRE_X USAGE
     patient_C_total = 0
     if hasattr(cg_solver, 'Max_t'):
         for t_id in T:
             for d in patient_range:
                 if (t_id, d) in cg_solver.Max_t:
                     patient_C_total += cg_solver.Max_t[(t_id, d)]
+    
+    # SUBTRACT PRE-PATIENT LOAD FROM CAPACITY (Option 2)
+    patient_C_net = patient_C_total
+    pre_load_patient = 0
+    if hasattr(cg_solver, 'pre_x'):
+        for (p, t, d), val in cg_solver.pre_x.items():
+            if d in patient_range and val > 0.5:
+                pre_load_patient += val
+        patient_C_net = max(0, patient_C_total - pre_load_patient)
 
     # Human Utilization (patient)
-    patient_human_util = (patient_N_human / patient_C_total * 100) if patient_C_total > 0 else 0
+    patient_human_util = (patient_N_human / patient_C_net * 100) if patient_C_net > 0 else 0
+
 
     # Therapist Workload (patient)
     patient_therapist_workload = defaultdict(float)
@@ -219,6 +317,10 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['patient_peak_day_workload'] = patient_peak_day_workload
     metrics['patient_peak_util_pct'] = patient_peak_util
 
+    # Avg Human Sessions per Patient (Outcome View)
+    patient_avg_human_sessions = patient_N_human / len(patients_list) if patients_list else 0
+    metrics['patient_avg_human_sessions'] = patient_avg_human_sessions
+
     # ==============================================================================
     # E.3 AI LEARNING DYNAMICS METRICS
     # ==============================================================================
@@ -229,6 +331,8 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     # --- Per-Patient Dicts ---
     initial_theta = {}  # θ_{i,r_i} - effectiveness at admission
     final_theta = {}    # θ_{i,F_i} - effectiveness at discharge (last day with e=1)
+    max_theta = {}      # max_t θ_it
+    min_theta_at_first_ai = {} # min theta at first AI use
     ai_sessions_per_patient = {}  # Σ_t y_{it} per patient
     time_to_proficiency = {}  # min{t - r_i | θ_{it} > 0.7}
     max_consecutive_ai = {}   # longest streak of consecutive y=1 per patient
@@ -258,6 +362,24 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
 
         # Final Theta: θ_{i,F_i} (at discharge/last eligible day)
         final_theta[p] = theta_dict.get((p, last_eligible_day), 0.0)
+
+        # Max Theta per Patient
+        patient_thetas = [theta_dict.get((p, d), 0.0) for d in range(entry_day, last_eligible_day + 1)]
+        max_theta[p] = max(patient_thetas) if patient_thetas else 0.0
+
+        # Minimum Theta at First AI Use
+        # Find first day where y=1
+        first_ai_day = None
+        for d in range(entry_day, last_eligible_day + 1):
+            if y_agg.get((p, d), 0) > 0.5:
+                first_ai_day = d
+                break
+        
+        if first_ai_day is not None:
+            min_theta_at_first_ai[p] = theta_dict.get((p, first_ai_day), 0.0)
+        else:
+            min_theta_at_first_ai[p] = None
+
 
         # AI Sessions per Patient: Σ_t y_{it}
         patient_ai_count = sum(v for (pi, d), v in y_agg.items() if pi == p)
@@ -332,6 +454,8 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['final_theta'] = final_theta
     metrics['avg_final_theta'] = avg_final_theta
     metrics['avg_theta_when_ai_used'] = avg_theta_when_ai_used
+    metrics['max_theta'] = max_theta
+    metrics['min_theta_at_first_ai'] = min_theta_at_first_ai
     metrics['ai_sessions_per_patient'] = ai_sessions_per_patient
     metrics['avg_ai_sessions'] = avg_ai_sessions
     metrics['time_to_proficiency'] = time_to_proficiency
@@ -353,25 +477,34 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     print(f"  N_total:              {period_N_total:.1f}")
     print(f"  AI Share:             {period_ai_share:.2f}%")
     print(f"  Human Share:          {period_human_share:.2f}%")
-    print(f"  C_total (capacity):   {period_C_total}")
-    print(f"  Human Utilization:    {period_human_util:.2f}%")
+    print(f"  C_total (gross):      {period_C_total}")
+    print(f"  C_net (avail):        {period_C_net}")
+    print(f"  Human Utilization:    {period_human_util:.2f}% (of available capacity)")
     print(f"  Avg Therapist Workload: {period_avg_workload:.2f}")
     print(f"  Peak Therapist Workload: {period_peak_workload:.1f}")
     print(f"  Peak Day Workload:    {period_peak_day_workload:.1f}")
-    print(f"  Peak Period Util:     {period_peak_util:.2f}%")
+    print(f"  Peak Period Util:     {period_peak_util:.2f}% (System-wide Peak Day)")
+    print(f"  Avg Peak Daily Load:  {avg_peak_daily_load_per_therapist:.2f}% (Average of max daily util per therapist)")
+    
+    print(f"\n--- Detailed Therapist Daily Utilization (Net Capacity) ---")
+    print(f"  Max Daily Util per T: {therapist_max_util}")
+    print(f"  Avg Daily Util per T: {therapist_avg_util}")
+    print(f"  Full Daily Util Dict: {dict(therapist_daily_util_dict)}")
 
     print(f"\n--- PATIENT SCOPE (Days {patient_start}-{patient_end}) ---")
     print(f"  N_human:              {patient_N_human:.1f}")
     print(f"  N_AI:                 {patient_N_AI:.1f}")
     print(f"  N_total:              {patient_N_total:.1f}")
-    print(f"  AI Share:             {patient_ai_share:.2f}%")
+    print(f"  AI Share:             {period_ai_share:.2f}%")
     print(f"  Human Share:          {patient_human_share:.2f}%")
-    print(f"  C_total (capacity):   {patient_C_total}")
-    print(f"  Human Utilization:    {patient_human_util:.2f}%")
+    print(f"  C_total (gross):      {patient_C_total}")
+    print(f"  C_net (avail):        {patient_C_net}")
+    print(f"  Human Utilization:    {patient_human_util:.2f}% (of available capacity)")
     print(f"  Avg Therapist Workload: {patient_avg_workload:.2f}")
     print(f"  Peak Therapist Workload: {patient_peak_workload:.1f}")
     print(f"  Peak Day Workload:    {patient_peak_day_workload:.1f}")
     print(f"  Peak Period Util:     {patient_peak_util:.2f}%")
+    print(f"  Avg Human Sessions:   {metrics['patient_avg_human_sessions']:.2f}")
 
     print(f"\n{'='*80}")
     print(f" E.3 AI LEARNING DYNAMICS METRICS ".center(80, '='))
@@ -380,6 +513,8 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     print(f"\n--- Per-Patient Dicts ---")
     print(f"  Initial Theta:        {initial_theta}")
     print(f"  Final Theta:          {final_theta}")
+    print(f"  Max Theta:            {max_theta}")
+    print(f"  Min Theta (First AI): {min_theta_at_first_ai}")
     print(f"  AI Sessions/Patient:  {ai_sessions_per_patient}")
     print(f"  Time to Proficiency:  {time_to_proficiency}")
     print(f"  Max Consec AI:        {max_consecutive_ai}")
@@ -636,6 +771,11 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
             drg_avg_req[g] = None
             drg_ai_share[g] = None
 
+    # Calculate Global Average LoS
+    total_los = sum(patient_los.values())
+    avg_los = total_los / len(patients_list) if patients_list else 0
+    metrics['avg_los'] = avg_los
+
     # Store E.6 metrics
     metrics['drg_patients'] = drg_patients
     metrics['drg_patient_count'] = drg_patient_count
@@ -647,6 +787,9 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     print(f"\n{'='*80}")
     print(f" E.6 DRG-SPECIFIC METRICS ".center(80, '='))
     print(f"{'='*80}")
+
+    print(f"\n--- Global (All Patients) ---")
+    print(f"  Avg LoS:             {metrics['avg_los']:.2f}")
 
     for g in drg_groups:
         count = drg_patient_count[g]
