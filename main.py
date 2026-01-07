@@ -367,6 +367,7 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     save_pre_los = cg_solver.pre_los
     save_Entry = cg_solver.Entry_agg
     save_Req = cg_solver.Req_agg
+    save_E_dict = cg_solver.E_dict
 
 
     if use_branch_and_price and results.get('incumbent_solution'):
@@ -442,9 +443,17 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
                     disagg_pre_los_dict[p_orig] = p_hist_los
 
         original_P_Join = []
+        disagg_E_dict = {}
+
         for profile_id in cg_solver.P_Join:
             if profile_id in cg_solver.profile_to_all_patients:
-                original_P_Join.extend(cg_solver.profile_to_all_patients[profile_id])
+                patients = cg_solver.profile_to_all_patients[profile_id]
+                original_P_Join.extend(patients)
+                
+                # Disaggregate E_dict
+                p_e_val = cg_solver.E_dict.get(profile_id, 0)
+                for p_orig in patients:
+                    disagg_E_dict[p_orig] = p_e_val
 
         # Use original patient IDs for output
         save_P_F = original_P_F
@@ -453,6 +462,7 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
         save_P_Join = original_P_Join
         save_pre_x = disagg_pre_x_dict
         save_pre_los = disagg_pre_los_dict
+        save_E_dict = disagg_E_dict
 
         # Calculate derived variables for Focus Patients using DISAGGREGATED data
         print("\n" + "-" * 100)
@@ -604,7 +614,8 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
         'P_Post': save_P_Post,
         'P_Join': save_P_Join,
         'Nr_agg': cg_solver.Nr_agg,
-        'E_dict': cg_solver.E_dict,
+        'Nr_agg': cg_solver.Nr_agg,
+        'E_dict': save_E_dict,
         'Q_jt': cg_solver.Max_t,
         'Req': save_Req,
         'Entry': save_Entry,
