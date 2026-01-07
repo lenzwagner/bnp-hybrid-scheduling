@@ -224,7 +224,11 @@ class BranchAndPrice:
             'time_in_branching': 0.0,
             'time_to_first_incumbent': None,
             # Pattern size counts (SP branching only)
-            'pattern_size_counts': {}  # {size: count} e.g. {1: 5, 2: 3} means 5 patterns of size 1, 3 of size 2
+            'pattern_size_counts': {},  # {size: count} e.g. {1: 5, 2: 3} means 5 patterns of size 1, 3 of size 2
+            # Additional metrics
+            'max_tree_depth': 0,  # Maximum depth reached in the search tree
+            'nodes_pruned': 0,  # Number of nodes pruned by bound or infeasibility
+            'integer_solutions_found': 0  # Number of times an integer solution was found
         }
 
         # Timing
@@ -510,6 +514,7 @@ class BranchAndPrice:
         if is_integral:
             root_node.status = 'integral'
             root_node.fathom_reason = 'integral'
+            self.stats['integer_solutions_found'] += 1
             self.logger.info(f"\n✅ ROOT NODE IS INTEGRAL (LP)!")
         else:
             root_node.status = 'solved'
@@ -820,7 +825,10 @@ class BranchAndPrice:
             self.logger.info(f"✅ Root node fathomed: {root_node.fathom_reason}")
             self.logger.info(f"   Solution is optimal!\n")
             self.stats['nodes_fathomed'] = 1
+            if 'by bound' in root_node.fathom_reason.lower() or 'infeasible' in root_node.fathom_reason.lower():
+                self.stats['nodes_pruned'] += 1  # Track pruned nodes
             self.stats['tree_complete'] = True  # Root was fathomed, so tree is complete
+            self.stats['max_tree_depth'] = max(self.stats['max_tree_depth'], 0)  # Root is depth 0
             # When tree is complete (only root node), lower bound equals incumbent
             if self.incumbent < float('inf'):
                 self.best_lp_bound = self.incumbent
@@ -1019,6 +1027,7 @@ class BranchAndPrice:
                     current_node.status = 'fathomed'
                     current_node.fathom_reason = 'error'
                     self.stats['nodes_fathomed'] += 1
+                    self.stats['nodes_pruned'] += 1  # Error counts as pruning
                     continue
             else:
                 # Node was already solved - retrieve stored values
@@ -1036,6 +1045,10 @@ class BranchAndPrice:
                 print(f"\n  🔧 Rebuilding master for Node {current_node_id, current_node.node_id} to extract lambda values...")
                 master = self._build_master_for_node(current_node)
                 master.solRelModel()
+
+                # Track max tree depth
+                self.stats['max_tree_depth'] = max(self.stats['max_tree_depth'], current_node.depth)
+
                 if self.save_lps:
                     master.Model.write(f"LPs/MP/SOLs/new_node_{current_node.node_id}.sol")
                     master.Model.write(f"LPs/MP/LPs/new_node_{current_node.node_id}.lp")
@@ -1122,6 +1135,9 @@ class BranchAndPrice:
 
                 self.logger.info(f"✅ Node {current_node_id} fathomed: {current_node.fathom_reason}")
                 self.stats['nodes_fathomed'] += 1
+                # Track pruned nodes (by bound or infeasibility)
+                if 'by bound' in current_node.fathom_reason.lower() or 'infeasible' in current_node.fathom_reason.lower():
+                    self.stats['nodes_pruned'] += 1
 
                 # Print current status
                 self.logger.info(f"\n   Status after fathoming:")
@@ -1151,6 +1167,7 @@ class BranchAndPrice:
                 current_node.status = 'fathomed'
                 current_node.fathom_reason = 'no_branching_candidate'
                 self.stats['nodes_fathomed'] += 1
+                self.stats['nodes_pruned'] += 1  # No branching candidate -> prune
                 continue
 
             # ========================================
@@ -1314,6 +1331,9 @@ class BranchAndPrice:
         self.logger.info(f"Statistics:")
         self.logger.info(f"  Nodes Explored:   {self.stats['nodes_explored']}")
         self.logger.info(f"  Nodes Fathomed:   {self.stats['nodes_fathomed']}")
+        self.logger.info(f"  Nodes Pruned:     {self.stats['nodes_pruned']}")
+        self.logger.info(f"  Max Tree Depth:   {self.stats['max_tree_depth']}")
+        self.logger.info(f"  Integer Solutions: {self.stats['integer_solutions_found']}")
         self.logger.info(f"  CG Iterations:    {self.stats['total_cg_iterations']}")
         self.logger.info(f"  IP Solves:        {self.stats['ip_solves']}")
         self.logger.info(f"  Incumbent Updates: {self.stats['incumbent_updates']}")
@@ -1381,6 +1401,10 @@ class BranchAndPrice:
             'time_overhead': time_overhead,
             # Pattern size counts (SP only, None for MP)
             'pattern_size_counts': self.stats['pattern_size_counts'] if self.branching_strategy == 'sp' else None,
+            # Additional BnP metrics
+            'max_tree_depth': self.stats['max_tree_depth'],
+            'nodes_pruned': self.stats['nodes_pruned'],
+            'integer_solutions_found': self.stats['integer_solutions_found'],
             # Final solution
             'incumbent_solution': self.incumbent_solution
         }
@@ -3681,6 +3705,9 @@ class BranchAndPrice:
                         self.cg_solver.global_solutions,
                         self.cg_solver.app_data, None
                     )
+                    self.incumbent_node_id = 0 # Heuristic solution is not tied to a specific node
+                    self.stats['integer_solutions_found'] += 1  # Track integer solution
+                    self.stats['max_tree_depth'] = max(self.stats['max_tree_depth'], 0) # Heuristic is at depth 0 (global)
                     lambda_assignments = {}
                     for (p, a), var in master.lmbda.items():
                         if var.X > 1e-6:
