@@ -6,6 +6,7 @@ import gurobipy as gu
 import copy
 import logging
 import os
+import threading
 
 
 # ============================================================================
@@ -181,6 +182,13 @@ class BranchAndPrice:
         self.use_numba_labeling = label_dict['use_numba_labeling'] if label_dict is not None else False
         self.allow_gaps = label_dict.get('allow_gaps', False) if label_dict is not None else False
         self.use_label_recycling = label_dict.get('use_label_recycling', False) if label_dict is not None else False
+        
+        # Parallel Tree Exploration Configuration
+        self.use_parallel_tree = label_dict.get('use_parallel_tree', False) if label_dict is not None else False
+        self.n_tree_workers = label_dict.get('n_tree_workers', 1) if label_dict is not None else 1
+        
+        if self.use_parallel_tree and self.n_tree_workers > 1:
+            self.logger.info(f"✓ Parallel tree exploration enabled with {self.n_tree_workers} worker threads")
         
         # Create persistent multiprocessing pool
         self.pricing_pool = None
@@ -875,6 +883,25 @@ class BranchAndPrice:
         self.stats['nodes_branched'] += 1
 
         # ========================================
+        # PHASE 2: DISPATCH TO PARALLEL OR SEQUENTIAL TREE EXPLORATION
+        # ========================================
+        if self.use_parallel_tree and self.n_tree_workers > 1:
+            self.logger.info(f"\n{'=' * 100}")
+            self.logger.info(" PARALLEL TREE EXPLORATION ".center(100, "="))
+            self.logger.info(f"{'=' * 100}")
+            self.logger.info(f"Using {self.n_tree_workers} worker threads\n")
+            return self._solve_parallel(time_limit, max_nodes)
+        else:
+            # Use sequential implementation (current code)
+            return self._solve_sequential(time_limit, max_nodes)
+
+    def _solve_sequential(self, time_limit, max_nodes):
+        """
+        Sequential tree exploration (original implementation).
+        
+        This is the current while-loop based exploration, refactored into its own method.
+        """
+        # ========================================
         # PHASE 2: MAIN BRANCH-AND-PRICE LOOP
         # ========================================
         self.logger.info(f"\n{'=' * 100}")
@@ -1261,7 +1288,8 @@ class BranchAndPrice:
             print(f"║ 📊 BOTH CHILDREN WILL BE SOLVED IMMEDIATELY WITH FULL CG".ljust(99) + "║")
             print("╚" + "═" * 98 + "╝\n")
 
-            # Create child nodes
+            # Create child nodes (with timing)
+            branching_start = time.time()
             if branching_type == 'mp':
                 left_child, right_child = self.branch_on_mp_variable(current_node, branching_info)
             else:  # 'sp'
@@ -1271,6 +1299,9 @@ class BranchAndPrice:
                 if pattern_size not in self.stats['pattern_size_counts']:
                     self.stats['pattern_size_counts'][pattern_size] = 0
                 self.stats['pattern_size_counts'][pattern_size] += 1
+            
+            # Record branching time
+            self.stats['time_in_branching'] += time.time() - branching_start
 
             # Mark current node as branched
             current_node.status = 'branched'
@@ -1303,6 +1334,141 @@ class BranchAndPrice:
             self.logger.info(f"⏱️  Time limit reached")
             self.logger.info(f"   {len(self.open_nodes)} nodes remain open")
 
+        self._finalize_and_print_results()
+        self._cleanup_pricing_pool()
+        return self._get_results_dict()
+
+    def _solve_parallel(self, time_limit, max_nodes):
+        """
+        Parallel tree exploration using multiple worker threads.
+        
+        This method creates a thread-safe shared state manager and spawns
+        worker threads to process nodes concurrently from the open queue.
+        
+        Args:
+            time_limit: Maximum time in seconds
+            max_nodes: Maximum number of nodes to explore
+            
+        Returns:
+            dict: Results dictionary
+        """
+        from thread_safe_state import ThreadSafeSharedState
+        import time as time_module
+        
+        self.logger.info(f"\n{'=' * 100}")
+        self.logger.info(" INITIALIZING PARALLEL TREE EXPLORATION ".center(100, "="))
+        self.logger.info(f"{'=' * 100}\n")
+        
+        # Create shared state manager
+        shared_state = ThreadSafeSharedState(
+            search_strategy=self.search_strategy,
+            initial_stats=self.stats,
+            initial_nodes=self.nodes
+        )
+        
+        # Copy current state to shared
+        shared_state.incumbent = self.incumbent
+        shared_state.incumbent_solution = self.incumbent_solution
+        shared_state.incumbent_lambdas = self.incumbent_lambdas
+        shared_state.best_lp_bound = self.best_lp_bound
+        shared_state.gap = self.gap
+        shared_state.open_nodes = self.open_nodes.copy()
+        
+        self.logger.info(f"Initial state:")
+        self.logger.info(f"  Incumbent: {shared_state.incumbent:.6f}")
+        self.logger.info(f"  Best LB:   {shared_state.best_lp_bound:.6f}")
+        self.logger.info(f"  Open nodes: {len(shared_state.open_nodes)}")
+        self.logger.info(f"  Workers:   {self.n_tree_workers}\n")
+        
+        # Create worker threads
+        workers = []
+        threads = []
+        
+        for i in range(self.n_tree_workers):
+            worker = _NodeWorker(i, self, shared_state)
+            thread = threading.Thread(target=worker.run, name=f"Worker-{i}")
+            workers.append(worker)
+            threads.append(thread)
+        
+        # Start all workers
+        start_time = time_module.time()
+        self.logger.info(f"{'=' * 100}")
+        self.logger.info(" STARTING WORKER THREADS ".center(100, "="))
+        self.logger.info(f"{'=' * 100}\n")
+        
+        for thread in threads:
+            thread.start()
+            self.logger.info(f"Started {thread.name}")
+        
+        # Monitor progress
+        last_report_time = start_time
+        report_interval = 10.0  # Report every 10 seconds
+        
+        while any(t.is_alive() for t in threads):
+            time_module.sleep(1.0)
+            
+            # Check termination conditions
+            elapsed = time_module.time() - start_time
+            
+            # Periodic progress report
+            if time_module.time() - last_report_time >= report_interval:
+                snapshot = shared_state.get_state_snapshot()
+                self.logger.info(f"\n{'─' * 100}")
+                self.logger.info(f" PROGRESS REPORT (T+{elapsed:.1f}s) ".center(100, "─"))
+                self.logger.info(f"{'─' * 100}")
+                self.logger.info(f"  Incumbent:      {snapshot['incumbent']:.6f}")
+                self.logger.info(f"  Best LB:        {snapshot['best_lp_bound']:.6f}")
+                self.logger.info(f"  Gap:            {snapshot['gap']:.4%}")
+                self.logger.info(f"  Nodes explored: {snapshot['nodes_explored']}")
+                self.logger.info(f"  Nodes fathomed: {snapshot['nodes_fathomed']}")
+                self.logger.info(f"  Nodes branched: {snapshot['nodes_branched']}")
+                self.logger.info(f"  Queue size:     {snapshot['queue_size']}")
+                active_threads = sum(1 for t in threads if t.is_alive())
+                self.logger.info(f"  Active workers: {active_threads}/{self.n_tree_workers}")
+                self.logger.info(f"{'─' * 100}\n")
+                last_report_time = time_module.time()
+            
+            if elapsed > time_limit:
+                self.logger.info(f"\n⏱️  Time limit reached: {elapsed:.2f}s > {time_limit}s")
+                self.logger.info("Requesting graceful shutdown...\n")
+                shared_state.request_shutdown()
+                break
+            
+            if shared_state.stats['nodes_explored'] >= max_nodes:
+                self.logger.info(f"\n📊 Node limit reached: {shared_state.stats['nodes_explored']} >= {max_nodes}")
+                self.logger.info("Requesting graceful shutdown...\n")
+                shared_state.request_shutdown()
+                break
+        
+        # Wait for all workers to finish
+        self.logger.info(f"\n{'=' * 100}")
+        self.logger.info(" WAITING FOR WORKERS TO COMPLETE ".center(100, "="))
+        self.logger.info(f"{'=' * 100}\n")
+        
+        for i, thread in enumerate(threads):
+            thread.join(timeout=10)
+            if thread.is_alive():
+                self.logger.warning(f"Worker-{i} did not terminate gracefully")
+            else:
+                self.logger.info(f"Worker-{i} completed ({workers[i].nodes_processed} nodes)")
+        
+        # Copy shared state back to instance
+        self.incumbent = shared_state.incumbent
+        self.incumbent_solution = shared_state.incumbent_solution
+        self.incumbent_lambdas = shared_state.incumbent_lambdas
+        self.best_lp_bound = shared_state.best_lp_bound
+        self.gap = shared_state.gap
+        self.open_nodes = shared_state.open_nodes
+        self.stats = shared_state.stats
+        
+        # Check if tree is complete
+        if not self.open_nodes:
+            self.stats['tree_complete'] = True
+            if self.incumbent < float('inf'):
+                self.best_lp_bound = self.incumbent
+                self.gap = 0.0
+        
+        # Finalize
         self._finalize_and_print_results()
         self._cleanup_pricing_pool()
         return self._get_results_dict()
@@ -4210,3 +4376,238 @@ class BranchAndPrice:
 
         self.logger.info(f"\n✅ Schedules exported to {filename}")
         self.logger.info(f"   Total rows: {len(df)}")
+
+
+# ============================================================================
+# WORKER THREAD CLASS FOR PARALLEL TREE EXPLORATION
+# ============================================================================
+
+class _NodeWorker:
+    """
+    Worker thread for processing nodes in parallel.
+    
+    Each worker continuously fetches nodes from the shared queue,
+    solves them, checks for fathoming, and branches if necessary.
+    """
+    
+    def __init__(self, worker_id, bnp_instance, shared_state):
+        """
+        Initialize worker.
+        
+        Args:
+            worker_id: Unique worker identifier (0, 1, 2, ...)
+            bnp_instance: Reference to BranchAndPrice instance
+            shared_state: ThreadSafeSharedState instance
+        """
+        self.worker_id = worker_id
+        self.bnp = bnp_instance
+        self.shared = shared_state
+        self.nodes_processed = 0
+        
+    def run(self):
+        """Main worker loop."""
+        logger = logging.getLogger(f"{__name__}.Worker{self.worker_id}")
+        logger.info(f"Worker {self.worker_id} started")
+        
+        while self.shared.should_continue():
+            # Get next node from queue
+            node_id = self.shared.get_next_node()
+            if node_id is None:
+                # No more nodes or shutdown requested
+                break
+            
+            try:
+                # Process the node
+                self._process_node(node_id, logger)
+                self.nodes_processed += 1
+                
+            except Exception as e:
+                logger.error(f"Worker {self.worker_id} error on node {node_id}: {e}")
+                if self.bnp.debug_mode:
+                    raise
+                # Mark node as fathomed due to error
+                with self.shared.lock:
+                    node = self.shared.nodes[node_id]
+                    node.status = 'fathomed'
+                    node.fathom_reason = 'error'
+                    self.shared.increment_stat('nodes_fathomed')
+        
+        logger.info(f"Worker {self.worker_id} finished ({self.nodes_processed} nodes processed)")
+    
+    def _process_node(self, node_id, logger):
+        """Process a single node: solve, fathom check, branch if needed."""
+        node = self.shared.nodes[node_id]
+        
+        logger.info(f"[W{self.worker_id}] Processing Node {node_id} (depth={node.depth}, path='{node.path}')")
+        
+        # Solve node with Column Generation
+        lp_bound, is_integral, most_frac_info, node_lambdas = self.bnp.solve_node_with_cg(
+            node, max_cg_iterations=50
+        )
+        
+        # Update shared statistics
+        self.shared.increment_stat('nodes_explored')
+        self.shared.add_to_stat_list('node_processing_order', node_id)
+        
+        # Update global lower bound
+        self.shared.update_best_lb(lp_bound)
+        
+        logger.info(f"[W{self.worker_id}] Node {node_id} solved: LP={lp_bound:.6f}, Integral={is_integral}")
+        
+        # Check fathoming
+        should_fathom = self._check_fathoming(node, lp_bound, is_integral, node_lambdas, logger)
+        
+        if should_fathom:
+            self.shared.increment_stat('nodes_fathomed')
+            logger.info(f"[W{self.worker_id}] Node {node_id} fathomed: {node.fathom_reason}")
+            return
+        
+        # Not fathomed - need to branch
+        logger.info(f"[W{self.worker_id}] Node {node_id} requires branching")
+        self._branch_node(node, node_lambdas, logger)
+        
+    def _check_fathoming(self, node, lp_bound, is_integral, node_lambdas, logger):
+        """
+        Thread-safe fathoming check.
+        
+        Returns True if node should be fathomed.
+        """
+        # Check 1: Integral solution
+        if is_integral:
+            node.status = 'fathomed'
+            node.fathom_reason = 'integral'
+            
+            # Try to update incumbent (thread-safe)
+            if lp_bound < self.shared.incumbent:
+                solution = self.bnp.cg_solver.master.finalDicts(
+                    self.bnp.cg_solver.global_solutions,
+                    self.bnp.cg_solver.app_data,
+                    node_lambdas
+                )
+                lambdas_active = {k: v for k, v in node_lambdas.items() if v.get('value', 0) > 1e-6}
+                
+                updated = self.shared.try_update_incumbent(
+                    lp_bound, solution, lambdas_active, node.node_id
+                )
+                if updated:
+                    logger.info(f"[W{self.worker_id}] ✅ NEW INCUMBENT from Node {node.node_id}: {lp_bound:.6f}")
+            
+            return True
+        
+        # Check 2: Infeasible
+        if lp_bound == float('inf'):
+            node.status = 'fathomed'
+            node.fathom_reason = 'infeasible'
+            return True
+        
+        # Check 3: Bound worse than incumbent (thread-safe read)
+        current_incumbent = self.shared.incumbent
+        if lp_bound >= current_incumbent - 1e-5:
+            node.status = 'fathomed'
+            node.fathom_reason = 'bound'
+            return True
+        
+        # Cannot fathom
+        return False
+    
+    def _branch_node(self, node, node_lambdas, logger):
+        """
+        Branch on node and add children to shared queue (thread-safe).
+        """
+        # Select branching candidate
+        branching_type, branching_info = self.bnp.select_branching_candidate(node, node_lambdas)
+        
+        if not branching_type:
+            logger.error(f"[W{self.worker_id}] No branching candidate for Node {node.node_id}!")
+            node.status = 'fathomed'
+            node.fathom_reason = 'no_branching_candidate'
+            self.shared.increment_stat('nodes_fathomed')
+            return
+        
+        # Create children (this accesses shared state via self.bnp.node_counter)
+        # Need to lock node creation to avoid race conditions
+        import time
+        branching_start = time.time()
+        
+        with self.shared.lock:
+            # Branch based on type
+            if branching_type == 'mp':
+                left_child, right_child = self.bnp.branch_on_mp_variable(node, branching_info)
+            else:  # 'sp'
+                left_child, right_child = self.bnp.branch_on_sp_pattern(node, branching_info)
+                
+                # Track pattern size
+                pattern_size = branching_info.get('pattern_size', 1)
+                self.shared.update_stat_dict('pattern_size_counts', pattern_size,
+                                            self.shared.stats.get('pattern_size_counts', {}).get(pattern_size, 0) + 1)
+            
+            # Mark parent as branched
+            node.status = 'branched'
+            self.shared.increment_stat('nodes_branched')
+            
+            # Record branching time
+            self.shared.add_timing('time_in_branching', time.time() - branching_start)
+        
+        logger.info(f"[W{self.worker_id}] Created children: Node {left_child.node_id} (L) & Node {right_child.node_id} (R)")
+        
+        # Solve both children immediately (current approach - eager solving)
+        left_is_active, left_bound, left_lambdas = self._solve_and_evaluate_child(left_child, logger)
+        right_is_active, right_bound, right_lambdas = self._solve_and_evaluate_child(right_child, logger)
+        
+        # Add active children to queue
+        nodes_to_add = []
+        if self.shared.search_strategy == 'bfs':
+            if left_is_active:
+                nodes_to_add.append((left_bound, left_child.node_id))
+            if right_is_active:
+                nodes_to_add.append((right_bound, right_child.node_id))
+        else:  # DFS
+            # Add right first, then left (so left is processed first in LIFO)
+            if right_is_active:
+                nodes_to_add.append(right_child.node_id)
+            if left_is_active:
+                nodes_to_add.append(left_child.node_id)
+        
+        if nodes_to_add:
+            self.shared.add_nodes(nodes_to_add)
+            logger.info(f"[W{self.worker_id}] Added {len(nodes_to_add)} child nodes to queue")
+    
+    def _solve_and_evaluate_child(self, child_node, logger):
+        """
+        Solve child node immediately and check if it should be added to queue.
+        
+        Returns:
+            tuple: (is_active, lp_bound, node_lambdas)
+        """
+        logger.info(f"[W{self.worker_id}] Solving child Node {child_node.node_id}...")
+        
+        try:
+            # Solve with CG
+            lp_bound, is_integral, most_frac_info, node_lambdas = self.bnp.solve_node_with_cg(
+                child_node, max_cg_iterations=50
+            )
+            
+            # Update stats
+            self.shared.increment_stat('nodes_explored')
+            self.shared.add_to_stat_list('node_processing_order', child_node.node_id)
+            self.shared.update_best_lb(lp_bound)
+            
+            # Check fathoming
+            if self._check_fathoming(child_node, lp_bound, is_integral, node_lambdas, logger):
+                self.shared.increment_stat('nodes_fathomed')
+                logger.info(f"[W{self.worker_id}] Child Node {child_node.node_id} fathomed immediately")
+                return False, lp_bound, node_lambdas
+            
+            # Not fathomed - mark as solved and active
+            child_node.status = 'solved'
+            logger.info(f"[W{self.worker_id}] Child Node {child_node.node_id} active (LP={lp_bound:.6f})")
+            return True, lp_bound, node_lambdas
+            
+        except Exception as e:
+            logger.error(f"[W{self.worker_id}] Error solving child {child_node.node_id}: {e}")
+            if self.bnp.debug_mode:
+                raise
+            child_node.status = 'fathomed'
+            child_node.fathom_reason = 'error'
+            self.shared.increment_stat('nodes_fathomed')
+            return False, float('inf'), {}

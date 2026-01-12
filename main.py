@@ -165,8 +165,11 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     
     # Parallelization settings
     use_parallel_pricing = True  # Enable parallel pricing (requires use_labeling=True)
+    use_parallel_tree = True  # Enable parallel tree exploration
     import os
     n_pricing_workers = min(os.cpu_count(), 4) if use_parallel_pricing else 1  # Auto-detect CPUs, max 4
+    # Use fewer tree workers to avoid oversubscription (pricing workers are more important)
+    n_tree_workers = min(os.cpu_count() // 2, 4) if use_parallel_tree else 1
 
     # Output settings
     save_lps = True # Set to True to save LP and SOL files
@@ -195,8 +198,14 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     # - [ ] Add gap indicator g_dict to inc_sol and results_df storage.
     # - [ ] Test with capacity-constrained instances to verify gaps appear.
 
-    labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 'use_parallel_pricing': use_parallel_pricing,
+    labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 
+                     # Pricing parallelization
+                     'use_parallel_pricing': use_parallel_pricing,
                      'n_pricing_workers': n_pricing_workers,
+                     # Tree exploration parallelization
+                     'use_parallel_tree': use_parallel_tree,
+                     'n_tree_workers': n_tree_workers,
+                     # Other settings
                      'debug_mode': True, 'use_apriori_pruning': False, 'use_pure_dp_optimization': True,
                      'use_persistent_pool': True,
                      'use_heuristic_pricing': False, 'heuristic_max_labels': 20, 'use_relaxed_history': False,
@@ -219,6 +228,9 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
             print(f"  - Parallel Pricing: {'Enabled' if use_parallel_pricing else 'Disabled'}")
             if use_parallel_pricing:
                 print(f"  - Pricing Workers: {n_pricing_workers}")
+            print(f"  - Parallel Tree: {'Enabled' if use_parallel_tree else 'Disabled'}")
+            if use_parallel_tree:
+                print(f"  - Tree Workers: {n_tree_workers}")
         print(f"  - Seed: {seed}")
         print(f"  - Learning type: {app_data['learn_type'][0]}")
         print(f"  - Learning method: {learn_method}")
