@@ -98,7 +98,7 @@ class InstanceGenerator:
         Generate a single instance with given parameters.
 
         Args:
-            seed: Random seed
+            seed: Random seeds
             pttr: Patient-to-therapist ratio scenario
             T: Number of therapists
             D_focus: Number of focus days

@@ -59,7 +59,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     # Parallelization settings
     use_parallel_pricing = True
-    use_parallel_tree = True  # Enable parallel tree exploration
+    use_parallel_tree = False  # Enable parallel tree exploration
     import os
     n_pricing_workers = min(os.cpu_count(), 4) if use_parallel_pricing else 1
     # Use fewer tree workers to avoid oversubscription (pricing workers are more important)
@@ -79,7 +79,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     # Define labeling specs
     labeling_spec = {
         'use_labeling': True, 
-        'max_columns_per_iter': 50, 
+        'max_columns_per_iter': 100,
         # Pricing parallelization
         'use_parallel_pricing': use_parallel_pricing,
         'n_pricing_workers': n_pricing_workers,
@@ -136,7 +136,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         search_strategy=search_strategy,
         verbose=verbose_output,
         ip_heuristic_frequency=5,
-        early_incumbent_iteration=1,
+        early_incumbent_iteration=None,
         save_lps=save_lps,
         label_dict=labeling_spec
     )

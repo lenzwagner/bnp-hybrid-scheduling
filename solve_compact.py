@@ -30,7 +30,7 @@ setup_multi_level_logging(base_log_dir='logs/compact', enable_console=True, prin
 logger = get_logger(__name__)
 
 # Time limit for each solve (in seconds)
-TIME_LIMIT = 1800
+TIME_LIMIT = 1200
 
 
 def find_latest_instance_file():
@@ -128,12 +128,14 @@ def solve_instance_compact(instance_row, verbose=False):
         cg_solver.problem.Model.setParam('OutputFlag', 1)
         cg_solver.problem.Model.setParam('Threads', 1)  # Use single thread for deterministic results
         cg_solver.problem.Model.setParam('Presolve', 0)
-        cg_solver.problem.Model.setParam('Cuts', -1)  # No Cuts
+        cg_solver.problem.Model.setParam('NoRelHeurTime', 10)
+        cg_solver.problem.Model.setParam('MIPFocus', 1)
+        cg_solver.problem.Model.setParam('Cuts', 1)  # No Cuts
         cg_solver.problem.Model.setParam('Heuristics', 0)  # Heuristics off
-        cg_solver.problem.Model.setParam('RINS', 0)  # RINS off
-        cg_solver.problem.Model.setParam('NodeMethod', 0)  # Primal Simplex (langsamer)
+        cg_solver.problem.Model.setParam('RINS', 10)  # RINS off
+        #cg_solver.problem.Model.setParam('NodeMethod', 0)  # Primal Simplex (langsamer)
         cg_solver.problem.Model.setParam('Symmetry', -1)  # Symmetry detection off
-        cg_solver.problem.Model.setParam('Aggregate', 0)  # Aggregation off
+        #cg_solver.problem.Model.setParam('Aggregate', 0)  # Aggregation off
         cg_solver.problem.Model.setParam('ImproveStartTime', 1e100)
 
         # Solve compact model
@@ -265,9 +267,9 @@ def main():
     # FILTER INSTANCES
     # ===========================
     # Only solve specific parameter combinations
-    FILTER_T = [10, 15]
-    FILTER_D_FOCUS = [10, 20, 30]
-    FILTER_SEEDS = list(range(1, 11))  # Seeds 1-10
+    FILTER_T = [5]
+    FILTER_D_FOCUS = [7]
+    FILTER_SEEDS = list(range(10,30))  # Seeds 1-10
     
     # Apply filters
     filtered_df = instances_df[
