@@ -951,6 +951,28 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                                                    path + [0], recipient_id, pruning_stats, dominance_mode, 
                                                    new_zeta_ai, None, None, epsilon)
 
+                            # C: Gap (Treat as non-human (0) for history, but keeps ai_count unchanged)
+                            if allow_gaps and check_strict_feasibility(hist, 0, ms, min_ms):
+                                cost_gap = cost
+                                prog_gap = prog
+                                new_hist_gap = (hist + (0,))
+                                if len(new_hist_gap) > ms - 1: new_hist_gap = new_hist_gap[-(ms - 1):]
+
+                                new_zeta_gap = zeta
+                                if use_branch_constraints:
+                                    new_zeta_list = list(zeta)
+                                    for cut_idx, cut in enumerate(forbidden_schedules):
+                                        if new_zeta_list[cut_idx] == 0:
+                                            # Forbidden val for GAP is 2
+                                            forbidden_val = cut.get((j, t), None)
+                                            if forbidden_val is not None and forbidden_val != 2:
+                                                new_zeta_list[cut_idx] = 1
+                                    new_zeta_gap = tuple(new_zeta_list)
+
+                                add_state_to_buckets(next_states, cost_gap, prog_gap, ai_count, new_hist_gap, 
+                                                   path + [2], recipient_id, pruning_stats, dominance_mode, 
+                                                   new_zeta_gap, None, None, epsilon)
+
                     current_states = next_states
                     if not current_states: break
                 timers['state_expansion'] += time.time() - t_dp_start
@@ -970,6 +992,8 @@ def solve_pricing_for_recipient(recipient_id, r_k, s_k, gamma_k, obj_mode, pi_di
                          possible_moves = []
                          if check_strict_feasibility(hist, 1, ms, min_ms): possible_moves.append(1)
                          if is_timeout_scenario and check_strict_feasibility(hist, 0, ms, min_ms): possible_moves.append(0)
+                         # Add Gap (2) if allowed and feasible (treat as 0)
+                         if allow_gaps and check_strict_feasibility(hist, 0, ms, min_ms): possible_moves.append(2)
 
                          for move in possible_moves:
                              if move == 1:

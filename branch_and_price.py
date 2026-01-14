@@ -3174,6 +3174,7 @@ class BranchAndPrice:
             max_columns=self.max_columns_per_iter,  # Return up to N columns
             use_pure_dp_optimization=self.use_pure_dp_optimization,
             use_numba_labeling=self.use_numba_labeling,
+            allow_gaps=self.allow_gaps,
             stop_at_first_negative=(node.depth > 0)  # Early termination in child nodes only
         )
         
