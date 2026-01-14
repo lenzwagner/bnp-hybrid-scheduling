@@ -595,8 +595,6 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     # ==============================================================================
     # E.5 TREATMENT GAP METRICS (Relaxed Continuity Only)
     # ==============================================================================
-    # TODO: Verify this implementation when allow_gaps=True is finally enabled
-    # Currently allow_gaps=False, so all gap values should be 0
 
     # Gap Indicator: gap_{it} = e_{it} - Σ_j x_{ijt} - y_{it}
     # Equals 1 if idle day (eligible but no treatment), 0 otherwise
