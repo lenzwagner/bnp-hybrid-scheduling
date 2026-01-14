@@ -1896,6 +1896,14 @@ def solve_pricing_for_profile_bnp(
     gamma_k = duals_gamma
     
 
+
+    # Gaps Fallback Logic for Numba
+    if allow_gaps and max_time > 31 and use_numba_labeling:
+        # Numba implementation uses 2-bit encoding which limits duration to 31 days (64 bits / 2)
+        # Fallback to Python implementation for longer horizons
+        print(f"[NUMBA WARNING] Profile {profile}: Gaps allowed with T={max_time} > 31. Falling back to Python implementation.")
+        use_numba_labeling = False
+
     # Call multi-phase pricing (heuristic + exact fallback)
     best_columns = solve_pricing_multi_phase(
         recipient_id=profile,
@@ -1919,10 +1927,10 @@ def solve_pricing_for_profile_bnp(
         heuristic_max_labels=heuristic_max_labels,
         use_relaxed_history=use_relaxed_history,
         allow_gaps=allow_gaps
-    ) if not (use_numba_labeling and HAS_NUMBA and not allow_gaps) else []
+    ) if not (use_numba_labeling and HAS_NUMBA) else []
     
     # === NUMBA OPTIMIZATION ===
-    if use_numba_labeling and HAS_NUMBA and not allow_gaps:
+    if use_numba_labeling and HAS_NUMBA:
         # Prepare data for Numba
         # Convert pi_dict to matrix
         max_worker_id = max(workers) if workers else 0
@@ -2093,7 +2101,8 @@ def solve_pricing_for_profile_bnp(
                 left_pattern_elements, left_pattern_limits, num_left_patterns, has_left_patterns,
                 # SP Right Patterns
                 right_pattern_elements, right_pattern_starts, right_pattern_duals, right_pattern_counts, num_right_patterns, has_right_patterns,
-                stop_at_first_negative
+                stop_at_first_negative,
+                allow_gaps
             )
         else:
             # Call original fast path (no constraints)
@@ -2101,7 +2110,8 @@ def solve_pricing_for_profile_bnp(
                 int(r_k), float(s_k), float(duals_gamma), float(obj_multiplier),
                 pi_matrix, workers_arr, int(max_time), 
                 int(MS), int(MIN_MS), theta_arr, 1e-6,
-                stop_at_first_negative
+                stop_at_first_negative,
+                allow_gaps
             )
 
         
@@ -2129,10 +2139,9 @@ def solve_pricing_for_profile_bnp(
             duration = end_t - start_t + 1
             path_pattern = []
             for i in range(duration):
-                if (path_mask >> i) & 1:
-                    path_pattern.append(1)
-                else:
-                    path_pattern.append(0)
+                # 2-bit decoding: 0=AI, 1=Therapist, 2=Gap
+                val = (path_mask >> (2 * i)) & 3
+                path_pattern.append(val)
             
             best_columns.append({
                 'worker': w_id,

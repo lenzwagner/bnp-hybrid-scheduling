@@ -667,7 +667,8 @@ def solve_subproblem_for_patient(args):
         data, duals_gamma, duals_pi, duals_delta, index, 0, Req_agg, Entry_agg,
         app_data, W_coeff, E_dict, S_Bound, num_tangents=10, reduction=True, learn_method=learn_meth,  node_path='',
         verbose=False,  # Disable verbose in multiprocessing workers to avoid mixed output
-        deterministic=deterministic
+        deterministic=deterministic,
+        allow_gaps=False
     )
     subproblem.buildModel()
 

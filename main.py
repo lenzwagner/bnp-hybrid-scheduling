@@ -76,6 +76,86 @@ def disaggregate_solution(inc_sol, profile_to_all_patients, global_solutions):
 
     return disagg_x, disagg_y, disagg_los
 
+def print_derived_variables_for_samples(f_e, f_Y, f_theta, f_omega, f_g_comp, f_g_gap, f_z, 
+                                         p_e, p_Y, p_theta, p_omega, p_g_comp, p_g_gap, p_z,
+                                         original_P_F, original_P_Post, disagg_x, disagg_y, disagg_los):
+    """
+    Print all derived variables for 2 random Focus patients and 2 random Post patients.
+    Each patient's variables are shown as dictionaries.
+    """
+    
+    print("\n" + "=" * 100)
+    print(" DERIVED VARIABLES - SAMPLE PATIENTS (Prioritizing Gaps, then LOS) ".center(100, "="))
+    print("=" * 100)
+    
+    # Helper to count gaps per patient
+    def count_gaps_per_patient(patient_list, gap_dict):
+        gap_counts = {p: 0 for p in patient_list}
+        for (p, d), val in gap_dict.items():
+            if p in gap_counts and val > 0.5:
+                gap_counts[p] += 1
+        return gap_counts
+        
+    f_gap_counts = count_gaps_per_patient(original_P_F, f_g_gap)
+    p_gap_counts = count_gaps_per_patient(original_P_Post, p_g_gap)
+    
+    # Select patients: Priority 1 = Gap Count (Desc), Priority 2 = LOS (Desc)
+    focus_metrics = [(p, f_gap_counts.get(p, 0), disagg_los.get(p, 0)) for p in original_P_F]
+    post_metrics = [(p, p_gap_counts.get(p, 0), disagg_los.get(p, 0)) for p in original_P_Post]
+    
+    # Sort by (gaps, los) descending
+    focus_metrics.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    post_metrics.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    
+    sample_focus = [p for p, gaps, los in focus_metrics[:2]]  # Top 2
+    sample_post = [p for p, gaps, los in post_metrics[:2]]
+    
+    # Helper to get all time periods for a patient from the dicts
+    def get_patient_data(patient_id, e_dict, Y_dict, theta_dict, omega_dict, g_comp_dict, g_gap_dict, z_dict, x_dict, y_dict, los_dict):
+        # Get all days where this patient has data
+        days = sorted(set(d for (p, d) in e_dict.keys() if p == patient_id))
+        
+        result = {
+            'patient_id': patient_id,
+            'LOS': los_dict.get(patient_id, 0),
+            'e': {d: e_dict.get((patient_id, d), 0) for d in days},
+            'Y': {d: Y_dict.get((patient_id, d), 0) for d in days},
+            'theta': {d: theta_dict.get((patient_id, d), 0.0) for d in days},
+            'omega': {d: omega_dict.get((patient_id, d), 0.0) for d in days},
+            'g_comp': {d: g_comp_dict.get((patient_id, d), 0) for d in days},
+            'g_gap': {d: g_gap_dict.get((patient_id, d), 0) for d in days},
+            # Unfiltered x and y dictionaries
+            'x': {(t, d): v for (p, t, d), v in x_dict.items() if p == patient_id},
+            # Explicitly show 0 for y if missing for a day
+            'y': {d: y_dict.get((patient_id, d), 0) for d in days},
+            'z': {j: v for (p, j), v in z_dict.items() if p == patient_id and v == 1}
+        }
+        return result
+    
+    # Print Focus patients
+    print("\n" + "-" * 100)
+    print(" FOCUS PATIENTS ".center(100, "-"))
+    print("-" * 100)
+    for patient_id in sample_focus:
+        data = get_patient_data(patient_id, f_e, f_Y, f_theta, f_omega, f_g_comp, f_g_gap, f_z, disagg_x, disagg_y, disagg_los)
+        print(f"\n📊 Patient {patient_id}:")
+        for key, value in data.items():
+            if key != 'patient_id':
+                print(f"  {key:12s}: {value}")
+    
+    # Print Post patients
+    print("\n" + "-" * 100)
+    print(" POST PATIENTS ".center(100, "-"))
+    print("-" * 100)
+    for patient_id in sample_post:
+        data = get_patient_data(patient_id, p_e, p_Y, p_theta, p_omega, p_g_comp, p_g_gap, p_z, disagg_x, disagg_y, disagg_los)
+        print(f"\n📊 Patient {patient_id}:")
+        for key, value in data.items():
+            if key != 'patient_id':
+                print(f"  {key:12s}: {value}")
+    
+    print("\n" + "=" * 100 + "\n")
+
 def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     """
     Main function to run Column Generation or Branch-and-Price algorithm.
@@ -127,10 +207,10 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     # Learning parameters
     app_data = {
         'learn_type': ['sigmoid'],  # Learning curve type: 'exp', 'sigmoid', 'lin', or numeric value
-        'theta_base': [0.02],  # Base effectiveness
+        'theta_base': [0.3],  # Base effectiveness
         'lin_increase': [0.01],  # Linear increase rate (for 'lin' type)
-        'k_learn': [0.01],  # Learning rate (for 'exp' and 'sigmoid')
-        'infl_point': [2],  # Inflection point (for 'sigmoid')
+        'k_learn': [0.5],  # Learning rate (for 'exp' and 'sigmoid')
+        'infl_point': [5],  # Inflection point (for 'sigmoid')
         'MS': [5],  # Maximum session window
         'MS_min': [2],  # Minimum sessions in window
         'W_on': [6],  # Work days per week
@@ -178,25 +258,12 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
 
     # Solver settings
     deterministic = False  # Set to True for deterministic solver behavior (single-threaded, barrier method)
+    
+    # Treatment Gaps setting
+    allow_gaps = True  # Set to True to allow treatment gaps (relaxed x+y constraint)
 
     # Visualization settings
     visualize_tree = False  # Enable tree visualization
-
-    # Define labeling specs
-    # TODO: TREATMENT GAPS (Relaxing x+y=1 constraint)
-    # Status:
-    # - [x] Core Logic Implemented: 'allow_gaps' flag enables Gap action (2) in label.py.
-    # - [x] Integration: MasterProblem correctly reconstructs AI/Gap usage from path_pattern.
-    # - [x] Path-pattern mapping: path=1→x=1, path=0→y=1, path=2→x=0,y=0 in label.py line 2176.
-    # - [x] Optimization: Currently uses Python labeling (Numba disabled if allow_gaps=True).
-    #
-    # Remaining Work:
-    # - [ ] Subproblem (MIP): Update to allow x+y < 1 (currently x+y=1 is enforced).
-    # - [ ] Derived Variables: Update compute_derived_variables to handle gaps (g_it indicator).
-    # - [ ] Gap Metrics (E.5): Update extra_values.py to calculate gap-related metrics.
-    # - [ ] Port Gap logic to Numba (label_numba.py) for performance.
-    # - [ ] Add gap indicator g_dict to inc_sol and results_df storage.
-    # - [ ] Test with capacity-constrained instances to verify gaps appear.
 
     labeling_spec = {'use_labeling': True, 'max_columns_per_iter': 50, 
                      # Pricing parallelization
@@ -480,18 +547,25 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
         print("\n" + "-" * 100)
         print(" COMPUTING DERIVED VARIABLES FOR FOCUS PATIENTS (DISAGGREGATED) ".center(100, "-"))
         print("-" * 100)
-        f_e, f_Y, f_theta, f_omega, f_g, f_z = compute_derived_variables(cg_solver, disagg_sol, app_data, patients_list=original_P_F)
+        f_e, f_Y, f_theta, f_omega, f_g_comp, f_z, f_g_gap = compute_derived_variables(cg_solver, disagg_sol, app_data, patients_list=original_P_F)
         
         
         # Calculate derived variables for Post Patients using DISAGGREGATED data
         print("\n" + "-" * 100)
         print(" COMPUTING DERIVED VARIABLES FOR POST PATIENTS (DISAGGREGATED) ".center(100, "-"))
         print("-" * 100)
-        p_e, p_Y, p_theta, p_omega, p_g, p_z = compute_derived_variables(cg_solver, disagg_sol, app_data, patients_list=original_P_Post)
+        p_e, p_Y, p_theta, p_omega, p_g_comp, p_z, p_g_gap = compute_derived_variables(cg_solver, disagg_sol, app_data, patients_list=original_P_Post)
+        
+        # Print derived variables for sample patients (2 Focus + 2 Post)
+        print_derived_variables_for_samples(
+            f_e, f_Y, f_theta, f_omega, f_g_comp, f_g_gap, f_z,
+            p_e, p_Y, p_theta, p_omega, p_g_comp, p_g_gap, p_z,
+            original_P_F, original_P_Post, disagg_x, disagg_y, disagg_los
+        )
         
         # Calculate EXTRA METRICS (E.2 - E.8)
-        # Pack data for Focus
-        f_derived_data = {'e': f_e, 'Y': f_Y, 'theta': f_theta, 'omega': f_omega, 'g': f_g, 'z': f_z}
+        # Pack data for Focus (use g_comp for compatibility)
+        f_derived_data = {'e': f_e, 'Y': f_Y, 'theta': f_theta, 'omega': f_omega, 'g': f_g_comp, 'z': f_z, 'g_gap': f_g_gap}
         print("\n" + "*" * 100)
         print(" CALCULATING EXTRA METRICS FOR FOCUS PATIENTS ".center(100, "*"))
         print("*" * 100)
@@ -499,8 +573,8 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
         f_start, f_end = 1, D_focus
         f_metrics = calculate_extra_metrics(cg_solver, disagg_sol, original_P_F, f_derived_data, cg_solver.T, start_day=f_start, end_day=f_end)
         
-        # Pack data for Post
-        p_derived_data = {'e': p_e, 'Y': p_Y, 'theta': p_theta, 'omega': p_omega, 'g': p_g, 'z': p_z}
+        # Pack data for Post (use g_comp for compatibility)
+        p_derived_data = {'e': p_e, 'Y': p_Y, 'theta': p_theta, 'omega': p_omega, 'g': p_g_comp, 'z': p_z, 'g_gap': p_g_gap}
         print("\n" + "*" * 100)
         print(" CALCULATING EXTRA METRICS FOR POST PATIENTS ".center(100, "*"))
         print("*" * 100)
@@ -563,11 +637,11 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
          # Focus
         'focus_x': agg_focus_x, 'focus_y': focus_y, 'focus_los': agg_focus_los,
         'focus_e': f_e, 'focus_Y': f_Y, 'focus_theta': f_theta, 
-        'focus_omega': f_omega, 'focus_g': f_g, 'focus_z': f_z,
+        'focus_omega': f_omega, 'focus_g_comp': f_g_comp, 'focus_g_gap': f_g_gap, 'focus_z': f_z,
         # Post
         'post_x': agg_post_x, 'post_y': post_y, 'post_los': agg_post_los,
         'post_e': p_e, 'post_Y': p_Y, 'post_theta': p_theta,
-        'post_omega': p_omega, 'post_g': p_g, 'post_z': p_z,
+        'post_omega': p_omega, 'post_g_comp': p_g_comp, 'post_g_gap': p_g_gap, 'post_z': p_z,
         # Add Extra Metrics with prefixes
         **{f"focus_{k}": v for k, v in f_metrics.items()},
         **{f"post_{k}": v for k, v in p_metrics.items()},
@@ -795,4 +869,4 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
 
 
 if __name__ == "__main__":
-    results = main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None)  # Set alpha=None to disable
+    results = main(allow_gaps=True, use_warmstart=True, dual_smoothing_alpha=None)  # Set alpha=None to disable

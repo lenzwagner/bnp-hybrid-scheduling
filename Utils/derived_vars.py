@@ -3,7 +3,7 @@ import math
 
 def compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=None):
     """
-    Computes derived variables (e, Y, theta, omega, g, z) for a list of patients based on the incumbent solution.
+    Computes derived variables (e, Y, theta, omega, g_comp, z, g_gap) for a list of patients based on the incumbent solution.
     
     Args:
         cg_solver: The ColumnGeneration instance containing problem data (P_F, Entry_agg, D_Ext, etc.).
@@ -12,7 +12,9 @@ def compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=None):
         patients_list: Optional list of patients to compute variables for. If None, defaults to cg_solver.P_F.
         
     Returns:
-        tuple: (all_e, all_Y, all_theta, all_omega, all_g, all_z) dictionaries.
+        tuple: (all_e, all_Y, all_theta, all_omega, all_g_comp, all_z, all_g_gap) dictionaries.
+            - all_g_comp: completion indicator (1 at discharge, 0 otherwise)
+            - all_g_gap: gap indicator (1 if eligible but no treatment, 0 otherwise)
     """
     
     x_dict = inc_sol.get('x', {})
@@ -45,7 +47,8 @@ def compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=None):
     all_Y = {}
     all_theta = {}
     all_omega = {}
-    all_g = {}
+    all_g_comp = {}  # Completion indicator (discharge day)
+    all_g_gap = {}   # Gap indicator (eligible but no treatment)
     all_z = {}
     
     # Determine patients to iterate over
@@ -142,14 +145,19 @@ def compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=None):
             omega_it = omega_cumulative
             
             # g_{it}^Comp: completion indicator (1 at discharge, 0 otherwise)
-            g_it = 1 if t == discharge_t else 0
+            g_comp_it = 1 if t == discharge_t else 0
+            
+            # g_{it}^Gap: gap indicator (1 if eligible but no treatment, 0 otherwise)
+            # Gap occurs when e=1 but x=0 and y=0 (eligible but idle)
+            g_gap_it = 1 if (e_it == 1 and x_it == 0 and y_it == 0) else 0
             
             # Store in dicts
             all_e[(p, t)] = e_it
             all_Y[(p, t)] = Y_it
             all_theta[(p, t)] = theta_it
             all_omega[(p, t)] = omega_it
-            all_g[(p, t)] = g_it
+            all_g_comp[(p, t)] = g_comp_it
+            all_g_gap[(p, t)] = g_gap_it
 
             # Only print if in system
             # if e_it or t == entry - 1:
@@ -157,4 +165,4 @@ def compute_derived_variables(cg_solver, inc_sol, app_data, patients_list=None):
         
         # print(f"\nFinal: ω = {omega_cumulative:.2f}, Req = {cg_solver.Req_agg.get(p, '?')}")
 
-    return all_e, all_Y, all_theta, all_omega, all_g, all_z
+    return all_e, all_Y, all_theta, all_omega, all_g_comp, all_z, all_g_gap

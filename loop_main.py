@@ -75,6 +75,9 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
 
     # Visualization settings
     visualize_tree = False
+    
+    # Treatment Gaps setting
+    allow_gaps = False  # Set to True to allow treatment gaps (relaxed x+y constraint)
 
     # Define labeling specs
     labeling_spec = {
@@ -148,8 +151,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     # ===========================
     # DERIVED VARIABLES COMPUTATION
     # ===========================
-    f_e, f_Y, f_theta, f_omega, f_g, f_z = None, None, None, None, None, None
-    p_e, p_Y, p_theta, p_omega, p_g, p_z = None, None, None, None, None, None
+    f_e, f_Y, f_theta, f_omega, f_g_comp, f_z, f_g_gap = None, None, None, None, None, None, None
+    p_e, p_Y, p_theta, p_omega, p_g_comp, p_z, p_g_gap = None, None, None, None, None, None, None
     agg_focus_x, agg_focus_los = None, None
     agg_post_x, agg_post_los = None, None
     total_columns = 0
@@ -158,24 +161,24 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         inc_sol = results['incumbent_solution']
         
         # Calculate derived variables for Focus Patients
-        f_e, f_Y, f_theta, f_omega, f_g, f_z = compute_derived_variables(
+        f_e, f_Y, f_theta, f_omega, f_g_comp, f_z, f_g_gap = compute_derived_variables(
             cg_solver, inc_sol, app_data, patients_list=cg_solver.P_F
         )
         
         # Calculate derived variables for Post Patients
-        p_e, p_Y, p_theta, p_omega, p_g, p_z = compute_derived_variables(
+        p_e, p_Y, p_theta, p_omega, p_g_comp, p_z, p_g_gap = compute_derived_variables(
             cg_solver, inc_sol, app_data, patients_list=cg_solver.P_Post
         )
         
-        # Calculate EXTRA METRICS
-        f_derived_data = {'e': f_e, 'Y': f_Y, 'theta': f_theta, 'omega': f_omega, 'g': f_g, 'z': f_z}
+        # Calculate EXTRA METRICS (use g_comp for compatibility)
+        f_derived_data = {'e': f_e, 'Y': f_Y, 'theta': f_theta, 'omega': f_omega, 'g': f_g_comp, 'z': f_z, 'g_gap': f_g_gap}
         f_start, f_end = 1, D_focus
         f_metrics = calculate_extra_metrics(
             cg_solver, inc_sol, cg_solver.P_F, f_derived_data, cg_solver.T, 
             start_day=f_start, end_day=f_end
         )
         
-        p_derived_data = {'e': p_e, 'Y': p_Y, 'theta': p_theta, 'omega': p_omega, 'g': p_g, 'z': p_z}
+        p_derived_data = {'e': p_e, 'Y': p_Y, 'theta': p_theta, 'omega': p_omega, 'g': p_g_comp, 'z': p_z, 'g_gap': p_g_gap}
         p_start = D_focus + 1
         p_end = max(cg_solver.D_Ext)
         p_metrics = calculate_extra_metrics(
@@ -313,7 +316,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'focus_Y': f_Y, 
         'focus_theta': f_theta,
         'focus_omega': f_omega, 
-        'focus_g': f_g, 
+        'focus_g_comp': f_g_comp,
+        'focus_g_gap': f_g_gap,
         'focus_z': f_z,
         
         # Derived variables - Post
@@ -324,7 +328,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'post_Y': p_Y, 
         'post_theta': p_theta,
         'post_omega': p_omega, 
-        'post_g': p_g, 
+        'post_g_comp': p_g_comp,
+        'post_g_gap': p_g_gap,
         'post_z': p_z,
         
         # Extra metrics with prefixes
@@ -417,7 +422,7 @@ def main_loop():
                 D_focus=D_focus,
                 pttr=pttr,
                 T=T,
-                allow_gaps=False,
+                allow_gaps=allow_gaps,
                 use_warmstart=True,
                 dual_smoothing_alpha=None
             )

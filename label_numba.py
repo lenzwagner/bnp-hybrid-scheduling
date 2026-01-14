@@ -132,10 +132,11 @@ def compute_candidate_workers_numba(workers, r_k, tau_max, pi_matrix):
 def generate_full_column_vector_numba(worker_id, path_mask, start_time, end_time, max_time, num_workers):
     """
     Numba-optimized generation of the full column vector for a schedule.
+    Uses 2-bit path encoding (0=App, 1=Therapist, 2=Gap).
     
     Args:
         worker_id: Worker ID (1-indexed)
-        path_mask: Bitmask representing the path (bit i = 1 means therapist at time start_time + i)
+        path_mask: Bitmask representing the path (2 bits per step)
         start_time: Start time of schedule
         end_time: End time of schedule
         max_time: Maximum time horizon
@@ -151,8 +152,11 @@ def generate_full_column_vector_numba(worker_id, path_mask, start_time, end_time
     duration = end_time - start_time + 1
     
     for t_idx in range(duration):
-        # Check if bit t_idx is set (therapist assignment)
-        if (path_mask >> t_idx) & 1:
+        # Decode 2-bit value
+        val = (path_mask >> (2 * t_idx)) & 3
+        
+        # Check if val is 1 (Therapist). 0 is App, 2 is Gap.
+        if val == 1:
             current_time = start_time + t_idx
             global_idx = worker_offset + (current_time - 1)
             if 0 <= global_idx < vector_length:
@@ -164,21 +168,19 @@ def generate_full_column_vector_numba(worker_id, path_mask, start_time, end_time
 @njit(cache=True)
 def path_mask_to_list(path_mask, duration):
     """
-    Convert a bitmask path to a list of 0s and 1s.
+    Convert a 2-bit bitmask path to a list of values (0, 1, 2).
     
     Args:
-        path_mask: Bitmask representing the path
+        path_mask: Bitmask representing the path (2 bits per step)
         duration: Length of the schedule
         
     Returns:
-        List of 0s and 1s
+        List of integers (0, 1, 2)
     """
     result = List.empty_list(int64)
     for i in range(duration):
-        if (path_mask >> i) & 1:
-            result.append(int64(1))
-        else:
-            result.append(int64(0))
+        val = (path_mask >> (2 * i)) & 3
+        result.append(int64(val))
     return result
 
 
@@ -249,6 +251,7 @@ val_list_type = types.ListType(val_tuple_type)
 # (j, rc, start, end, path_mask, prog)
 result_tuple_type = types.Tuple((types.float64, types.float64, types.int64, types.int64, types.int64, types.float64))
 
+
 @njit(cache=True)
 def run_fast_path_numba(
     r_k, s_k, gamma_k, obj_mode_float, 
@@ -258,7 +261,8 @@ def run_fast_path_numba(
     MS, MIN_MS, 
     theta_lookup, # Array
     epsilon,
-    stop_at_first_negative=False  # Early termination for child nodes
+    stop_at_first_negative=False,  # Early termination for child nodes
+    allow_gaps=False  # Allow treatment gaps (idle days)
 ):
     """
     Optimized DP loop using Numba.
@@ -274,10 +278,10 @@ def run_fast_path_numba(
         effective_min_duration = min(int(s_k), time_until_end)
         start_tau = r_k + effective_min_duration - 1
         
-        # BITMASK SAFETY: path_mask is int64 (64 bits, positions 0-63)
-        # Since we store paths via (1 << (t - r_k)), the maximum safe shift is 63
-        # Therefore, tau must satisfy: (tau - r_k) <= 63
-        BITMASK_LIMIT = 63
+        # BITMASK SAFETY: path_mask is int64 (64 bits)
+        # 2-bit encoding: max 32 steps (bits 0-63)
+        # Safe limit is 31 steps (bits 0-61), leaving room
+        BITMASK_LIMIT = 31
         max_tau = min(max_time, r_k + BITMASK_LIMIT)
         
         # Warning if bitmask limit is active
@@ -296,7 +300,7 @@ def run_fast_path_numba(
             init_ai = 0
             init_hist = 1
             init_hlen = 1
-            init_path = 1 # Bit 0 is set
+            init_path = 1 # Bit 0-1 set to 01 (Therapist)
             
             init_key = (int64(init_ai), int64(init_hist), int64(init_hlen))
             
@@ -308,6 +312,7 @@ def run_fast_path_numba(
             # DP Loop
             for t in range(r_k + 1, tau):
                 next_states = Dict.empty(key_type, val_list_type)
+                shift = 2 * (t - r_k)
                 
                 # Iterate over current buckets
                 for key, bucket in current_states.items():
@@ -323,7 +328,7 @@ def run_fast_path_numba(
                                 if prog + remaining_steps * 1.0 < s_k - epsilon:
                                     continue
                                     
-                        # A: Therapist
+                        # A: Therapist (1 -> 01)
                         feasible_ther, new_mask_ther, new_len_ther = check_strict_feasibility_numba(
                             hist_mask, hist_len, 1, MS, MIN_MS
                         )
@@ -333,7 +338,7 @@ def run_fast_path_numba(
                             prog_ther = prog + 1.0
                             
                             new_key_ther = (ai_count, new_mask_ther, new_len_ther)
-                            new_val_ther = (cost_ther, prog_ther, (path_mask | (1 << (t - r_k))))
+                            new_val_ther = (cost_ther, prog_ther, (path_mask | (1 << shift)))
                             
                             if new_key_ther not in next_states:
                                 l = List.empty_list(val_tuple_type)
@@ -359,7 +364,7 @@ def run_fast_path_numba(
                                     clean_bucket.append(new_val_ther)
                                     next_states[new_key_ther] = clean_bucket
 
-                        # B: AI
+                        # B: AI (0 -> 00)
                         feasible_ai, new_mask_ai, new_len_ai = check_strict_feasibility_numba(
                             hist_mask, hist_len, 0, MS, MIN_MS
                         )
@@ -374,6 +379,7 @@ def run_fast_path_numba(
                             new_ai_count = ai_count + 1
                             
                             new_key_ai = (new_ai_count, new_mask_ai, new_len_ai)
+                            # 0 << shift is 0, so just path_mask
                             new_val_ai = (cost_ai, prog_ai, (path_mask))
                             
                             if new_key_ai not in next_states:
@@ -400,11 +406,51 @@ def run_fast_path_numba(
                                     clean_bucket.append(new_val_ai)
                                     next_states[new_key_ai] = clean_bucket
 
+                        # C: GAP (2 -> 10) - New
+                        if allow_gaps:
+                            # Gaps behave like AI/Idle for feasibility (pass 0)
+                            feasible_gap, new_mask_gap, new_len_gap = check_strict_feasibility_numba(
+                                hist_mask, hist_len, 0, MS, MIN_MS
+                            )
+                            
+                            if feasible_gap:
+                                cost_gap = cost
+                                prog_gap = prog # No progress
+                                # AI count doesn't increase
+                                
+                                new_key_gap = (ai_count, new_mask_gap, new_len_gap)
+                                new_val_gap = (cost_gap, prog_gap, (path_mask | (2 << shift)))
+                                
+                                if new_key_gap not in next_states:
+                                    l = List.empty_list(val_tuple_type)
+                                    l.append(new_val_gap)
+                                    next_states[new_key_gap] = l
+                                else:
+                                    bucket_g = next_states[new_key_gap]
+                                    is_dominated = False
+                                    for i in range(len(bucket_g)):
+                                        c_old, p_old, _ = bucket_g[i]
+                                        if c_old <= cost_gap + epsilon and p_old >= prog_gap - epsilon:
+                                            is_dominated = True
+                                            break
+                                    
+                                    if not is_dominated:
+                                        clean_bucket = List.empty_list(val_tuple_type)
+                                        for i in range(len(bucket_g)):
+                                            c_old, p_old, path_old = bucket_g[i]
+                                            if cost_gap <= c_old + epsilon and prog_gap >= p_old - epsilon:
+                                                pass
+                                            else:
+                                                clean_bucket.append((c_old, p_old, path_old))
+                                        clean_bucket.append(new_val_gap)
+                                        next_states[new_key_gap] = clean_bucket
+
                 current_states = next_states
                 if len(current_states) == 0:
                     break
             
             # Final Step (Transition to Tau)
+            shift = 2 * (tau - r_k)
             for key, bucket in current_states.items():
                 ai_count, hist_mask, hist_len = key
                 
@@ -418,7 +464,7 @@ def run_fast_path_numba(
                     if feasible_ther:
                         final_cost = cost - pi_matrix[j, tau]
                         final_prog = prog + 1.0
-                        final_path_mask = path_mask | (1 << (tau - r_k))
+                        final_path_mask = path_mask | (1 << shift)
                         
                         condition_met = (final_prog >= s_k - epsilon)
                         is_valid = False
@@ -444,7 +490,7 @@ def run_fast_path_numba(
                             if ai_count < len(theta_lookup):
                                 eff = theta_lookup[ai_count]
                             final_prog = prog + eff
-                            final_path_mask = path_mask # 0 bit implies AI
+                            final_path_mask = path_mask # 00
                             
                             condition_met = (final_prog >= s_k - epsilon)
                             is_valid = False
@@ -461,8 +507,29 @@ def run_fast_path_numba(
                                     if stop_at_first_negative:
                                         return best_columns  # Early termination: found negative RC
 
-    return best_columns
+                    # Option 3: End with Gap (2) - ONLY if Timeout (and allow_gaps)
+                    if is_timeout_scenario and allow_gaps:
+                        feasible_gap, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 0, MS, MIN_MS)
+                        if feasible_gap:
+                            final_cost = cost
+                            final_prog = prog # No progress
+                            final_path_mask = path_mask | (2 << shift)
+                            
+                            # For Post-Patients, timeout allows ending even if target not met
+                            # For Focus-Patients, must meet target (which Gap doesn't help with usually, unless already met)
+                            is_focus = (obj_mode > 0.5)
+                            condition_met = (final_prog >= s_k - epsilon)
+                            is_valid = condition_met if is_focus else (condition_met or is_timeout_scenario)
+                                
+                            if is_valid:
+                                duration_val = (tau - r_k + 1)
+                                rc = final_cost + (duration_val * obj_mode) - gamma_k
+                                if rc < -1e-6:
+                                    best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                                    if stop_at_first_negative:
+                                        return best_columns
 
+    return best_columns
 
 @njit(cache=True)
 def run_fast_path_single_worker_numba(
@@ -473,7 +540,8 @@ def run_fast_path_single_worker_numba(
     MS, MIN_MS, 
     theta_lookup,
     epsilon,
-    stop_at_first_negative=False  # Early termination for child nodes
+    stop_at_first_negative=False,  # Early termination for child nodes
+    allow_gaps=False # Allow treatment gaps
 ):
     """
     Optimized DP loop for a SINGLE worker.
@@ -489,10 +557,9 @@ def run_fast_path_single_worker_numba(
     effective_min_duration = min(int(s_k), time_until_end)
     start_tau = r_k + effective_min_duration - 1
     
-    # BITMASK SAFETY: path_mask is int64 (64 bits, positions 0-63)
-    # Since we store paths via (1 << (t - r_k)), the maximum safe shift is 63
-    # Therefore, tau must satisfy: (tau - r_k) <= 63
-    BITMASK_LIMIT = 63
+    # BITMASK SAFETY: path_mask is int64 (64 bits)
+    # 2-bit encoding: max 32 steps (bits 0-63)
+    BITMASK_LIMIT = 31
     max_tau = min(max_time, r_k + BITMASK_LIMIT)
     
     # Warning if bitmask limit is active
@@ -508,7 +575,7 @@ def run_fast_path_single_worker_numba(
         init_ai = 0
         init_hist = 1
         init_hlen = 1
-        init_path = 1
+        init_path = 1 # 01 (Therapist)
         
         init_key = (int64(init_ai), int64(init_hist), int64(init_hlen))
         val_list = List.empty_list(val_tuple_type)
@@ -518,6 +585,7 @@ def run_fast_path_single_worker_numba(
         # DP Loop
         for t in range(r_k + 1, tau):
             next_states = Dict.empty(key_type, val_list_type)
+            shift = 2 * (t - r_k)
             
             for key, bucket in current_states.items():
                 ai_count, hist_mask, hist_len = key
@@ -542,7 +610,7 @@ def run_fast_path_single_worker_numba(
                         prog_ther = prog + 1.0
                         
                         new_key_ther = (ai_count, new_mask_ther, new_len_ther)
-                        new_val_ther = (cost_ther, prog_ther, (path_mask | (1 << (t - r_k))))
+                        new_val_ther = (cost_ther, prog_ther, (path_mask | (1 << shift)))
                         
                         if new_key_ther not in next_states:
                             l = List.empty_list(val_tuple_type)
@@ -607,12 +675,51 @@ def run_fast_path_single_worker_numba(
                                         clean_bucket.append((c_old, p_old, path_old))
                                 clean_bucket.append(new_val_ai)
                                 next_states[new_key_ai] = clean_bucket
-            
+
+                    # C: Gap
+                    if allow_gaps:
+                        feasible_gap, new_mask_gap, new_len_gap = check_strict_feasibility_numba(
+                            hist_mask, hist_len, 0, MS, MIN_MS
+                        )
+                        
+                        if feasible_gap:
+                            cost_gap = cost
+                            prog_gap = prog
+                            # ai_count unchanged
+                            
+                            new_key_gap = (ai_count, new_mask_gap, new_len_gap)
+                            new_val_gap = (cost_gap, prog_gap, (path_mask | (2 << shift)))
+                            
+                            if new_key_gap not in next_states:
+                                l = List.empty_list(val_tuple_type)
+                                l.append(new_val_gap)
+                                next_states[new_key_gap] = l
+                            else:
+                                bucket_g = next_states[new_key_gap]
+                                is_dominated = False
+                                for i in range(len(bucket_g)):
+                                    c_old, p_old, _ = bucket_g[i]
+                                    if c_old <= cost_gap + epsilon and p_old >= prog_gap - epsilon:
+                                        is_dominated = True
+                                        break
+                                
+                                if not is_dominated:
+                                    clean_bucket = List.empty_list(val_tuple_type)
+                                    for i in range(len(bucket_g)):
+                                        c_old, p_old, path_old = bucket_g[i]
+                                        if cost_gap <= c_old + epsilon and prog_gap >= p_old - epsilon:
+                                            pass
+                                        else:
+                                            clean_bucket.append((c_old, p_old, path_old))
+                                    clean_bucket.append(new_val_gap)
+                                    next_states[new_key_gap] = clean_bucket
+
             current_states = next_states
             if len(current_states) == 0:
                 break
         
         # Final Step
+        shift = 2 * (tau - r_k)
         for key, bucket in current_states.items():
             ai_count, hist_mask, hist_len = key
             
@@ -625,7 +732,7 @@ def run_fast_path_single_worker_numba(
                 if feasible_ther:
                     final_cost = cost - pi_matrix[j, tau]
                     final_prog = prog + 1.0
-                    final_path_mask = path_mask | (1 << (tau - r_k))
+                    final_path_mask = path_mask | (1 << shift)
                     
                     condition_met = (final_prog >= s_k - epsilon)
                     is_valid = False
@@ -667,7 +774,27 @@ def run_fast_path_single_worker_numba(
                                 best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
                                 if stop_at_first_negative:
                                     return best_columns  # Early termination: found negative RC
-    
+
+                # Option 3: End with Gap
+                if is_timeout_scenario and allow_gaps:
+                    feasible_gap, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 0, MS, MIN_MS)
+                    if feasible_gap:
+                        final_cost = cost
+                        final_prog = prog
+                        final_path_mask = path_mask | (2 << shift)
+                        
+                        is_focus = (obj_mode > 0.5)
+                        condition_met = (final_prog >= s_k - epsilon)
+                        is_valid = condition_met if is_focus else (condition_met or is_timeout_scenario)
+                        
+                        if is_valid:
+                            duration_val = tau - r_k + 1
+                            rc = final_cost + (duration_val * obj_mode) - gamma_k
+                            if rc < -1e-6:
+                                best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                                if stop_at_first_negative:
+                                    return best_columns
+
     return best_columns
 
 
@@ -713,16 +840,11 @@ def run_with_branching_constraints_numba(
     right_pattern_counts,    # 1D array [pat_idx] number of elements in pattern
     num_right_patterns,      # int
     has_right_patterns,      # bool
-    stop_at_first_negative=False  # Early termination for child nodes
+    stop_at_first_negative=False,  # Early termination for child nodes
+    allow_gaps=False # Allow treatment gaps
 ):
     """
     Extended DP loop with branching constraint support.
-    
-    Supports:
-    - SP Variable Fixing: forbidden_mask[j,t] = True means x[j,t] must be 0
-    - MP No-Good Cuts: Track zeta deviation vector via bitmask
-    - SP Left Pattern Branching: Track rho counters, prune if limit exceeded
-    - SP Right Pattern Branching: Track mu modes (0=exclude, 1=cover), apply duals
     """
     best_columns = List.empty_list(result_tuple_type)
     obj_mode = obj_mode_float
@@ -731,18 +853,15 @@ def run_with_branching_constraints_numba(
         # === SP Variable Fixing Check at r_k ===
         # First time step MUST be therapist (1), check if it's forbidden
         if has_sp_fixing and forbidden_mask[j, r_k]:
-            # This worker/time is fixed to 0, but we need 1 -> skip this worker
             continue
-        # If required_mask is set, it's consistent (we need 1, it's required to be 1)
         
         time_until_end = max_time - r_k + 1
         effective_min_duration = min(int(s_k), time_until_end)
         start_tau = r_k + effective_min_duration - 1
         
-        # BITMASK SAFETY: path_mask is int64 (64 bits, positions 0-63)
-        # Since we store paths via (1 << (t - r_k)), the maximum safe shift is 63
-        # Therefore, tau must satisfy: (tau - r_k) <= 63
-        BITMASK_LIMIT = 63
+        # BITMASK SAFETY: path_mask is int64 (64 bits)
+        # 2-bit encoding: max 32 steps (bits 0-63)
+        BITMASK_LIMIT = 31
         max_tau = min(max_time, r_k + BITMASK_LIMIT)
         
         # Warning if bitmask limit is active
@@ -754,8 +873,6 @@ def run_with_branching_constraints_numba(
             start_cost = -pi_matrix[j, r_k]
             
             # === Initialize Zeta for MP Branching ===
-            # zeta_mask: bit i = 1 if we've deviated from no-good cut i
-            # At start (time r_k, action=1): check if any cut has forbidden_val != 1 at (j, r_k)
             init_zeta = int64(0)
             if has_nogood_cuts:
                 for cut_idx in range(num_nogood_cuts):
@@ -764,7 +881,6 @@ def run_with_branching_constraints_numba(
                         init_zeta = init_zeta | (1 << cut_idx)
             
             # === Initialize Rho for SP Left Patterns ===
-            # For simplicity, we encode rho as a single int64 with 8 bits per pattern (max 8 patterns, max count 255)
             init_rho = int64(0)
             if has_left_patterns:
                 for pat_idx in range(num_left_patterns):
@@ -792,37 +908,6 @@ def run_with_branching_constraints_numba(
                 continue  # This starting state is already infeasible
             
             # === Initialize Mu for SP Right Patterns ===
-            # Encoded in int64, 2 bits per pattern (0=inactive/exclude, 1=cover, 2=violated/prune)
-            # Actually, logic is:
-            # Mode 0: Inactive / Wait
-            # Mode 1: Exclude (entered at start, committed to NOT cover)
-            # Mode 2: Cover (entered at start, committed to cover)
-            # Wait, let's stick to Python logic:
-            # - Before start: implicitly Inactive
-            # - At start time: Decision -> Enter Cover (1) or Exclude (0)
-            # - After start: Follow mode rules
-            # We need to map this to "state". 
-            # Let's use 2 bits: 00=inactive/exclude(default), 01=cover, 11=pruned?
-            # Better: 
-            #   0: Exclude/Inactive (Default) - If we hit a required element, we MUST NOT take it (if in window)
-            #   1: Cover - We MUST take all required elements
-            
-            # Python logic review:
-            # if time < t_start: continue (wait)
-            # if time == t_start: 
-            #    if in_pattern: enter Cover (next_mu=1)
-            #    else: enter Exclude (next_mu=0)
-            # if time > t_start:
-            #    if Exclude (0): if in_pattern -> Prune
-            #    if Cover (1): if element is active at t and we don't take it -> Prune
-            
-            # So state is binary: 0 or 1.
-            # But we also need to know if we have "started" yet. 
-            # Actually, `time` implicitly tells us if we passed `t_start`.
-            # So a single bit per pattern is enough: 0=Exclude, 1=Cover.
-            # Default init is 0.
-            
-            # Initial Check at r_k:
             init_mu = int64(0)
             if has_right_patterns:
                 for pat_idx in range(num_right_patterns):
@@ -846,18 +931,8 @@ def run_with_branching_constraints_numba(
                             # Enter Exclude Mode (bit remains 0)
                             pass
                     elif r_k > t_start:
-                        # Should have started earlier. Since we start at r_k, we missed the start?
-                        # If a pattern started before r_k, and we start a NEW column at r_k, 
-                        # technically the "past" is empty.
-                        # Wait, columns represent a full worker shift.
-                        # If start > t_start, we missed the start trigger.
-                        # Implies we can never "Cover" it fully from the start?
-                        # Actually, if we start late, we can't have covered the start element.
-                        # So we effectively are in Exclude mode (having missed the start).
-                        # Checks:
-                        # If Exclude (0): if in_pattern -> Prune
                          if in_pattern:
-                             # We are picking an element but we are in Exclude mode (implicitly, since we missed start or chose Exclude)
+                             # We are picking an element but we are in Exclude mode (implicitly)
                              init_mu = int64(-1)
                              break
             
@@ -865,19 +940,12 @@ def run_with_branching_constraints_numba(
                 continue
 
             # Initialize state dict
-            # Key: (ai_count, hist_mask, hist_len, zeta_mask, mu_encoded)
             current_states = Dict.empty(key_with_zeta_type, val_list_with_zeta_type)
             
             init_ai = int64(0)
             init_hist = int64(1)
             init_hlen = int64(1)
-            init_path = int64(1)
-            
-            # Combine zeta and rho for the key field `zeta_mask` to save space if needed, 
-            # BUT we added a new field for mu. Let's keep zeta and rho packed in `zeta_mask` for now 
-            # to minimize key size change, OR use the new 5-tuple key properly.
-            # Let's use the new 5-tuple key: (ai, hist, hlen, zeta_rho, mu)
-            # where zeta_rho = zeta | (rho << 32)
+            init_path = int64(1) # 01 (Therapist)
             
             combined_zeta_rho = init_zeta | (init_rho << 32)
             
@@ -889,6 +957,7 @@ def run_with_branching_constraints_numba(
             # DP Loop
             for t in range(r_k + 1, tau):
                 next_states = Dict.empty(key_with_zeta_type, val_list_with_zeta_type)
+                shift = 2 * (t - r_k)
                 
                 for key, bucket in current_states.items():
                     ai_count, hist_mask, hist_len, combined_zeta_rho, mu_encoded = key
@@ -963,38 +1032,19 @@ def run_with_branching_constraints_numba(
                                                 break
                                         
                                         if t == t_start:
-                                            if in_pattern:
-                                                # Enter Cover (Set bit to 1)
-                                                new_mu = new_mu | (1 << pat_idx)
-                                            else:
-                                                # Enter Exclude (Set bit to 0 - clear it)
-                                                new_mu = new_mu & ~(1 << pat_idx)
+                                            if in_pattern: new_mu = new_mu | (1 << pat_idx) # Cover
+                                            else: new_mu = new_mu & ~(1 << pat_idx) # Exclude
                                         elif t > t_start:
                                             if current_mode == 0: # Exclude
-                                                if in_pattern:
-                                                    mu_valid = False; break # Pruned
+                                                if in_pattern: mu_valid = False; break
                                             else: # Cover Mode (1)
-                                                # If element is available at t but we took something else?
-                                                # Here we TOOK Therapist (1).
-                                                # If (j,t) is in pattern, we are good (we took it).
-                                                # If (j,t) is NOT in pattern, is that a problem?
-                                                # Pattern definition: "Cover" means take ALL elements in P.
-                                                # So if (j,t) is in P, we MUST take it. We did.
-                                                # If (j,t) is NOT in P, we took Therapist. That's allowed in Cover mode?
-                                                # Yes, usually Cover only mandates specific (j,t) to be 1. It doesn't forbid others from being 1.
-                                                # So: If InPattern -> Good. If NotInPattern -> Good.
-                                                # Wait, logic check: "Cover" means x[j,t]=1 for all (j,t) in P.
-                                                # Here we set x[j,t]=1.
-                                                # Implementation detail: For Cover, we must ensure we NEVER MISS a required one.
-                                                # Since we took 1, we satisfy any requirement at (j,t) if it exists.
-                                                pass
+                                                 pass # Taking therapist covers if in pattern, fine if not
 
                                 if rho_valid and mu_valid:
                                     new_combined = new_zeta | (new_rho << 32)
                                     new_key_ther = (ai_count, new_mask_ther, new_len_ther, new_combined, new_mu)
-                                    new_val_ther = (cost_ther, prog_ther, path_mask | (1 << (t - r_k)))
+                                    new_val_ther = (cost_ther, prog_ther, path_mask | (1 << shift))
                                     
-                                    # Add to next_states with dominance
                                     if new_key_ther not in next_states:
                                         l = List.empty_list(val_with_zeta_type)
                                         l.append(new_val_ther)
@@ -1042,8 +1092,7 @@ def run_with_branching_constraints_numba(
                                             if forbidden_val != 0 and forbidden_val > 0:
                                                 new_zeta = new_zeta | (1 << cut_idx)
                                 
-                                # AI action doesn't match pattern elements (therapist only)
-                                # so rho stays the same
+                                # Rho stays same (AI not in pattern)
                                 new_rho = rho_encoded
                                 
                                 # Update mu (Right Pattern)
@@ -1054,38 +1103,28 @@ def run_with_branching_constraints_numba(
                                         t_start = right_pattern_starts[pat_idx]
                                         current_mode = (new_mu >> pat_idx) & 1
                                         
-                                        in_pattern = False
-                                        # Only Therapist actions are "In Pattern" usually? 
-                                        # Yes, pattern elements are (j,t). Taking AI means x[j,t]=0, so effectively NOT in pattern.
-                                        
                                         if t == t_start:
-                                            # At start, if we take AI (0), we cannot be "In Pattern" (which requires 1 at elements)
-                                            # So we Enter Exclude (bit=0)
+                                             # AI (0) implies not in pattern (0 != 1) -> Exclude
                                             new_mu = new_mu & ~(1 << pat_idx)
                                         elif t > t_start:
                                             if current_mode == 0: # Exclude
-                                                # Allowed, we are not picking pattern elements
                                                 pass
                                             else: # Cover Mode (1)
-                                                # We must take 1 if (j,t) is in pattern.
-                                                # Check if this (j,t) is required
+                                                # If (j,t) is required, we failed to take it -> Prune
                                                 is_required_here = False
                                                 for elem_idx in range(right_pattern_counts[pat_idx]):
                                                     encoded = right_pattern_elements[pat_idx, elem_idx]
                                                     w_pat = encoded // 1000000
                                                     t_pat = encoded % 1000000
                                                     if w_pat == j and t_pat == t:
-                                                        is_required_here = True
-                                                        break
-                                                
+                                                        is_required_here = True; break
                                                 if is_required_here:
-                                                    # We took AI (0), but 1 was required! -> Prune
                                                     mu_valid = False; break
                                 
                                 if mu_valid:
                                     new_combined = new_zeta | (new_rho << 32)
                                     new_key_ai = (new_ai_count, new_mask_ai, new_len_ai, new_combined, new_mu)
-                                    new_val_ai = (cost_ai, prog_ai, path_mask)
+                                    new_val_ai = (cost_ai, prog_ai, path_mask) # 00
                                     
                                     if new_key_ai not in next_states:
                                         l = List.empty_list(val_with_zeta_type)
@@ -1106,12 +1145,91 @@ def run_with_branching_constraints_numba(
                                                     clean.append((c_old, p_old, path_old))
                                             clean.append(new_val_ai)
                                             next_states[new_key_ai] = clean
-                
+
+                        # === C: GAP (action = 2) ===
+                        if allow_gaps:
+                            # Gap is like AI (0) regarding constraints
+                            can_take_gap = True
+                            if has_sp_fixing and required_mask[j, t]:
+                                can_take_gap = False # Required to be 1, can't take Gap (0-like)
+                            
+                            if can_take_gap:
+                                feasible_gap, new_mask_gap, new_len_gap = check_strict_feasibility_numba(
+                                    hist_mask, hist_len, 0, MS, MIN_MS
+                                )
+                                
+                                if feasible_gap:
+                                    cost_gap = cost
+                                    prog_gap = prog # No progress
+                                    # ai_count unchanged
+                                    
+                                    # Update zeta (same as AI)
+                                    new_zeta = zeta_mask
+                                    if has_nogood_cuts:
+                                        for cut_idx in range(num_nogood_cuts):
+                                            if (new_zeta >> cut_idx) & 1 == 0:
+                                                forbidden_val = nogood_patterns[cut_idx, j, t]
+                                                if forbidden_val != 0 and forbidden_val > 0:
+                                                    new_zeta = new_zeta | (1 << cut_idx)
+                                    
+                                    # Rho (same as AI)
+                                    new_rho = rho_encoded
+                                    
+                                    # Mu (same as AI)
+                                    new_mu = mu_encoded
+                                    mu_valid = True
+                                    if has_right_patterns:
+                                        for pat_idx in range(num_right_patterns):
+                                            t_start = right_pattern_starts[pat_idx]
+                                            current_mode = (new_mu >> pat_idx) & 1
+                                            
+                                            if t == t_start:
+                                                new_mu = new_mu & ~(1 << pat_idx)
+                                            elif t > t_start:
+                                                if current_mode == 0: pass
+                                                else:
+                                                    is_required_here = False
+                                                    for elem_idx in range(right_pattern_counts[pat_idx]):
+                                                        encoded = right_pattern_elements[pat_idx, elem_idx]
+                                                        w_pat = encoded // 1000000
+                                                        t_pat = encoded % 1000000
+                                                        if w_pat == j and t_pat == t:
+                                                            is_required_here = True; break
+                                                    if is_required_here:
+                                                        mu_valid = False; break
+                                    
+                                    if mu_valid:
+                                        new_combined = new_zeta | (new_rho << 32)
+                                        new_key_gap = (ai_count, new_mask_gap, new_len_gap, new_combined, new_mu)
+                                        # Path: 2 << shift
+                                        new_val_gap = (cost_gap, prog_gap, (path_mask | (2 << shift)))
+                                        
+                                        if new_key_gap not in next_states:
+                                            l = List.empty_list(val_with_zeta_type)
+                                            l.append(new_val_gap)
+                                            next_states[new_key_gap] = l
+                                        else:
+                                            bucket_g = next_states[new_key_gap]
+                                            is_dominated = False
+                                            for i in range(len(bucket_g)):
+                                                c_old, p_old, _ = bucket_g[i]
+                                                if c_old <= cost_gap + epsilon and p_old >= prog_gap - epsilon:
+                                                    is_dominated = True; break
+                                            if not is_dominated:
+                                                clean = List.empty_list(val_with_zeta_type)
+                                                for i in range(len(bucket_g)):
+                                                    c_old, p_old, path_old = bucket_g[i]
+                                                    if not (cost_gap <= c_old + epsilon and prog_gap >= p_old - epsilon):
+                                                        clean.append((c_old, p_old, path_old))
+                                                clean.append(new_val_gap)
+                                                next_states[new_key_gap] = clean
+
                 current_states = next_states
                 if len(current_states) == 0:
                     break
             
             # === Final Step (Transition to Tau) ===
+            shift = 2 * (tau - r_k)
             for key, bucket in current_states.items():
                 ai_count, hist_mask, hist_len, combined_zeta_rho, mu_encoded = key
                 zeta_mask = combined_zeta_rho & 0xFFFFFFFF
@@ -1130,9 +1248,14 @@ def run_with_branching_constraints_numba(
                         if feasible_ther:
                             final_cost = cost - pi_matrix[j, tau]
                             final_prog = prog + 1.0
-                            final_path_mask = path_mask | (1 << (tau - r_k))
+                            final_path_mask = path_mask | (1 << shift)
                             
-                            # Update final zeta
+                            # Final Branching Checks (Zeta, Rho, Mu) - omitting details for brevity, assume valid if dominated
+                            # Wait, we need to UPDATE zeta/rho/mu for the final step too!
+                            # And check validity.
+                            # Just reusing logic from loop.
+                            
+                            # Zeta
                             final_zeta = zeta_mask
                             if has_nogood_cuts:
                                 for cut_idx in range(num_nogood_cuts):
@@ -1158,10 +1281,9 @@ def run_with_branching_constraints_numba(
                                                 rho_valid = False; break
                                             final_rho = (final_rho & ~(0xFF << (pat_idx * 8))) | (current_rho << (pat_idx * 8))
                                     if not rho_valid: break
-                            
                             if not rho_valid: continue
 
-                            # Mu (Right Pattern)
+                            # Mu
                             final_mu = mu_encoded
                             mu_valid = True
                             right_reward = 0.0
@@ -1176,8 +1298,7 @@ def run_with_branching_constraints_numba(
                                         w_pat = encoded // 1000000
                                         t_pat = encoded % 1000000
                                         if w_pat == j and t_pat == tau:
-                                            in_pattern = True
-                                            break
+                                            in_pattern = True; break
                                     
                                     if tau == t_start:
                                         if in_pattern: final_mu = final_mu | (1 << pat_idx)
@@ -1185,20 +1306,13 @@ def run_with_branching_constraints_numba(
                                     elif tau > t_start:
                                         if current_mode == 0 and in_pattern:
                                             mu_valid = False; break
-                                        # In Cover mode, taking 1 is always checking for broken chains. 
-                                        # Since we took 1, we satisfy requirement if present.
                                     
-                                    # CHECK DUAL REWARD
-                                    # If we end in Cover Mode (1), we effectively covered the pattern
-                                    # (assuming future elements beyond tau don't exist in this column logic, 
-                                    # or we "commit" to them which is handled by branching logic).
-                                    # Simplified: If we are in Cover Mode at the end, apply dual.
                                     if mu_valid and ((final_mu >> pat_idx) & 1):
                                         right_reward += right_pattern_duals[pat_idx]
                             
                             if not mu_valid: continue
                             
-                            # === Terminal Feasibility Check for Zeta ===
+                            # Terminal Zeta Check
                             if has_nogood_cuts:
                                 all_deviated = True
                                 for cut_idx in range(num_nogood_cuts):
@@ -1213,42 +1327,26 @@ def run_with_branching_constraints_numba(
                             
                             if is_valid:
                                 duration_val = tau - r_k + 1
-                                # Apply right_reward (subtract from cost because it's a dual "benefit" usually handled as cost reduction)
-                                # Wait, duals in reduced cost: RC = Cost - Duals.
-                                # If SP branching pattern is "covered", we get the dual value?
-                                # Yes, usually: if x covers pattern p, term -mu_p is added.
-                                # Standard RC = (c - sum(pi)) - gamma.
-                                # With SP right branching (cover pattern P):
-                                # Constraint: Sum(x in P) >= 1 (Cover) -> Dual mu >= 0
-                                # RC = ... - mu_p * (1 if covered else 0) ??
-                                # Actually, standard constraint form: sum x_j >= 1.
-                                # Dual mu >= 0.
-                                # RC term: - coeff * dual.
-                                # Coeff is 1 if covered. So -mu.
-                                # So we subtract right_reward.
                                 rc = final_cost + (duration_val * obj_mode) - gamma_k - right_reward
                                 if rc < -1e-6:
                                     best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
-                                    if stop_at_first_negative:
-                                        return best_columns  # Early termination: found negative RC
+                                    if stop_at_first_negative: return best_columns
                     
                     # === Option 2: End with AI (only if timeout) ===
                     if is_timeout_scenario:
                         can_end_ai = True
-                        if has_sp_fixing and required_mask[j, tau]:
-                            can_end_ai = False
+                        if has_sp_fixing and required_mask[j, tau]: can_end_ai = False
                         
                         if can_end_ai:
                             feasible_ai, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 0, MS, MIN_MS)
                             if feasible_ai:
                                 final_cost = cost
                                 eff = 1.0
-                                if ai_count < len(theta_lookup):
-                                    eff = theta_lookup[ai_count]
+                                if ai_count < len(theta_lookup): eff = theta_lookup[ai_count]
                                 final_prog = prog + eff
                                 final_path_mask = path_mask
                                 
-                                # Zeta
+                                # Final Branching Updates
                                 final_zeta = zeta_mask
                                 if has_nogood_cuts:
                                     for cut_idx in range(num_nogood_cuts):
@@ -1256,8 +1354,7 @@ def run_with_branching_constraints_numba(
                                             forbidden_val = nogood_patterns[cut_idx, j, tau]
                                             if forbidden_val != 0 and forbidden_val > 0:
                                                 final_zeta = final_zeta | (1 << cut_idx)
-                                
-                                # Mu
+                                final_rho = rho_encoded
                                 final_mu = mu_encoded
                                 mu_valid = True
                                 right_reward = 0.0
@@ -1265,37 +1362,27 @@ def run_with_branching_constraints_numba(
                                     for pat_idx in range(num_right_patterns):
                                         t_start = right_pattern_starts[pat_idx]
                                         current_mode = (final_mu >> pat_idx) & 1
-                                        
-                                        # AI (0) matches "Not In Pattern"
-                                        if tau == t_start:
-                                            # Must be Exclude
-                                            final_mu = final_mu & ~(1 << pat_idx)
+                                        if tau == t_start: final_mu = final_mu & ~(1 << pat_idx)
                                         elif tau > t_start:
-                                            if current_mode == 1: # Cover Mode
-                                                # Required 1?
-                                                is_required_here = False
-                                                for elem_idx in range(right_pattern_counts[pat_idx]):
-                                                    encoded = right_pattern_elements[pat_idx, elem_idx]
-                                                    w_pat = encoded // 1000000
-                                                    t_pat = encoded % 1000000
-                                                    if w_pat == j and t_pat == tau:
-                                                        is_required_here = True; break
-                                                if is_required_here:
-                                                    mu_valid = False; break
-                                        
+                                             if current_mode == 1:
+                                                 is_req = False
+                                                 for elem_idx in range(right_pattern_counts[pat_idx]):
+                                                     encoded = right_pattern_elements[pat_idx, elem_idx]
+                                                     w_pat = encoded // 1000000
+                                                     t_pat = encoded % 1000000
+                                                     if w_pat == j and t_pat == tau: is_req = True; break
+                                                 if is_req: mu_valid = False; break
                                         if mu_valid and ((final_mu >> pat_idx) & 1):
                                             right_reward += right_pattern_duals[pat_idx]
-
                                 if not mu_valid: continue
-
-                                # Terminal zeta check
+                                
                                 if has_nogood_cuts:
                                     all_deviated = True
                                     for cut_idx in range(num_nogood_cuts):
                                         if (final_zeta >> cut_idx) & 1 == 0:
                                             all_deviated = False; break
                                     if not all_deviated: continue
-                                
+
                                 condition_met = (final_prog >= s_k - epsilon)
                                 is_valid = False
                                 if obj_mode > 0.5: is_valid = condition_met
@@ -1306,7 +1393,65 @@ def run_with_branching_constraints_numba(
                                     rc = final_cost + (duration_val * obj_mode) - gamma_k - right_reward
                                     if rc < -1e-6:
                                         best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
-                                        if stop_at_first_negative:
-                                            return best_columns  # Early termination: found negative RC
+                                        if stop_at_first_negative: return best_columns
+
+                    # === Option 3: End with Gap ===
+                    if is_timeout_scenario and allow_gaps:
+                        can_end_gap = True
+                        if has_sp_fixing and required_mask[j, tau]: can_end_gap = False
+                        
+                        if can_end_gap:
+                            feasible_gap, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 0, MS, MIN_MS)
+                            if feasible_gap:
+                                final_cost = cost
+                                final_prog = prog
+                                final_path_mask = path_mask | (2 << shift)
+                                
+                                # Final Branching Updates (Approx same as AI)
+                                final_zeta = zeta_mask
+                                if has_nogood_cuts:
+                                    for cut_idx in range(num_nogood_cuts):
+                                        if (final_zeta >> cut_idx) & 1 == 0:
+                                            forbidden_val = nogood_patterns[cut_idx, j, tau]
+                                            if forbidden_val != 0 and forbidden_val > 0:
+                                                final_zeta = final_zeta | (1 << cut_idx)
+                                final_rho = rho_encoded
+                                final_mu = mu_encoded
+                                mu_valid = True
+                                right_reward = 0.0
+                                if has_right_patterns:
+                                    for pat_idx in range(num_right_patterns):
+                                        t_start = right_pattern_starts[pat_idx]
+                                        current_mode = (final_mu >> pat_idx) & 1
+                                        if tau == t_start: final_mu = final_mu & ~(1 << pat_idx)
+                                        elif tau > t_start:
+                                             if current_mode == 1:
+                                                 is_req = False
+                                                 for elem_idx in range(right_pattern_counts[pat_idx]):
+                                                     encoded = right_pattern_elements[pat_idx, elem_idx]
+                                                     w_pat = encoded // 1000000
+                                                     t_pat = encoded % 1000000
+                                                     if w_pat == j and t_pat == tau: is_req = True; break
+                                                 if is_req: mu_valid = False; break
+                                        if mu_valid and ((final_mu >> pat_idx) & 1):
+                                            right_reward += right_pattern_duals[pat_idx]
+                                if not mu_valid: continue
+                                
+                                if has_nogood_cuts:
+                                    all_deviated = True
+                                    for cut_idx in range(num_nogood_cuts):
+                                        if (final_zeta >> cut_idx) & 1 == 0:
+                                            all_deviated = False; break
+                                    if not all_deviated: continue
+                                
+                                is_focus = (obj_mode > 0.5)
+                                is_valid = (final_prog >= s_k - epsilon) if is_focus else ((final_prog >= s_k - epsilon) or is_timeout_scenario)
+                                
+                                if is_valid:
+                                    duration_val = tau - r_k + 1
+                                    rc = final_cost + (duration_val * obj_mode) - gamma_k - right_reward
+                                    if rc < -1e-6:
+                                        best_columns.append((float64(j), float64(rc), int64(r_k), int64(tau), int64(final_path_mask), float64(final_prog)))
+                                        if stop_at_first_negative: return best_columns
     
     return best_columns

@@ -5,8 +5,9 @@ from Utils.Generell.utils import *
 class Subproblem:
     def __init__(self, df, duals_gamma, duals_pi, duals_delta, p, col_id, Req, Entry, app_data, W_coeff, E_dict, S_Bound,
                  learn_method,
-                 reduction=False, num_tangents=10, node_path='', verbose=True, deterministic=False):
+                 reduction=False, num_tangents=10, node_path='', verbose=True, deterministic=False, allow_gaps=False):
         self.reduction = reduction
+        self.allow_gaps = allow_gaps
         self.P = p
         self.W_coeff = W_coeff
         self.Req = Req
@@ -246,11 +247,19 @@ class Subproblem:
                 name=f'discharge_needs_therapist_{p}_{d}'
             )
 
-            # Daily assignment
-            self.Model.addLConstr(
-                self.w[p, d] == gu.quicksum(self.x[p, t, d, self.col_id] for t in self.T) + self.y[p, d],
-                name=f'daily_assignment_{p}_{d}'
-            )
+            # Daily assignment constraint (conditional based on allow_gaps)
+            if self.allow_gaps:
+                # Relaxed: allow x + y < 1 (gaps possible when eligible but no treatment)
+                self.Model.addLConstr(
+                    self.w[p, d] >= gu.quicksum(self.x[p, t, d, self.col_id] for t in self.T) + self.y[p, d],
+                    name=f'daily_assignment_relaxed_{p}_{d}'
+                )
+            else:
+                # Strict: enforce x + y = 1 (no gaps, must receive treatment when eligible)
+                self.Model.addLConstr(
+                    self.w[p, d] == gu.quicksum(self.x[p, t, d, self.col_id] for t in self.T) + self.y[p, d],
+                    name=f'daily_assignment_{p}_{d}'
+                )
 
             # Therapist consistency
             for t in self.T:
