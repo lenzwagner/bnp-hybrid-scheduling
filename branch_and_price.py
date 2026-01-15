@@ -2807,7 +2807,7 @@ class BranchAndPrice:
 
                 master.addLambdaVar(profile, col_id, col_coefs, los_list, 
                                     pattern={'path': col_data.get('path_pattern'), 'start': col_data.get('start')})
-            master.Model.update()
+        master.Model.update()
 
 
 

@@ -219,8 +219,8 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     }
 
     # Instance parameters
-    T = 2  # Number of therapists
-    D_focus = 4  # Number of focus days
+    T = 5  # Number of therapists
+    D_focus = 14  # Number of focus days
 
     # Algorithm parameters
     dual_improvement_iter = 20  # Max Iterations without dual improvement
@@ -260,7 +260,7 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     deterministic = False  # Set to True for deterministic solver behavior (single-threaded, barrier method)
     
     # Treatment Gaps setting
-    allow_gaps = True  # Set to True to allow treatment gaps (relaxed x+y constraint)
+    allow_gaps = False  # Set to True to allow treatment gaps (relaxed x+y constraint)
 
     # Visualization settings
     visualize_tree = False  # Enable tree visualization
