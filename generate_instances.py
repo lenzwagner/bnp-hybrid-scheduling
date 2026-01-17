@@ -57,14 +57,14 @@ class InstanceGenerator:
         # Default learning parameters (same as main.py)
         self.app_data = {
             'learn_type': ['sigmoid'],
-            'theta_base': [0.02],
-            'lin_increase': [0.01],
-            'k_learn': [0.01],
-            'infl_point': [2],
+            'theta_base': [0.3],
+            'lin_increase': [0.05],
+            'k_learn': [0.5],
+            'infl_point': [5],
             'MS': [5],
             'MS_min': [2],
-            'W_on': [6],
-            'W_off': [1],
+            'W_on': [5],
+            'W_off': [2],
             'daily': [4]
         }
 
