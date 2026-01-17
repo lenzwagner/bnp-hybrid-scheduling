@@ -37,6 +37,7 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
     from bnp_node import BnPNode
     
     # Reconstruct minimal node object for pricing
+    logger = logging.getLogger(__name__)
     node = BnPNode(
         node_id=node_data['node_id'],
         parent_id=node_data['parent_id'],
@@ -75,7 +76,7 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
         # Safety margin
         if lb_pruning > -1e-9:
             # Prune this profile! No negative reduced cost possible.
-            print(f"    [Pruning] Profile {profile} skipped (A Priori Bound: {lb_pruning:.4f} > 0)")
+            logger.debug(f"    [Pruning] Profile {profile} skipped (A Priori Bound: {lb_pruning:.4f} > 0)")
             return (profile, [])
 
     # Call labeling algorithm
@@ -740,9 +741,9 @@ class BranchAndPrice:
 
             # Update incumbent if this is better
             if node.lp_bound < self.incumbent:
-                print(f"\n✅ Node {node.node_id} found improving integral solution!")
-                print(f"   Previous incumbent: {self.incumbent:.6f}")
-                print(f"   New incumbent:      {node.lp_bound:.6f}")
+                self.logger.info(f"\n✅ Node {node.node_id} found improving integral solution!")
+                self.logger.info(f"   Previous incumbent: {self.incumbent:.6f}")
+                self.logger.info(f"   New incumbent:      {node.lp_bound:.6f}")
 
                 self.incumbent = node.lp_bound
                 self.incumbent_solution = self.cg_solver.master.finalDicts(
@@ -1032,7 +1033,6 @@ class BranchAndPrice:
             # fully solved with Column Generation when they were created.
             # We just need to retrieve their stored values.
 
-            print('Folve', current_node.status)
             if current_node.status != 'solved':
                 self.logger.error(f"❌ ERROR: Node {current_node_id} in open_nodes but status is '{current_node.status}', not 'solved'!")
                 self.logger.error(f"   This should not happen with the corrected implementation!")
@@ -2477,7 +2477,7 @@ class BranchAndPrice:
                     for col_idx, col_data in enumerate(col_data_list):
                         # Print reduced cost if negative
                         if col_data['reduced_cost'] < 0 and not negative_printed:
-                            print(f'    [Parallel] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
+                            #print(f'    [Parallel] ⭐ NEGATIVE Red. cost for profile {profile}: {col_data["reduced_cost"]:.6f}')
                             negative_printed = True
                         
                         # Check if column has negative reduced cost below threshold

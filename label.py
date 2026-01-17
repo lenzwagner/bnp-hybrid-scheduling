@@ -17,7 +17,7 @@ try:
     HAS_NUMBA = True
 except ImportError:
     HAS_NUMBA = False
-    print("Warning: Numba not found, falling back to Python labeling.")
+    logging.warning("Warning: Numba not found, falling back to Python labeling.")
 from logging_config import get_logger
 
 # Initialize logger
@@ -169,14 +169,15 @@ def _parse_branching_constraints(branch_constraints, recipient_id, branching_var
 
     # Debug Printing for SP Constraints
     if left_patterns:
-        print(f"  [SP DEBUG] Recipient {recipient_id}: Found {len(left_patterns)} LEFT patterns")
+        sorted_elements = sorted(list(p['elements']))
+        logger.debug(f"  [SP DEBUG] Recipient {recipient_id}: Found {len(left_patterns)} LEFT patterns")
         for i, p in enumerate(left_patterns):
-            print(f"    Left #{i}: Limit {p['limit']}, Elements: {sorted(list(p['elements']))}")
+            logger.debug(f"    Left #{i}: Limit {p['limit']}, Elements: {sorted(list(p['elements']))}")
 
     if right_patterns:
-        print(f"  [SP DEBUG] Recipient {recipient_id}: Found {len(right_patterns)} RIGHT patterns")
+        logger.debug(f"  [SP DEBUG] Recipient {recipient_id}: Found {len(right_patterns)} RIGHT patterns")
         for i, p in enumerate(right_patterns):
-            print(f"    Right #{i}: Elements: {p['elements']}, Dual: {p['dual']}")
+            logger.debug(f"    Right #{i}: Elements: {p['elements']}, Dual: {p['dual']}")
 
     return mp_cuts, left_patterns, right_patterns, forbidden_lookup
 
