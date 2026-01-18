@@ -1950,8 +1950,10 @@ def solve_pricing_for_profile_bnp(
         # Default empty arrays (will be passed even if not used)
         forbidden_mask = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.bool_)
         required_mask = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.bool_)
-        nogood_patterns = np.zeros((1, max_worker_id + 1, max_time + 1), dtype=np.int64)
-        num_nogood_cuts = 0
+        # O(1) MP BRANCHING: Use 2D boolean map instead of 3D nogood_patterns
+        mp_forbidden_map = np.zeros((max_worker_id + 1, max_time + 1), dtype=np.bool_)
+        has_mp_branching = False
+        
         left_pattern_elements = np.full((1, 1), -1, dtype=np.int64)
         left_pattern_limits = np.zeros(1, dtype=np.int64)
         num_left_patterns = 0
@@ -1967,21 +1969,19 @@ def solve_pricing_for_profile_bnp(
         if branching_constraints:
             from branching_constraints import MPVariableBranching, SPPatternBranching
             
-            # B.2: MP No-Good Cuts
+            # B.2: MP No-Good Cuts → O(1) FORBIDDEN MAP
             mp_nogood_constraints = [c for c in branching_constraints 
                                      if isinstance(c, MPVariableBranching) and c.profile == profile 
                                      and c.direction == 'left' and c.original_schedule]
             if mp_nogood_constraints:
-                has_nogood_cuts = True
-                num_nogood_cuts = len(mp_nogood_constraints)
-                nogood_patterns = np.zeros((num_nogood_cuts, max_worker_id + 1, max_time + 1), dtype=np.int64)
-                
-                for cut_idx, c in enumerate(mp_nogood_constraints):
+                has_mp_branching = True
+                # Combine ALL no-good cuts into single 2D forbidden map
+                for c in mp_nogood_constraints:
                     for key, val in c.original_schedule.items():
                         if len(key) >= 3 and val > 0.5:
                             j, t = key[1], key[2]
                             if j <= max_worker_id and t <= max_time:
-                                nogood_patterns[cut_idx, j, t] = 1
+                                mp_forbidden_map[j, t] = True  # O(1) mark as forbidden
             
             # B.3: SP Left Pattern Branching
             sp_left_patterns = [c for c in branching_constraints 
@@ -2075,7 +2075,7 @@ def solve_pricing_for_profile_bnp(
                         print(f"    Pattern #{pat_idx}: {pattern_str} → {dual_status} and original dual {dual_val}")
         
         # Decide which Numba function to call
-        use_branching_numba = has_sp_fixing or has_nogood_cuts or has_left_patterns or has_right_patterns
+        use_branching_numba = has_sp_fixing or has_mp_branching or has_left_patterns or has_right_patterns
         
         if use_branching_numba:
             # Call extended Numba function with branching support
@@ -2085,8 +2085,8 @@ def solve_pricing_for_profile_bnp(
                 int(MS), int(MIN_MS), theta_arr, 1e-6,
                 # SP Variable Fixing
                 forbidden_mask, required_mask, has_sp_fixing,
-                # MP No-Good Cuts
-                nogood_patterns, num_nogood_cuts, has_nogood_cuts,
+                # MP No-Good Cuts → O(1) FORBIDDEN MAP
+                mp_forbidden_map, has_mp_branching,
                 # SP Left Patterns
                 left_pattern_elements, left_pattern_limits, num_left_patterns, has_left_patterns,
                 # SP Right Patterns

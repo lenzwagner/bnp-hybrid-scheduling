@@ -824,10 +824,9 @@ def run_with_branching_constraints_numba(
     forbidden_mask,      # 2D bool array [worker, time] - True if fixed to 0
     required_mask,       # 2D bool array [worker, time] - True if fixed to 1
     has_sp_fixing,       # bool - whether any SP fixes are active
-    # === MP No-Good Cuts (B.2) ===
-    nogood_patterns,     # 3D array [cut_idx, worker, time] - 1 if that (w,t) is in forbidden pattern
-    num_nogood_cuts,     # int - number of active no-good cuts
-    has_nogood_cuts,     # bool - whether any no-good cuts are active
+    # === MP No-Good Cuts (B.2) - O(1) OPTIMIZATION ===
+    mp_forbidden_map,    # 2D bool array [worker, time] - True if (w,t) is forbidden by ANY no-good cut
+    has_mp_branching,    # bool - whether any MP branching constraints are active
     # === SP Pattern Branching (B.3) ===
     left_pattern_elements,   # 2D array [pattern_idx, flat_idx] containing encoded (w*1000+t) or -1
     left_pattern_limits,     # 1D array [pattern_idx] - max allowed coverage
@@ -872,13 +871,10 @@ def run_with_branching_constraints_numba(
             is_timeout_scenario = (tau == max_time)
             start_cost = -pi_matrix[j, r_k]
             
-            # === Initialize Zeta for MP Branching ===
-            init_zeta = int64(0)
-            if has_nogood_cuts:
-                for cut_idx in range(num_nogood_cuts):
-                    forbidden_val = nogood_patterns[cut_idx, j, r_k]
-                    if forbidden_val != 1:  # We took 1, forbidden was not 1 -> deviated
-                        init_zeta = init_zeta | (1 << cut_idx)
+            # === O(1) MP Branching Check at r_k ===
+            # Skip if (j, r_k) is forbidden by any no-good cut
+            if has_mp_branching and mp_forbidden_map[j, r_k]:
+                continue  # Pruned before even starting
             
             # === Initialize Rho for SP Left Patterns ===
             init_rho = int64(0)
@@ -947,6 +943,8 @@ def run_with_branching_constraints_numba(
             init_hlen = int64(1)
             init_path = int64(1) # 01 (Therapist)
             
+            # Zeta unused for MP branching (O(1) pruning instead), but keep for compatibility with combined state
+            init_zeta = int64(0)
             combined_zeta_rho = init_zeta | (init_rho << 32)
             
             init_key = (init_ai, init_hist, init_hlen, combined_zeta_rho, init_mu)
@@ -987,14 +985,12 @@ def run_with_branching_constraints_numba(
                                 cost_ther = cost - pi_matrix[j, t]
                                 prog_ther = prog + 1.0
                                 
-                                # Update zeta
-                                new_zeta = zeta_mask
-                                if has_nogood_cuts:
-                                    for cut_idx in range(num_nogood_cuts):
-                                        if (new_zeta >> cut_idx) & 1 == 0:
-                                            forbidden_val = nogood_patterns[cut_idx, j, t]
-                                            if forbidden_val != 1:
-                                                new_zeta = new_zeta | (1 << cut_idx)
+                                # O(1) MP Branching: Skip if forbidden
+                                if has_mp_branching and mp_forbidden_map[j, t]:
+                                    continue  # Pruned
+                                
+                                # Zeta not used for MP branching anymore (O(1) pruning instead)
+                                new_zeta = int64(0)
                                 
                                 # Update rho
                                 new_rho = rho_encoded
@@ -1083,14 +1079,8 @@ def run_with_branching_constraints_numba(
                                 prog_ai = prog + eff
                                 new_ai_count = ai_count + 1
                                 
-                                # Update zeta for AI action
-                                new_zeta = zeta_mask
-                                if has_nogood_cuts:
-                                    for cut_idx in range(num_nogood_cuts):
-                                        if (new_zeta >> cut_idx) & 1 == 0:
-                                            forbidden_val = nogood_patterns[cut_idx, j, t]
-                                            if forbidden_val != 0 and forbidden_val > 0:
-                                                new_zeta = new_zeta | (1 << cut_idx)
+                                # MP branching doesn't affect AI transitions (only therapist)
+                                new_zeta = int64(0)
                                 
                                 # Rho stays same (AI not in pattern)
                                 new_rho = rho_encoded
@@ -1163,14 +1153,8 @@ def run_with_branching_constraints_numba(
                                     prog_gap = prog # No progress
                                     # ai_count unchanged
                                     
-                                    # Update zeta (same as AI)
-                                    new_zeta = zeta_mask
-                                    if has_nogood_cuts:
-                                        for cut_idx in range(num_nogood_cuts):
-                                            if (new_zeta >> cut_idx) & 1 == 0:
-                                                forbidden_val = nogood_patterns[cut_idx, j, t]
-                                                if forbidden_val != 0 and forbidden_val > 0:
-                                                    new_zeta = new_zeta | (1 << cut_idx)
+                                    # MP branching doesn't affect Gap transitions (only therapist)
+                                    new_zeta = int64(0)
                                     
                                     # Rho (same as AI)
                                     new_rho = rho_encoded
@@ -1244,25 +1228,18 @@ def run_with_branching_constraints_numba(
                         can_end_ther = False
                     
                     if can_end_ther:
-                        feasible_ther, _, _ = check_strict_feasibility_numba(hist_mask, hist_len, 1, MS, MIN_MS)
+                        feasible_ther, _, _, = check_strict_feasibility_numba(hist_mask, hist_len, 1, MS, MIN_MS)
                         if feasible_ther:
+                            # O(1) MP Branching: Skip if final assignment is forbidden
+                            if has_mp_branching and mp_forbidden_map[j, tau]:
+                                continue  # Pruned
+                            
                             final_cost = cost - pi_matrix[j, tau]
                             final_prog = prog + 1.0
                             final_path_mask = path_mask | (1 << shift)
                             
-                            # Final Branching Checks (Zeta, Rho, Mu) - omitting details for brevity, assume valid if dominated
-                            # Wait, we need to UPDATE zeta/rho/mu for the final step too!
-                            # And check validity.
-                            # Just reusing logic from loop.
-                            
-                            # Zeta
-                            final_zeta = zeta_mask
-                            if has_nogood_cuts:
-                                for cut_idx in range(num_nogood_cuts):
-                                    if (final_zeta >> cut_idx) & 1 == 0:
-                                        forbidden_val = nogood_patterns[cut_idx, j, tau]
-                                        if forbidden_val != 1:
-                                            final_zeta = final_zeta | (1 << cut_idx)
+                            # Final Branching Checks (Rho, Mu) - MP branching now done via pruning
+                            final_zeta = int64(0)  # Not used for MP branching
                             
                             # Rho
                             final_rho = rho_encoded
