@@ -267,9 +267,9 @@ def main():
     # FILTER INSTANCES
     # ===========================
     # Only solve specific parameter combinations
-    FILTER_T = [5]
-    FILTER_D_FOCUS = [7]
-    FILTER_SEEDS = list(range(10,30))  # Seeds 1-10
+    FILTER_T = [3]
+    FILTER_D_FOCUS = [5]
+    FILTER_SEEDS = list(range(1,6))  # Seeds 1-10
     
     # Apply filters
     filtered_df = instances_df[

@@ -26,7 +26,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
 
     # Learning parameters
     app_data = {
-        'learn_type': ['sigmoid'],
+        'learn_type': [0],
         'theta_base': [0.3],
         'lin_increase': [0.05],
         'k_learn': [0.3],
