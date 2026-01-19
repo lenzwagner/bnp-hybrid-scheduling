@@ -7,6 +7,7 @@ from Utils.derived_vars import compute_derived_variables
 from Utils.extra_values import calculate_extra_metrics
 import pickle
 from datetime import datetime
+import time
 
 logger = get_logger(__name__)
 
@@ -14,6 +15,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
+    
+    If after 4 minutes the gap > 50%, the instance is skipped and NONE values are returned.
     """
     
     logger.info("=" * 100)
@@ -130,9 +133,11 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     cg_solver.setup()
 
     # ===========================
-    # SOLVE
+    # SOLVE WITH 4-MINUTE CHECK
     # ===========================
-
+    
+    start_time = time.time()
+    
     bnp_solver = BranchAndPrice(
         cg_solver,
         branching_strategy=branching_strategy,
@@ -147,9 +152,144 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     # Solve with 20-minute timeout per instance
     # If timeout occurs, solver returns current incumbent and best LP bound
     results = bnp_solver.solve(time_limit=1200, max_nodes=300)  # 1200s = 20 minutes
+    
+    # Check if 4 minutes have passed and gap > 50%
+    elapsed_time = time.time() - start_time
+    current_gap = results.get('gap')
+    
+    skip_instance = False
+    if elapsed_time >= 240:  # 4 minutes = 240 seconds
+        if current_gap is not None and current_gap > 0.50:
+            skip_instance = True
+            logger.info(f"SKIPPING INSTANCE: After {elapsed_time:.2f}s, gap={current_gap:.2%} > 50%")
+            print(f"\n⚠ INSTANCE SKIPPED: Gap {current_gap:.2%} > 50% after 4 minutes")
+    
+    # ===========================
+    # BUILD INSTANCE DATA DICTIONARY
+    # ===========================
+    
+    if skip_instance:
+        # Return a dictionary with basic instance info and NONE for all solution fields
+        instance_data = {
+            # Instance parameters
+            'seed': seed,
+            'D_focus': D_focus,
+            'branching_strategy': branching_strategy,
+            'search_strategy': search_strategy,
+            'learn_type': app_data['learn_type'][0],
+            'theta_base': app_data['theta_base'][0],
+            'lin_increase': app_data['lin_increase'][0],
+            'k_learn': app_data['k_learn'][0],
+            'infl_point': app_data['infl_point'][0],
+            'MS': app_data['MS'][0],
+            'MS_min': app_data['MS_min'][0],
+            'W_on': app_data['W_on'][0],
+            'W_off': app_data['W_off'][0],
+            'daily': app_data['daily'][0],
+            'T': len(cg_solver.T),
+            'D': len(cg_solver.D),
+            
+            # Status
+            'status': 'SKIPPED',
+            'skip_reason': f'Gap {current_gap:.2%} > 50% after 4 minutes',
+            
+            # Set all results to None
+            'final_ub': None,
+            'final_lb': None,
+            'final_gap': None,
+            'root_lp': None,
+            'root_gap': None,
+            'total_nodes': None,
+            'total_cg_iterations': None,
+            'iterations_per_node': None,
+            'root_integral': None,
+            'is_optimal': None,
+            'incumbent_node_id': None,
+            
+            # Timing
+            'total_time': elapsed_time,
+            'time_in_mp': None,
+            'time_in_sp': None,
+            'time_in_ip_heuristic': None,
+            'time_in_root': None,
+            'time_in_branching': None,
+            'time_to_first_incumbent': None,
+            'time_overhead': None,
+            
+            # Column statistics
+            'pattern_size_counts': None,
+            'total_columns': None,
+            
+            # Instance data
+            'P_Pre': cg_solver.P_Pre,
+            'P_F': cg_solver.P_F,
+            'P_Post': cg_solver.P_Post,
+            'P_Join': cg_solver.P_Join,
+            'Nr_agg': cg_solver.Nr_agg,
+            'E_dict': cg_solver.E_dict,
+            'Q_jt': cg_solver.Max_t,
+            'Req': cg_solver.Req_agg,
+            'Entry': cg_solver.Entry_agg,
+            'pre_x': cg_solver.pre_x,
+            'pre_los': cg_solver.pre_los,
+            
+            # All solution variables set to None
+            'focus_x': None,
+            'focus_y': None,
+            'focus_los': None,
+            'focus_e': None,
+            'focus_Y': None,
+            'focus_theta': None,
+            'focus_omega': None,
+            'focus_g_comp': None,
+            'focus_g_gap': None,
+            'focus_z': None,
+            
+            'post_x': None,
+            'post_y': None,
+            'post_los': None,
+            'post_e': None,
+            'post_Y': None,
+            'post_theta': None,
+            'post_omega': None,
+            'post_g_comp': None,
+            'post_g_gap': None,
+            'post_z': None,
+            
+            # Extra metrics - all None
+            'focus_total_capacity': None,
+            'focus_total_utilization': None,
+            'focus_avg_utilization': None,
+            'focus_utilization_percentage': None,
+            'focus_num_treated_patients': None,
+            'focus_drg_patients': None,
+            'focus_continuity_violations': None,
+            'focus_num_continuity_violations': None,
+            'focus_patients_per_therapist': None,
+            
+            'post_total_capacity': None,
+            'post_total_utilization': None,
+            'post_avg_utilization': None,
+            'post_utilization_percentage': None,
+            'post_num_treated_patients': None,
+            'post_drg_patients': None,
+            'post_continuity_violations': None,
+            'post_num_continuity_violations': None,
+            'post_patients_per_therapist': None,
+            
+            # Combined metrics
+            'drg_patients_E65A': None,
+            'drg_patients_E65B': None,
+            'drg_patients_E65C': None,
+            'combined_continuity_violations': None,
+            'combined_num_continuity_violations': None,
+            'combined_patients_per_therapist': None,
+        }
+        
+        return instance_data
 
     # ===========================
-    # DERIVED VARIABLES COMPUTATION
+    # NORMAL PROCESSING (not skipped)
     # ===========================
     f_e, f_Y, f_theta, f_omega, f_g_comp, f_z, f_g_gap = None, None, None, None, None, None, None
     p_e, p_Y, p_theta, p_omega, p_g_comp, p_z, p_g_gap = None, None, None, None, None, None, None
@@ -352,6 +492,8 @@ def main_loop():
     """
     Main loop to solve instances from the newest Excel file in results/instances.
     Stores results in a dictionary and saves to Excel and pickle.
+    
+    Skips instances where gap > 50% after 4 minutes.
     """
     
     # ===========================
@@ -438,14 +580,20 @@ def main_loop():
             results_df = pd.concat([results_df, pd.DataFrame([instance_data])], ignore_index=True)
             
             # Print summary
-            print(f"\n✓ Instance {current_instance}/{total_instances} completed:")
-            print(f"  - Instance ID: {instance_id}")
-            print(f"  - Final UB: {instance_data['final_ub']}")
-            print(f"  - Final LB: {instance_data['final_lb']}")
-            print(f"  - Gap: {instance_data['final_gap']:.5%}" if instance_data['final_gap'] else "  - Gap: N/A")
-            print(f"  - Total time: {instance_data['total_time']:.2f}s")
-            print(f"  - Total nodes: {instance_data['total_nodes']}")
-            print(f"  - Is optimal: {instance_data['is_optimal']}")
+            if instance_data.get('status') == 'SKIPPED':
+                print(f"\n⚠ Instance {current_instance}/{total_instances} SKIPPED:")
+                print(f"  - Instance ID: {instance_id}")
+                print(f"  - Reason: {instance_data['skip_reason']}")
+                print(f"  - Time elapsed: {instance_data['total_time']:.2f}s")
+            else:
+                print(f"\n✓ Instance {current_instance}/{total_instances} completed:")
+                print(f"  - Instance ID: {instance_id}")
+                print(f"  - Final UB: {instance_data['final_ub']}")
+                print(f"  - Final LB: {instance_data['final_lb']}")
+                print(f"  - Gap: {instance_data['final_gap']:.5%}" if instance_data['final_gap'] else "  - Gap: N/A")
+                print(f"  - Total time: {instance_data['total_time']:.2f}s")
+                print(f"  - Total nodes: {instance_data['total_nodes']}")
+                print(f"  - Is optimal: {instance_data['is_optimal']}")
             
         except Exception as e:
             print(f"\n✗ Instance {current_instance}/{total_instances} FAILED:")
@@ -493,18 +641,24 @@ def main_loop():
     print(" BATCH RUN SUMMARY ".center(100, "="))
     print("=" * 100)
     print(f"Total instances: {total_instances}")
-    print(f"Completed successfully: {len([v for v in results_dict.values() if v.get('status') != 'FAILED'])}")
+    print(f"Completed successfully: {len([v for v in results_dict.values() if v.get('status') not in ['FAILED', 'SKIPPED']])}") 
+    print(f"Skipped (gap > 50% after 4 min): {len([v for v in results_dict.values() if v.get('status') == 'SKIPPED'])}")
     print(f"Failed: {len([v for v in results_dict.values() if v.get('status') == 'FAILED'])}")
     print("=" * 100 + "\n")
     
     # Print summary table
     print("\nResults Summary Table:")
-    print(f"{'Instance ID':<30} {'Seed':<8} {'D_focus':<10} {'PTTR':<10} {'UB':<15} {'LB':<15} {'Gap (%)':<12} {'Time (s)':<12} {'Nodes':<10} {'Optimal':<10}")
-    print("-" * 140)
+    print(f"{'Instance ID':<30} {'Seed':<8} {'D_focus':<10} {'PTTR':<10} {'Status':<15} {'UB':<15} {'LB':<15} {'Gap (%)':<12} {'Time (s)':<12} {'Nodes':<10} {'Optimal':<10}")
+    print("-" * 150)
     
     for instance_id, data in results_dict.items():
-        if data.get('status') == 'FAILED':
-            print(f"{instance_id:<30} {data.get('seed', 'N/A'):<8} {data.get('D_focus', 'N/A'):<10} {data.get('pttr', 'N/A'):<10} {'FAILED':<15} {'':< 15} {'':<12} {'':<12} {'':<10} {'':<10}")
+        status = data.get('status', 'OK')
+        
+        if status == 'FAILED':
+            print(f"{instance_id:<30} {data.get('seed', 'N/A'):<8} {data.get('D_focus', 'N/A'):<10} {data.get('pttr', 'N/A'):<10} {'FAILED':<15} {'':<15} {'':<15} {'':<12} {'':<12} {'':<10} {'':<10}")
+        elif status == 'SKIPPED':
+            time_val = f"{data.get('total_time', 0):.2f}" if data.get('total_time') else "N/A"
+            print(f"{instance_id:<30} {data.get('seed', 'N/A'):<8} {data.get('D_focus', 'N/A'):<10} {data.get('pttr', 'N/A'):<10} {'SKIPPED':<15} {'':<15} {'':<15} {'':<12} {time_val:<12} {'':<10} {'':<10}")
         else:
             ub = f"{data.get('final_ub', 'N/A'):.2f}" if data.get('final_ub') else "N/A"
             lb = f"{data.get('final_lb', 'N/A'):.2f}" if data.get('final_lb') else "N/A"
@@ -515,7 +669,7 @@ def main_loop():
             seed_val = data.get('seed', 'N/A')
             d_focus_val = data.get('D_focus', 'N/A')
             pttr_val = data.get('pttr', 'N/A')
-            print(f"{instance_id:<30} {seed_val:<8} {d_focus_val:<10} {pttr_val:<10} {ub:<15} {lb:<15} {gap:<12} {time_val:<12} {nodes:<10} {optimal:<10}")
+            print(f"{instance_id:<30} {seed_val:<8} {d_focus_val:<10} {pttr_val:<10} {'OK':<15} {ub:<15} {lb:<15} {gap:<12} {time_val:<12} {nodes:<10} {optimal:<10}")
     
     print("=" * 100 + "\n")
     
