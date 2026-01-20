@@ -26,7 +26,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
 
     # Learning parameters
     app_data = {
-        'learn_type': [0],
+        'learn_type': ['sigmoid'],
         'theta_base': [0.3],
         'lin_increase': [0.05],
         'k_learn': [0.3],
@@ -254,6 +254,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'seed': seed,
         'D_focus': D_focus,
         'branching_strategy': branching_strategy,
+        'pttr': pttr,
         'search_strategy': search_strategy,
         'learn_type': app_data['learn_type'][0],
         'OnlyHuman': 0 if app_data['learn_type'] == ['sigmoid'] else (1 if app_data['learn_type'] == [0] else None),
