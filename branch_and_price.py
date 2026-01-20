@@ -55,6 +55,20 @@ def _parallel_pricing_worker(profile, node_data, duals_pi, duals_gamma, branchin
     # Extract pattern duals for this profile (Right-Pattern duals are >= 0, reduce RC when covered)
     pattern_dual_sum = 0.0
     if branching_duals:
+        # 1. Apply duals to constraint objects (CRITICAL FIX)
+        if node.branching_constraints:
+            for constraint in node.branching_constraints:
+                # Check if it's an SP pattern constraint
+                if hasattr(constraint, 'pattern') and hasattr(constraint, 'level'):
+                     # Reconstruct stable key
+                    pattern_str = str(sorted(list(constraint.pattern)))
+                    key = (profile, 'pattern', pattern_str, constraint.level)
+                    
+                    if key in branching_duals:
+                        constraint.dual_var = branching_duals[key]
+                        # logger.debug(f"    [Worker] Applied dual {constraint.dual_var:.6f} to pattern {pattern_str}")
+
+        # 2. Calculate sum for A Priori Bound (only for THIS profile)
         pattern_duals = {k: v for k, v in branching_duals.items() 
                         if k[0] == profile and len(k) == 4 and k[1] == 'pattern'}
         if pattern_duals:
@@ -2951,9 +2965,10 @@ class BranchAndPrice:
                     self.logger.warning(f"      ⚠️  WARNING: Right branch (≥) has negative dual: {dual_val:.6f}")
 
                 # Store dual with pattern identifier
-                # Key: (profile, 'pattern', pattern_id, level) where pattern_id is the pattern hash
-                pattern_id = hash(constraint.pattern)
-                key = (constraint.profile, 'pattern', pattern_id, constraint.level)
+                # NEW: Key using stable string representation (sorted tuples)
+                # Key: (profile, 'pattern', pattern_str, level)
+                pattern_str = str(sorted(list(constraint.pattern)))
+                key = (constraint.profile, 'pattern', pattern_str, constraint.level)
                 branching_duals[key] = dual_val
                 
                 pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(constraint.pattern)) + "}"
