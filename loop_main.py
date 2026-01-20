@@ -10,14 +10,14 @@ from datetime import datetime
 
 logger = get_logger(__name__)
 
-def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
+def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0):
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
     """
     
     logger.info("=" * 100)
-    logger.info(f"SOLVING INSTANCE: seed={seed}, D_focus={D_focus}")
+    logger.info(f"SOLVING INSTANCE: seed={seed}, D_focus={D_focus}, learn_type={learn_type}")
     logger.info("=" * 100)
     
     # ===========================
@@ -26,7 +26,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
 
     # Learning parameters
     app_data = {
-        'learn_type': ['sigmoid'],
+        'learn_type': [learn_type],
         'theta_base': [0.3],
         'lin_increase': [0.05],
         'k_learn': [0.3],
@@ -257,7 +257,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'pttr': pttr,
         'search_strategy': search_strategy,
         'learn_type': app_data['learn_type'][0],
-        'OnlyHuman': 0 if app_data['learn_type'] == ['sigmoid'] else (1 if app_data['learn_type'] == [0] else None),
+        'OnlyHuman': 1 if app_data['learn_type'][0] == 0 else 0,
         'theta_base': app_data['theta_base'][0],
         'lin_increase': app_data['lin_increase'][0],
         'k_learn': app_data['k_learn'][0],
@@ -417,53 +417,67 @@ def main_loop():
         print(f" seed={seed}, D_focus={D_focus}, pttr={pttr}, T={T} ".center(100, "="))
         print("=" * 100 + "\n")
         
-        try:
-            # Solve instance with parameters from Excel
-            instance_data = solve_instance(
-                seed=seed,
-                D_focus=D_focus,
-                pttr=pttr,
-                T=T,
-                allow_gaps=False,
-                use_warmstart=True,
-                dual_smoothing_alpha=None
-            )
+        # Iterate over learn_types
+        learn_types = [0, 'sigmoid']
+        
+        for lt in learn_types:
+            # Create a unique instance_id for this learn_type
+            lt_suffix = "_sigmoid" if lt == 'sigmoid' else "_0"
+            current_instance_id = f"{instance_id}{lt_suffix}"
             
-            # Add instance_id to the results
-            instance_data['instance_id'] = instance_id
-            instance_data['scenario_nr'] = row.get('scenario_nr', idx)
+            print(f"\n Solving for learn_type: {lt} (ID: {current_instance_id})")
             
-            # Store in dictionary with instance_id as key
-            results_dict[instance_id] = instance_data
-            
-            # Add to DataFrame
-            results_df = pd.concat([results_df, pd.DataFrame([instance_data])], ignore_index=True)
-            
-            # Print summary
-            print(f"\n✓ Instance {current_instance}/{total_instances} completed:")
-            print(f"  - Instance ID: {instance_id}")
-            print(f"  - Final UB: {instance_data['final_ub']}")
-            print(f"  - Final LB: {instance_data['final_lb']}")
-            print(f"  - Gap: {instance_data['final_gap']:.5%}" if instance_data['final_gap'] else "  - Gap: N/A")
-            print(f"  - Total time: {instance_data['total_time']:.2f}s")
-            print(f"  - Total nodes: {instance_data['total_nodes']}")
-            print(f"  - Is optimal: {instance_data['is_optimal']}")
-            
-        except Exception as e:
-            print(f"\n✗ Instance {current_instance}/{total_instances} FAILED:")
-            print(f"  Error: {str(e)}")
-            logger.error(f"Instance {instance_id} failed: {str(e)}", exc_info=True)
-            
-            # Store failure indication
-            results_dict[instance_id] = {
-                'instance_id': instance_id,
-                'seed': seed,
-                'D_focus': D_focus,
-                'pttr': pttr,
-                'T': T,
-                'error': str(e),
-                'status': 'FAILED'
-            }
+            try:
+                # Solve instance with parameters from Excel
+                instance_data = solve_instance(
+                    seed=seed,
+                    D_focus=D_focus,
+                    pttr=pttr,
+                    T=T,
+                    allow_gaps=False,
+                    use_warmstart=True,
+                    dual_smoothing_alpha=None,
+                    learn_type=lt
+                )
+                
+                # Add instance_id to the results
+                instance_data['instance_id'] = current_instance_id
+                instance_data['scenario_nr'] = row.get('scenario_nr', idx)
+                instance_data['original_instance_id'] = instance_id
+                
+                # Store in dictionary with instance_id as key
+                results_dict[current_instance_id] = instance_data
+                
+                # Add to DataFrame
+                results_df = pd.concat([results_df, pd.DataFrame([instance_data])], ignore_index=True)
+                
+                # Print summary
+                print(f"\n✓ Instance {current_instance}/{total_instances} [{lt}] completed:")
+                print(f"  - Instance ID: {current_instance_id}")
+                print(f"  - Final UB: {instance_data['final_ub']}")
+                print(f"  - Final LB: {instance_data['final_lb']}")
+                print(f"  - Gap: {instance_data['final_gap']:.5%}" if instance_data['final_gap'] else "  - Gap: N/A")
+                print(f"  - Total time: {instance_data['total_time']:.2f}s")
+                print(f"  - Total nodes: {instance_data['total_nodes']}")
+                print(f"  - Is optimal: {instance_data['is_optimal']}")
+                
+            except Exception as e:
+                print(f"\n✗ Instance {current_instance}/{total_instances} [{lt}] FAILED:")
+                print(f"  Error: {str(e)}")
+                logger.error(f"Instance {current_instance_id} failed: {str(e)}", exc_info=True)
+                
+                # Store failure indication
+                results_dict[current_instance_id] = {
+                    'instance_id': current_instance_id,
+                    'original_instance_id': instance_id,
+                    'seed': seed,
+                    'D_focus': D_focus,
+                    'pttr': pttr,
+                    'T': T,
+                    'learn_type': lt,
+                    'error': str(e),
+                    'status': 'FAILED'
+                }
     
     # ===========================
     # SAVE RESULTS
@@ -496,7 +510,17 @@ def main_loop():
     print("=" * 100)
     print(f"Total instances: {total_instances}")
     print(f"Completed successfully: {len([v for v in results_dict.values() if v.get('status') != 'FAILED'])}")
-    print(f"Failed: {len([v for v in results_dict.values() if v.get('status') == 'FAILED'])}")
+    failed_instances = [v for v in results_dict.values() if v.get('status') == 'FAILED']
+    print(f"Failed: {len(failed_instances)}")
+    
+    if failed_instances:
+        print("\n" + "-" * 50)
+        print(" FAILED INSTANCES DETAILS ".center(50, "-"))
+        print("-" * 50)
+        for fail in failed_instances:
+             print(f"• {fail['instance_id']}: {fail.get('error', 'Unknown error')}")
+        print("-" * 50)
+
     print("=" * 100 + "\n")
     
     # Print summary table
@@ -506,7 +530,7 @@ def main_loop():
     
     for instance_id, data in results_dict.items():
         if data.get('status') == 'FAILED':
-            print(f"{instance_id:<30} {data.get('seed', 'N/A'):<8} {data.get('D_focus', 'N/A'):<10} {data.get('pttr', 'N/A'):<10} {'FAILED':<15} {'':< 15} {'':<12} {'':<12} {'':<10} {'':<10}")
+            print(f"{instance_id:<30} {data.get('seed', 'N/A'):<8} {data.get('D_focus', 'N/A'):<10} {data.get('pttr', 'N/A'):<10} {'FAILED':<15} {'':<15} {'':<12} {'':<12} {'':<10} {'':<10}")
         else:
             ub = f"{data.get('final_ub', 'N/A'):.2f}" if data.get('final_ub') else "N/A"
             lb = f"{data.get('final_lb', 'N/A'):.2f}" if data.get('final_lb') else "N/A"
