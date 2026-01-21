@@ -393,7 +393,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     ub_equals_focus_los = 0
     sum_focus_los = 0
     if results.get('incumbent') is not None and agg_focus_los:
-        sum_focus_los = int(round(sum(agg_focus_los.values())))
+        sum_focus_los = int(round(sum(agg_focus_los[p] * cg_solver.Nr_agg[p] for p in agg_focus_los)))
         if abs(results.get('incumbent') - sum_focus_los) < 1e-6:  # Use tolerance for float comparison
             ub_equals_focus_los = 1
 
