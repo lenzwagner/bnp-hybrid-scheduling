@@ -248,8 +248,9 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     # Check if final_ub equals sum of focus_los
     ub_equals_focus_los = 0
+    sum_focus_los = 0
     if results.get('incumbent') is not None and agg_focus_los:
-        sum_focus_los = sum(agg_focus_los.values())
+        sum_focus_los = int(round(sum(agg_focus_los.values())))
         if abs(results.get('incumbent') - sum_focus_los) < 1e-6:  # Use tolerance for float comparison
             ub_equals_focus_los = 1
 
@@ -353,6 +354,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'combined_num_continuity_violations': len(combined_continuity_violations),
         'combined_patients_per_therapist': combined_patients_per_therapist,
         'ub_equals_focus_los': ub_equals_focus_los,
+        'sum_focus_los': sum_focus_los,
     }
     
     return instance_data
