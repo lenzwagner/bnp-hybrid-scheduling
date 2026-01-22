@@ -365,6 +365,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'root_integral': results.get('root_integral'),
         'is_optimal': results.get('is_optimal'),
         'incumbent_node_id': results.get('incumbent_node_id'),
+        'max_tree_depth': results.get('max_tree_depth'),
         
         # Timing
         'total_time': results.get('total_time'),

@@ -767,6 +767,11 @@ class BranchAndPrice:
 
                 self.incumbent_lambdas = {k: v for k, v in lambdas_dict.items() if v['value'] > 1e-6}
                 self.stats['incumbent_updates'] += 1
+                
+                # Update time to first incumbent if not yet set
+                if self.stats.get('time_to_first_incumbent') is None:
+                    self.stats['time_to_first_incumbent'] = time.time() - self.start_time
+                    
                 self.update_gap()
 
                 self.logger.info(f"   New gap: {self.gap:.4%}\n")
@@ -4503,7 +4508,8 @@ class _NodeWorker:
                 lambdas_active = {k: v for k, v in node_lambdas.items() if v.get('value', 0) > 1e-6}
                 
                 updated = self.shared.try_update_incumbent(
-                    lp_bound, solution, lambdas_active, node.node_id
+                    lp_bound, solution, lambdas_active, node.node_id,
+                    time_elapsed=time.time() - self.bnp.start_time
                 )
                 if updated:
                     logger.info(f"[W{self.worker_id}] ✅ NEW INCUMBENT from Node {node.node_id}: {lp_bound:.6f}")

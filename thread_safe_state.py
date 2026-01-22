@@ -122,7 +122,8 @@ class ThreadSafeSharedState:
         new_incumbent: float, 
         new_solution: Dict[str, Any], 
         new_lambdas: Dict[Tuple, Any],
-        node_id: int
+        node_id: int,
+        time_elapsed: float = None
     ) -> bool:
         """
         Thread-safe incumbent update.
@@ -134,6 +135,7 @@ class ThreadSafeSharedState:
             new_solution: New solution dictionary
             new_lambdas: New lambda values
             node_id: Node ID where incumbent was found
+            time_elapsed: Time elapsed since start (seconds)
             
         Returns:
             True if incumbent was updated, False otherwise
@@ -146,6 +148,11 @@ class ThreadSafeSharedState:
                 self.incumbent_lambdas = new_lambdas
                 self.stats['incumbent_updates'] += 1
                 self.stats['incumbent_node_id'] = node_id
+                
+                # Update time to first incumbent if provided and not yet set
+                if time_elapsed is not None and self.stats.get('time_to_first_incumbent') is None:
+                    self.stats['time_to_first_incumbent'] = time_elapsed
+                
                 self._update_gap()
                 
                 self.logger.info(f"✅ NEW INCUMBENT: {new_incumbent:.6f} (previous: {old_incumbent:.6f}, gap: {self.gap:.4%})")
