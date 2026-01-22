@@ -209,9 +209,13 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
                 best_seed = current_seed
                 
                 # Store data for plotting
-                sorted_items = sorted([(k, human_dict[k] - hybrid_dict[k]) for k in common_keys], key=lambda x: x[1])
+                # Structure: (id, diff, old_los, new_los)
+                sorted_items = sorted([(k, human_dict[k] - hybrid_dict[k], human_dict[k], hybrid_dict[k]) 
+                                     for k in common_keys], key=lambda x: x[1])
                 patient_ids = [item[0] for item in sorted_items]
                 savings = [item[1] for item in sorted_items]
+                human_los = [item[2] for item in sorted_items]
+                hybrid_los = [item[3] for item in sorted_items]
         except Exception as e:
             print(f"Error processing seed {current_seed}: {e}")
             continue
@@ -243,20 +247,19 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
     ax.set_xlabel('Patient ID', fontsize=12)
     ax.set_ylabel('Days Saved (Human LOS - Hybrid LOS)', fontsize=12)
     
-    # Set X-ticks to be the patient IDs
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(x_labels, rotation=90, fontsize=8)
+    # Remove X-ticks labels as requested (Patient IDs removed)
+    ax.set_xticks([]) 
+    ax.set_xticklabels([])
     
-    # Add value labels inside/above bars if they fit
+    # Add value labels inside bars representing "Old / New"
     for i, bar in enumerate(bars):
         height = bar.get_height()
-        # Only label significant bars if there are too many
         if abs(height) > 0.1: 
-             # no extra label needed if x-axis has IDs, but user asked for "in the bar or above axis"
-             # "es sollen für jeden focus patinetne eine Bar und in der bar (falls ungleich0) oder über der x-achse die id"
-             # interpretation: ID inside bar OR on axis. I put IDs on axis. 
-             # Let's also put ID inside bar if space allows, as requested "in der bar".
-             pass
+             label_text = f"{human_los[i]} / {hybrid_los[i]}"
+             # Center text in bar
+             ax.text(bar.get_x() + bar.get_width()/2., height/2.,
+                     label_text,
+                     ha='center', va='center', rotation=90, fontsize=8, color='white')
 
     import matplotlib.ticker as ticker
     ax.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.1f'))
