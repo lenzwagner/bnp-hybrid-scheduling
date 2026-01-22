@@ -8,6 +8,9 @@ from Utils.extra_values import calculate_extra_metrics
 import pickle
 from datetime import datetime
 
+from collections import defaultdict
+from main import disaggregate_solution
+
 logger = get_logger(__name__)
 
 def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0):
@@ -157,24 +160,116 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     agg_post_x, agg_post_los = None, None
     total_columns = 0
 
+    # Default to profile lists (for safety/fallback)
+    save_P_F = cg_solver.P_F
+    save_P_Post = cg_solver.P_Post
+    save_P_Pre = cg_solver.P_Pre
+    save_P_Join = cg_solver.P_Join
+    save_pre_x = cg_solver.pre_x
+    save_pre_los = cg_solver.pre_los
+    save_Entry = cg_solver.Entry_agg
+    save_Req = cg_solver.Req_agg
+    save_E_dict = cg_solver.E_dict
+
     if results.get('incumbent_solution'):
         inc_sol = results['incumbent_solution']
         
-        # Calculate derived variables for Focus Patients
+        # ==============================================================================
+        # DISAGGREGATION: Convert profile-based solution to original patient IDs
+        # ==============================================================================
+        
+        # Prepare Disaggregated Dicts for Entry and Req (needed globally)
+        disagg_Entry = {}
+        disagg_Req = {}
+        # Iterate over ALL profiles (P_Pre + P_F + P_Post + P_Join)
+        for profile_id, patients in cg_solver.profile_to_all_patients.items():
+            p_entry = cg_solver.Entry_agg.get(profile_id, 1)
+            p_req = cg_solver.Req_agg.get(profile_id, 0)
+            for p_orig in patients:
+                disagg_Entry[p_orig] = p_entry
+                disagg_Req[p_orig] = p_req
+        
+        save_Entry = disagg_Entry
+        save_Req = disagg_Req
+        
+        disagg_x, disagg_y, disagg_los = disaggregate_solution(
+            inc_sol, 
+            cg_solver.profile_to_all_patients,
+            cg_solver.global_solutions
+        )
+        
+        # Create a "virtual" solution dict with disaggregated values
+        disagg_sol = {
+            'x': disagg_x,
+            'y': disagg_y,
+            'LOS': disagg_los,
+        }
+        
+        # Get original patient lists
+        original_P_F = []
+        for profile_id in cg_solver.P_F:
+            if profile_id in cg_solver.profile_to_all_patients:
+                original_P_F.extend(cg_solver.profile_to_all_patients[profile_id])
+                
+        original_P_Post = []
+        for profile_id in cg_solver.P_Post:
+            if profile_id in cg_solver.profile_to_all_patients:
+                original_P_Post.extend(cg_solver.profile_to_all_patients[profile_id])
+                
+        original_P_Pre = []
+        disagg_pre_x_dict = {}
+        disagg_pre_los_dict = {}
+
+        for profile_id in cg_solver.P_Pre:
+            if profile_id in cg_solver.profile_to_all_patients:
+                patients = cg_solver.profile_to_all_patients[profile_id]
+                original_P_Pre.extend(patients)
+                
+                # Disaggregate history
+                p_hist_x = cg_solver.pre_x.get(profile_id, {})
+                p_hist_los = cg_solver.pre_los.get(profile_id, 0)
+                
+                for p_orig in patients:
+                    disagg_pre_x_dict[p_orig] = p_hist_x
+                    disagg_pre_los_dict[p_orig] = p_hist_los
+
+        original_P_Join = []
+        disagg_E_dict = {}
+
+        for profile_id in cg_solver.P_Join:
+            if profile_id in cg_solver.profile_to_all_patients:
+                patients = cg_solver.profile_to_all_patients[profile_id]
+                original_P_Join.extend(patients)
+                
+                # Disaggregate E_dict
+                p_e_val = cg_solver.E_dict.get(profile_id, 0)
+                for p_orig in patients:
+                    disagg_E_dict[p_orig] = p_e_val
+
+        # Use original patient IDs for calculation
+        save_P_F = original_P_F
+        save_P_Post = original_P_Post
+        save_P_Pre = original_P_Pre
+        save_P_Join = original_P_Join
+        save_pre_x = disagg_pre_x_dict
+        save_pre_los = disagg_pre_los_dict
+        save_E_dict = disagg_E_dict
+        
+        # Calculate derived variables for Focus Patients using DISAGGREGATED data
         f_e, f_Y, f_theta, f_omega, f_g_comp, f_z, f_g_gap = compute_derived_variables(
-            cg_solver, inc_sol, app_data, patients_list=cg_solver.P_F
+            cg_solver, disagg_sol, app_data, patients_list=original_P_F
         )
         
-        # Calculate derived variables for Post Patients
+        # Calculate derived variables for Post Patients using DISAGGREGATED data
         p_e, p_Y, p_theta, p_omega, p_g_comp, p_z, p_g_gap = compute_derived_variables(
-            cg_solver, inc_sol, app_data, patients_list=cg_solver.P_Post
+            cg_solver, disagg_sol, app_data, patients_list=original_P_Post
         )
         
-        # Calculate EXTRA METRICS (use g_comp for compatibility)
+        # Calculate EXTRA METRICS (use g_comp for compatibility) with DISAGGREGATED data
         f_derived_data = {'e': f_e, 'Y': f_Y, 'theta': f_theta, 'omega': f_omega, 'g': f_g_comp, 'z': f_z, 'g_gap': f_g_gap}
         f_start, f_end = 1, D_focus
         f_metrics = calculate_extra_metrics(
-            cg_solver, inc_sol, cg_solver.P_F, f_derived_data, cg_solver.T, 
+            cg_solver, disagg_sol, original_P_F, f_derived_data, cg_solver.T, 
             start_day=f_start, end_day=f_end
         )
         
@@ -182,57 +277,36 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         p_start = D_focus + 1
         p_end = max(cg_solver.D_Ext)
         p_metrics = calculate_extra_metrics(
-            cg_solver, inc_sol, cg_solver.P_Post, p_derived_data, cg_solver.T, 
+            cg_solver, disagg_sol, original_P_Post, p_derived_data, cg_solver.T, 
             start_day=p_start, end_day=p_end
         )
         
-        # Aggregate X and LOS variables
-        x_dict = inc_sol.get('x', {})
-        los_dict = inc_sol.get('LOS', {})
+        # Filter x and LOS for Focus and Post patients (Disaggregated)
+        focus_x = {k: v for k, v in disagg_x.items() if k[0] in original_P_F}
+        focus_los = {k: v for k, v in disagg_los.items() if k in original_P_F}
         
-        agg_focus_x = {}
-        agg_post_x = {}
-        if x_dict:
-            for k, v in x_dict.items():
-                if len(k) >= 4:
-                    p, t_ther, d = k[0], k[1], k[2]
-                    key = (p, t_ther, d)
-                    if p in cg_solver.P_F:
-                        agg_focus_x[key] = agg_focus_x.get(key, 0) + v
-                    elif p in cg_solver.P_Post:
-                        agg_post_x[key] = agg_post_x.get(key, 0) + v
+        post_x = {k: v for k, v in disagg_x.items() if k[0] in original_P_Post}
+        post_los = {k: v for k, v in disagg_los.items() if k in original_P_Post}
+        
+        # Build focus_y and post_y from disagg_y
+        focus_y = {k: v for k, v in disagg_y.items() if k[0] in original_P_F}
+        post_y = {k: v for k, v in disagg_y.items() if k[0] in original_P_Post}
+        
+        # Rename for output compatibility
+        agg_focus_x = focus_x
+        agg_post_x = post_x
+        agg_focus_los = focus_los
+        agg_post_los = post_los
         
         if cg_solver.master and hasattr(cg_solver.master, 'lmbda'):
             total_columns = len(cg_solver.master.lmbda)
-        
-        agg_focus_los = {}
-        agg_post_los = {}
-        if los_dict:
-            for k, v in los_dict.items():
-                p = k[0] if isinstance(k, tuple) else k
-                if p in cg_solver.P_F:
-                    agg_focus_los[p] = v
-                elif p in cg_solver.P_Post:
-                    agg_post_los[p] = v
-
-        # Build focus_y and post_y from raw_y
-        raw_y = inc_sol.get('y', {})
-        focus_y = {(p, d): 0.0 for p in cg_solver.P_F for d in cg_solver.D_Ext}
-        for k, v in raw_y.items():
-            p, d = k[0], k[1]
-            if p in cg_solver.P_F and abs(v - 1.0) < 1e-6:
-                focus_y[(p, d)] = 1.0
-        
-        post_y = {(p, d): 0.0 for p in cg_solver.P_Post for d in cg_solver.D_Ext}
-        for k, v in raw_y.items():
-            p, d = k[0], k[1]
-            if p in cg_solver.P_Post and abs(v - 1.0) < 1e-6:
-                post_y[(p, d)] = 1.0
+            
     else:
         f_metrics = {}
         p_metrics = {}
         focus_y = {}
         post_y = {}
+        # Ensure lists are at least available if solver fails, they default to initialized lists above
 
     # Combined metrics
     from collections import Counter
@@ -246,12 +320,13 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     p_ppt = p_metrics.get('patients_per_therapist', {})
     combined_patients_per_therapist = dict(Counter(f_ppt) + Counter(p_ppt))
     
-    # Check if final_ub equals sum of focus_los
+    # Check if final_ub equals sum of focus_los (Consistency Check)
     ub_equals_focus_los = 0
     sum_focus_los = 0
     if results.get('incumbent') is not None and agg_focus_los:
-        sum_focus_los = int(round(sum(agg_focus_los[p] * cg_solver.Nr_agg[p] for p in agg_focus_los)))
-        if abs(results.get('incumbent') - sum_focus_los) < 1e-6:  # Use tolerance for float comparison
+        # Since agg_focus_los IS NOW DISAGGREGATED, we just sum values directly (no Nr_agg needed)
+        sum_focus_los = int(round(sum(agg_focus_los.values())))
+        if abs(results.get('incumbent') - sum_focus_los) < 1e-6:
             ub_equals_focus_los = 1
 
     # ===========================
@@ -306,17 +381,17 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'total_columns': total_columns,
         
         # Instance data
-        'P_Pre': cg_solver.P_Pre,
-        'P_F': cg_solver.P_F,
-        'P_Post': cg_solver.P_Post,
-        'P_Join': cg_solver.P_Join,
+        'P_Pre': save_P_Pre,
+        'P_F': save_P_F,
+        'P_Post': save_P_Post,
+        'P_Join': save_P_Join,
         'Nr_agg': cg_solver.Nr_agg,
-        'E_dict': cg_solver.E_dict,
+        'E_dict': save_E_dict,
         'Q_jt': cg_solver.Max_t,
-        'Req': cg_solver.Req_agg,
-        'Entry': cg_solver.Entry_agg,
-        'pre_x': cg_solver.pre_x,
-        'pre_los': cg_solver.pre_los,
+        'Req': save_Req,
+        'Entry': save_Entry,
+        'pre_x': save_pre_x,
+        'pre_los': save_pre_los,
         
         # Derived variables - Focus
         'focus_x': agg_focus_x, 
