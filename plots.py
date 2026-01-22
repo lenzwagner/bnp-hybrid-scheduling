@@ -210,8 +210,9 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
                 
                 # Store data for plotting
                 # Structure: (id, diff, old_los, new_los)
+                # Sort by savings (diff), then by patient ID as tie-breaker
                 sorted_items = sorted([(k, human_dict[k] - hybrid_dict[k], human_dict[k], hybrid_dict[k]) 
-                                     for k in common_keys], key=lambda x: x[1])
+                                     for k in common_keys], key=lambda x: (x[1], x[0]))
                 patient_ids = [item[0] for item in sorted_items]
                 savings = [item[1] for item in sorted_items]
                 human_los = [item[2] for item in sorted_items]
@@ -244,25 +245,26 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
     ax.axhline(0, color='red', linestyle='--', linewidth=1)
     
     workload_label = workload.capitalize() if workload else 'All'
-    ax.set_xlabel('Patient ID', fontsize=12)
+    ax.set_xlabel('Patients (Sorted by Savings)', fontsize=12)
     ax.set_ylabel('Days Saved (Human LOS - Hybrid LOS)', fontsize=12)
     
     # Remove X-ticks labels as requested (Patient IDs removed)
     ax.set_xticks([]) 
     ax.set_xticklabels([])
     
-    # Add value labels inside bars representing "Old / New"
+    # Add value labels inside bars with Patient ID above Old / New (horizontally)
     for i, bar in enumerate(bars):
         height = bar.get_height()
         if abs(height) > 0.1: 
-             label_text = f"{human_los[i]} / {hybrid_los[i]}"
-             # Center text in bar
+             label_text = f"ID: {patient_ids[i]}\n\n{human_los[i]} / {hybrid_los[i]}"
+             # Center text in bar, displayed horizontally
              ax.text(bar.get_x() + bar.get_width()/2., height/2.,
                      label_text,
-                     ha='center', va='center', rotation=90, fontsize=8, color='white')
+                     ha='center', va='center', rotation=0, fontsize=8, color='white')
 
     import matplotlib.ticker as ticker
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.1f'))
+    # Format y-axis to show integers only
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
     ax.grid(True, axis='y', linestyle=':', alpha=0.6)
     
     plt.tight_layout()
