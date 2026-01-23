@@ -13,7 +13,7 @@ from main import disaggregate_solution
 
 logger = get_logger(__name__)
 
-def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0):
+def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, instance_id=None):
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
@@ -149,7 +149,37 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     # Solve with 20-minute timeout per instance
     # If timeout occurs, solver returns current incumbent and best LP bound
-    results = bnp_solver.solve(time_limit=1200, max_nodes=300)  # 1200s = 20 minutes
+    results = bnp_solver.solve(time_limit=120, max_nodes=300)  # 1200s = 20 minutes
+
+    # ===========================
+    # SAVE INCUMBENT SOLUTION
+    # ===========================
+    if results.get('incumbent') is not None and results.get('incumbent') < float('inf') and instance_id:
+        try:
+            sol_dir = 'sols/iter'
+            os.makedirs(sol_dir, exist_ok=True)
+            sol_filename = os.path.join(sol_dir, f"{instance_id}.sol")
+            
+            with open(sol_filename, 'w') as f:
+                f.write(f"# Objective value: {results['incumbent']}\n")
+                
+                # Write lambda variables
+                # usage of incumbent_lambdas from bnp_solver which stores {key: {'value': val, ...}}
+                if hasattr(bnp_solver, 'incumbent_lambdas') and bnp_solver.incumbent_lambdas:
+                    for key, data in bnp_solver.incumbent_lambdas.items():
+                        # Try to get variable name from master problem
+                        if key in cg_solver.master.lmbda:
+                            var_name = cg_solver.master.lmbda[key].VarName
+                            val = data['value']
+                            f.write(f"{var_name} {val}\n")
+                        else:
+                            # Fallback if key not found (should not happen if consistent)
+                            logger.warning(f"Variable for key {key} not found in master problem when saving .sol")
+                            
+            logger.info(f"✓ Saved incumbent solution to {sol_filename}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save .sol file for {instance_id}: {e}")
 
     # ===========================
     # DERIVED VARIABLES COMPUTATION
@@ -324,7 +354,6 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     ub_equals_focus_los = 0
     sum_focus_los = 0
     if results.get('incumbent') is not None and agg_focus_los:
-        # Since agg_focus_los IS NOW DISAGGREGATED, we just sum values directly (no Nr_agg needed)
         sum_focus_los = int(round(sum(agg_focus_los.values())))
         if abs(results.get('incumbent') - sum_focus_los) < 1e-6:
             ub_equals_focus_los = 1
@@ -523,7 +552,8 @@ def main_loop():
                     allow_gaps=False,
                     use_warmstart=True,
                     dual_smoothing_alpha=None,
-                    learn_type=lt
+                    learn_type=lt,
+                    instance_id=current_instance_id
                 )
                 
                 # Add instance_id to the results

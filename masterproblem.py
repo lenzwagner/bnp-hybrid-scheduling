@@ -81,7 +81,10 @@ class MasterProblem_d:
 
     def startSol(self, schedule_x = None, schedule_los = None):
         for p in self.P_Join:
-            self.lmbda[p, 1].Obj = schedule_los.get(p, 0)
+            if self.E[p] == 0:
+                self.lmbda[p, 1].Obj = 0
+            else:
+                self.lmbda[p, 1].Obj = schedule_los.get(p, 0)
             for t, d in self.cons_p_max:
                 value = schedule_x.get((p, t, d, 1), 0)
                 self.Model.chgCoeff(self.cons_p_max[t, d], self.lmbda[p, 1], value)

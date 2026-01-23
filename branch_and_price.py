@@ -156,8 +156,8 @@ class BranchAndPrice:
         # Logger
         self.logger = logging.getLogger(__name__)
         
-        # Create Sols/Integral directory
-        os.makedirs('Sols/Integral', exist_ok=True)
+        # Create sols/Integral directory
+        os.makedirs('sols/Integral', exist_ok=True)
 
         # Node management
         self.nodes = {}  # {node_id -> BnPNode}
@@ -650,7 +650,7 @@ class BranchAndPrice:
                     # Save solution file
                     if master.Model.SolCount > 0:
                         sol_name = f"Node_{node_id if node_id is not None else 'root'}.sol"
-                        sol_path = os.path.join('Sols/Integral', sol_name)
+                        sol_path = os.path.join('sols/Integral', sol_name)
                         master.Model.write(sol_path)
                         self.logger.info(f"   [IP Save] Solution saved to {sol_path}")
 
@@ -687,7 +687,7 @@ class BranchAndPrice:
                         # Save solution file
                         if master.Model.SolCount > 0:
                             sol_name = f"Node_{node_id if node_id is not None else 'root'}.sol"
-                            sol_path = os.path.join('Sols/Integral', sol_name)
+                            sol_path = os.path.join('sols/Integral', sol_name)
                             master.Model.write(sol_path)
                             self.logger.info(f"   [IP Save] Solution (Time Limit) saved to {sol_path}")
                         success = True
@@ -2709,7 +2709,7 @@ class BranchAndPrice:
             # Save solution file
             if master.Model.SolCount > 0:
                 sol_name = f"Node_{node.node_id}.sol"
-                sol_path = os.path.join('Sols/Integral', sol_name)
+                sol_path = os.path.join('sols/Integral', sol_name)
                 master.Model.write(sol_path)
                 self.logger.info(f"   [IP Save] Integral node solution saved to {sol_path}")
 
@@ -3915,7 +3915,7 @@ class BranchAndPrice:
                     # Save solution file
                     if master.Model.SolCount > 0:
                         sol_name = f"Node_{current_node_count}_heuristic.sol"
-                        sol_path = os.path.join('Sols/Integral', sol_name)
+                        sol_path = os.path.join('sols/Integral', sol_name)
                         master.Model.write(sol_path)
                         self.logger.info(f"   [IP Save] Heuristic solution saved to {sol_path}")
 
@@ -3974,7 +3974,7 @@ class BranchAndPrice:
                         # Save solution file
                         if master.Model.SolCount > 0:
                             sol_name = f"Node_{current_node_count}_heuristic_timeout.sol"
-                            sol_path = os.path.join('Sols/Integral', sol_name)
+                            sol_path = os.path.join('sols/Integral', sol_name)
                             master.Model.write(sol_path)
                             self.logger.info(f"   [IP Save] Heuristic solution (Time Limit) saved to {sol_path}")
                         self.stats['incumbent_updates'] += 1

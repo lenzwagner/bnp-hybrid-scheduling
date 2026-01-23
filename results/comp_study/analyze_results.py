@@ -142,11 +142,21 @@ def analyze_results():
         
     grouped = grouped.reset_index()
 
+    # Round before printing and saving
+    grouped = grouped.round(2)
+
     # Print to console
     print("\n" + "="*80)
     print(" AGGREGATED STATISTICS (Grouped by T x D) ".center(80, "="))
     print("="*80)
-    print(grouped.to_string())
+    print(grouped.to_string(float_format="%.2f"))
+    print("="*80 + "\n")
+
+    # Copy-friendly output (for plotting)
+    print("\n" + "="*80)
+    print(" COPY-FRIENDLY OUTPUT (Tab-separated) ".center(80, "="))
+    print("="*80)
+    print(grouped.to_csv(sep='\t', index=False, float_format="%.2f"))
     print("="*80 + "\n")
 
     # Save to Excel
