@@ -10,10 +10,11 @@ from datetime import datetime
 
 from collections import defaultdict
 from main import disaggregate_solution
+from calculate_transition_matrix import compute_session_transition_matrix, print_transition_matrix
 
 logger = get_logger(__name__)
 
-def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, instance_id=None):
+def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0):
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
@@ -149,37 +150,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     # Solve with 20-minute timeout per instance
     # If timeout occurs, solver returns current incumbent and best LP bound
-    results = bnp_solver.solve(time_limit=120, max_nodes=300)  # 1200s = 20 minutes
-
-    # ===========================
-    # SAVE INCUMBENT SOLUTION
-    # ===========================
-    if results.get('incumbent') is not None and results.get('incumbent') < float('inf') and instance_id:
-        try:
-            sol_dir = 'sols/iter'
-            os.makedirs(sol_dir, exist_ok=True)
-            sol_filename = os.path.join(sol_dir, f"{instance_id}.sol")
-            
-            with open(sol_filename, 'w') as f:
-                f.write(f"# Objective value: {results['incumbent']}\n")
-                
-                # Write lambda variables
-                # usage of incumbent_lambdas from bnp_solver which stores {key: {'value': val, ...}}
-                if hasattr(bnp_solver, 'incumbent_lambdas') and bnp_solver.incumbent_lambdas:
-                    for key, data in bnp_solver.incumbent_lambdas.items():
-                        # Try to get variable name from master problem
-                        if key in cg_solver.master.lmbda:
-                            var_name = cg_solver.master.lmbda[key].VarName
-                            val = data['value']
-                            f.write(f"{var_name} {val}\n")
-                        else:
-                            # Fallback if key not found (should not happen if consistent)
-                            logger.warning(f"Variable for key {key} not found in master problem when saving .sol")
-                            
-            logger.info(f"✓ Saved incumbent solution to {sol_filename}")
-            
-        except Exception as e:
-            logger.error(f"Failed to save .sol file for {instance_id}: {e}")
+    results = bnp_solver.solve(time_limit=1200, max_nodes=300)  # 1200s = 20 minutes
 
     # ===========================
     # DERIVED VARIABLES COMPUTATION
@@ -354,6 +325,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     ub_equals_focus_los = 0
     sum_focus_los = 0
     if results.get('incumbent') is not None and agg_focus_los:
+        # Since agg_focus_los IS NOW DISAGGREGATED, we just sum values directly (no Nr_agg needed)
         sum_focus_los = int(round(sum(agg_focus_los.values())))
         if abs(results.get('incumbent') - sum_focus_los) < 1e-6:
             ub_equals_focus_los = 1
@@ -462,6 +434,42 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'sum_focus_los': sum_focus_los,
     }
     
+    # ===========================
+    # SESSION TRANSITION MATRIX
+    # ===========================
+    if results.get('incumbent_solution'):
+        try:
+            # Compute transition matrix for all patients (Focus + Post)
+            # theta_bins=None uses automatic Y-based bins from PWL breakpoints
+            transition_probs, transition_df, transition_counts = compute_session_transition_matrix(
+                cg_solver=cg_solver,
+                inc_sol=disagg_sol,
+                app_data=app_data,
+                theta_bins=None,  # Automatic: one bin per Y value (cumulative AI sessions)
+                patients_list=original_P_F + original_P_Post  # All patients
+            )
+            
+            # Add transition matrix summary to instance_data
+            # Store as flattened metrics for Excel export
+            for _, row in transition_df.iterrows():
+                theta_range = row['Theta_Range'].replace('[', '').replace(')', '').replace(',', '_')
+                from_session = row['From_Session']
+                key_prefix = f"trans_{theta_range}_{from_session}"
+                instance_data[f"{key_prefix}_to_Human"] = row['To_Human']
+                instance_data[f"{key_prefix}_to_AI"] = row['To_AI']
+                instance_data[f"{key_prefix}_to_Gap"] = row['To_Gap']
+                instance_data[f"{key_prefix}_count"] = row['Total_Transitions']
+            
+            # Store full transition probabilities dict for later analysis
+            instance_data['transition_probabilities'] = transition_probs
+            instance_data['transition_counts'] = transition_counts
+            
+            logger.info("Session transition matrix computed successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to compute transition matrix: {str(e)}", exc_info=True)
+            instance_data['transition_matrix_error'] = str(e)
+    
     return instance_data
 
 
@@ -533,7 +541,7 @@ def main_loop():
         print("=" * 100 + "\n")
         
         # Iterate over learn_types
-        learn_types = [0, 'sigmoid']
+        learn_types = ['sigmoid']
         
         for lt in learn_types:
             # Create a unique instance_id for this learn_type
@@ -552,8 +560,7 @@ def main_loop():
                     allow_gaps=False,
                     use_warmstart=True,
                     dual_smoothing_alpha=None,
-                    learn_type=lt,
-                    instance_id=current_instance_id
+                    learn_type=lt
                 )
                 
                 # Add instance_id to the results
@@ -658,6 +665,29 @@ def main_loop():
             d_focus_val = data.get('D_focus', 'N/A')
             pttr_val = data.get('pttr', 'N/A')
             print(f"{instance_id:<30} {seed_val:<8} {d_focus_val:<10} {pttr_val:<10} {ub:<15} {lb:<15} {gap:<12} {time_val:<12} {nodes:<10} {optimal:<10}")
+    
+    print("=" * 100 + "\n")
+    
+    # ===========================
+    # TRANSITION MATRIX SUMMARY
+    # ===========================
+    print("\n" + "=" * 100)
+    print(" SESSION TRANSITION MATRICES ".center(100, "="))
+    print("=" * 100 + "\n")
+    
+    for instance_id, data in results_dict.items():
+        if data.get('status') == 'FAILED' or 'transition_probabilities' not in data:
+            continue
+        
+        print("\n" + "=" * 100)
+        print(f" Instance: {instance_id} ".center(100, "="))
+        print("=" * 100)
+        
+        transition_probs = data['transition_probabilities']
+        transition_counts = data['transition_counts']
+        
+        print_transition_matrix(transition_probs, transition_counts)
+        print("\n")
     
     print("=" * 100 + "\n")
     

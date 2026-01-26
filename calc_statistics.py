@@ -461,6 +461,191 @@ def calc_therapist_utilization(data_dict, verbose=True):
     return results
 
 
+def calc_therapist_max_utilization(data_dict, verbose=True):
+    """
+    Calculate MAXIMUM therapist utilization statistics.
+    
+    For each instance:
+        - Find the maximum utilization across all therapists and all days
+    
+    Then calculate median, min, max, std over all seeds, separately for:
+        - OnlyHuman = 1 (Human only)
+        - OnlyHuman = 0 (Hybrid with AI)
+        - Split by pttr (light, medium, heavy)
+    
+    Returns:
+        dict with max_util statistics for each combination
+    """
+    # Organize data by seed, OnlyHuman, and pttr
+    seed_data = {}
+    
+    for instance_id, instance in data_dict.items():
+        # Skip failed instances
+        if instance.get('status') == 'FAILED':
+            continue
+        
+        seed = instance.get('seed')
+        only_human = instance.get('OnlyHuman')
+        pttr = instance.get('pttr', 'unknown')
+        
+        if seed is None or only_human is None:
+            continue
+        
+        # Get focus_therapist_daily_util_dict
+        therapist_daily_util = parse_dict_value(instance.get('focus_therapist_daily_util_dict', {}))
+        
+        if not therapist_daily_util:
+            continue
+        
+        # Find maximum utilization across ALL therapists and ALL days
+        all_utils = []
+        
+        for therapist_id, daily_utils in therapist_daily_util.items():
+            # Get all utilization values > 0
+            present_days_utils = [util for util in daily_utils.values() if util > 0]
+            all_utils.extend(present_days_utils)
+        
+        if not all_utils:
+            continue
+        
+        # Maximum utilization in this instance
+        instance_max_util = np.max(all_utils)
+        
+        # Store by (seed, only_human, pttr)
+        key = (seed, only_human, pttr)
+        if key not in seed_data:
+            seed_data[key] = []
+        seed_data[key].append(instance_max_util)
+    
+    # Now group by OnlyHuman and pttr and calculate statistics
+    grouped_values = {}
+    
+    for (seed, only_human, pttr), utils in seed_data.items():
+        # Take the max if there are multiple values for the same seed/only_human/pttr
+        max_value = np.max(utils)
+        
+        # Normalize pttr names
+        pttr_normalized = pttr.lower() if pttr else 'unknown'
+        if pttr_normalized == 'mp':
+            pttr_normalized = 'medium'
+        
+        # Create key for grouping
+        group_key = (only_human, pttr_normalized)
+        
+        if group_key not in grouped_values:
+            grouped_values[group_key] = []
+        grouped_values[group_key].append(max_value)
+    
+    # Calculate statistics for each group
+    results = {}
+    
+    # Also calculate overall statistics (across all pttr)
+    overall_human = []
+    overall_hybrid = []
+    
+    for (only_human, pttr), values in grouped_values.items():
+        if only_human == 1:
+            overall_human.extend(values)
+        elif only_human == 0:
+            overall_hybrid.extend(values)
+        
+        group_name = f"{'human_only' if only_human == 1 else 'hybrid'}_{pttr}"
+        
+        if values:
+            results[group_name] = {
+                'median': np.median(values),
+                'min': np.min(values),
+                'max': np.max(values),
+                'std': np.std(values),
+                'mean': np.mean(values),
+                'count': len(values),
+                'values': values
+            }
+    
+    # Add overall statistics
+    if overall_human:
+        results['human_only_overall'] = {
+            'median': np.median(overall_human),
+            'min': np.min(overall_human),
+            'max': np.max(overall_human),
+            'std': np.std(overall_human),
+            'mean': np.mean(overall_human),
+            'count': len(overall_human),
+            'values': overall_human
+        }
+    
+    if overall_hybrid:
+        results['hybrid_overall'] = {
+            'median': np.median(overall_hybrid),
+            'min': np.min(overall_hybrid),
+            'max': np.max(overall_hybrid),
+            'std': np.std(overall_hybrid),
+            'mean': np.mean(overall_hybrid),
+            'count': len(overall_hybrid),
+            'values': overall_hybrid
+        }
+    
+    if verbose:
+        print("\n" + "=" * 80)
+        print(" MAXIMUM THERAPIST UTILIZATION STATISTICS ".center(80, "="))
+        print("=" * 80)
+        
+        # Print overall statistics first
+        if 'human_only_overall' in results:
+            print("\n📊 HUMAN ONLY (OnlyHuman = 1) - OVERALL:")
+            print(f"  Median max_util:  {results['human_only_overall']['median']:.2f}%")
+            print(f"  Mean max_util:    {results['human_only_overall']['mean']:.2f}%")
+            print(f"  Min max_util:     {results['human_only_overall']['min']:.2f}%")
+            print(f"  Max max_util:     {results['human_only_overall']['max']:.2f}%")
+            print(f"  Std Dev:          {results['human_only_overall']['std']:.2f}%")
+            print(f"  Count:            {results['human_only_overall']['count']} instances")
+        
+        if 'hybrid_overall' in results:
+            print("\n📊 HYBRID (OnlyHuman = 0) - OVERALL:")
+            print(f"  Median max_util:  {results['hybrid_overall']['median']:.2f}%")
+            print(f"  Mean max_util:    {results['hybrid_overall']['mean']:.2f}%")
+            print(f"  Min max_util:     {results['hybrid_overall']['min']:.2f}%")
+            print(f"  Max max_util:     {results['hybrid_overall']['max']:.2f}%")
+            print(f"  Std Dev:          {results['hybrid_overall']['std']:.2f}%")
+            print(f"  Count:            {results['hybrid_overall']['count']} instances")
+        
+        # Print by pttr
+        print("\n" + "-" * 80)
+        print(" BY PTTR (Patient Treatment Intensity) ".center(80, "-"))
+        print("-" * 80)
+        
+        for pttr in ['light', 'medium', 'heavy']:
+            print(f"\n--- {pttr.upper()} ---")
+            
+            human_key = f'human_only_{pttr}'
+            if human_key in results:
+                print(f"\n  HUMAN ONLY:")
+                print(f"    Median max_util:  {results[human_key]['median']:.2f}%")
+                print(f"    Mean max_util:    {results[human_key]['mean']:.2f}%")
+                print(f"    Min max_util:     {results[human_key]['min']:.2f}%")
+                print(f"    Max max_util:     {results[human_key]['max']:.2f}%")
+                print(f"    Std Dev:          {results[human_key]['std']:.2f}%")
+                print(f"    Count:            {results[human_key]['count']} instances")
+            else:
+                print(f"\n  HUMAN ONLY: No data")
+            
+            hybrid_key = f'hybrid_{pttr}'
+            if hybrid_key in results:
+                print(f"\n  HYBRID:")
+                print(f"    Median max_util:  {results[hybrid_key]['median']:.2f}%")
+                print(f"    Mean max_util:    {results[hybrid_key]['mean']:.2f}%")
+                print(f"    Min max_util:     {results[hybrid_key]['min']:.2f}%")
+                print(f"    Max max_util:     {results[hybrid_key]['max']:.2f}%")
+                print(f"    Std Dev:          {results[hybrid_key]['std']:.2f}%")
+                print(f"    Count:            {results[hybrid_key]['count']} instances")
+            else:
+                print(f"\n  HYBRID: No data")
+        
+        print("\n" + "=" * 80 + "\n")
+    
+    return results
+
+
 
 
 
@@ -487,10 +672,12 @@ def generate_statistics_report(data_dict=None, results_dir='results/cg', save_to
     # Calculate all statistics
     ai_share_stats = calc_ai_share(data_dict, verbose=True)
     therapist_util_stats = calc_therapist_utilization(data_dict, verbose=True)
+    therapist_max_util_stats = calc_therapist_max_utilization(data_dict, verbose=True)
     
     all_stats = {
         'ai_share': ai_share_stats,
-        'therapist_utilization': therapist_util_stats
+        'therapist_utilization': therapist_util_stats,
+        'therapist_max_utilization': therapist_max_util_stats
     }
     
     if save_to_file:
