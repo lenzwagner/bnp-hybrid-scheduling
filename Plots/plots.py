@@ -283,7 +283,7 @@ if __name__ == "__main__":
     import os
     
     # Results directory
-    results_dir = 'results/cg'
+    results_dir = '../results/cg'
     excel_files = glob.glob(os.path.join(results_dir, '*.xlsx'))
     # Filter out temp files (starting with ~$)
     excel_files = [f for f in excel_files if not os.path.basename(f).startswith('~$')]
