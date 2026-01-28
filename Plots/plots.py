@@ -153,15 +153,17 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
         return None
 
     # ==========================================
-    # SELECT SEED WITH MAX STD DEV
+    # SELECT RANDOM VALID SEED
     # ==========================================
-    available_seeds = subset['seed'].unique()
+    available_seeds = list(subset['seed'].unique())
     if len(available_seeds) == 0:
         print("Warning: No seeds available")
         return None
     
+    # Shuffle seeds to pick a random one
+    np.random.shuffle(available_seeds)
+    
     best_seed = None
-    max_std_dev = -1.0
     savings = []
     patient_ids = []
     
@@ -177,7 +179,7 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
         except Exception:
             return {}
 
-    print(f"Analyzing {len(available_seeds)} seeds for workload '{workload}'...")
+    print(f"Selecting a random seed from {len(available_seeds)} available...")
 
     for current_seed in available_seeds:
         # Get rows for this seed
@@ -196,27 +198,23 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
             common_keys = set(human_dict.keys()) & set(hybrid_dict.keys())
             if not common_keys:
                 continue
-                
-            diff_values = [human_dict[k] - hybrid_dict[k] for k in common_keys]
             
-            if not diff_values:
-                continue
-                
-            std_dev = np.std(diff_values)
+            # Use this seed
+            best_seed = current_seed
             
-            if std_dev > max_std_dev:
-                max_std_dev = std_dev
-                best_seed = current_seed
-                
-                # Store data for plotting
-                # Structure: (id, diff, old_los, new_los)
-                # Sort by savings (diff), then by patient ID as tie-breaker
-                sorted_items = sorted([(k, human_dict[k] - hybrid_dict[k], human_dict[k], hybrid_dict[k]) 
-                                     for k in common_keys], key=lambda x: (x[1], x[0]))
-                patient_ids = [item[0] for item in sorted_items]
-                savings = [item[1] for item in sorted_items]
-                human_los = [item[2] for item in sorted_items]
-                hybrid_los = [item[3] for item in sorted_items]
+            # Store data for plotting
+            # Structure: (id, diff, old_los, new_los)
+            # Sort by savings (diff), then by patient ID as tie-breaker
+            sorted_items = sorted([(k, human_dict[k] - hybrid_dict[k], human_dict[k], hybrid_dict[k]) 
+                                 for k in common_keys if (human_dict[k] - hybrid_dict[k]) != 0], key=lambda x: (x[1], x[0]))
+            
+            patient_ids = [item[0] for item in sorted_items]
+            savings = [item[1] for item in sorted_items]
+            human_los = [item[2] for item in sorted_items]
+            hybrid_los = [item[3] for item in sorted_items]
+            
+            break # Stop after finding the first valid random seed
+            
         except Exception as e:
             print(f"Error processing seed {current_seed}: {e}")
             continue
@@ -225,7 +223,7 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
         print("Warning: No valid seed found with matching Human/Hybrid pairs.")
         return None
 
-    print(f"Selected Seed: {best_seed} with Max Std Dev: {max_std_dev:.4f}")
+    print(f"Selected Seed: {best_seed}")
     
     seed = best_seed
     

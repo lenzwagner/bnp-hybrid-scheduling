@@ -90,10 +90,11 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         # Pricing parallelization
         'use_parallel_pricing': use_parallel_pricing,
         'n_pricing_workers': n_pricing_workers,
+        # Tree exploration parallelization (NEW)
         'use_parallel_tree': use_parallel_tree,
         'n_tree_workers': n_tree_workers,
         # Other settings
-        'debug_mode': False,
+        'debug_mode': False,  # Disable debug for batch runs
         'use_apriori_pruning': False, 
         'use_pure_dp_optimization': True,
         'use_persistent_pool': True,
@@ -149,7 +150,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     # Solve with 20-minute timeout per instance
     # If timeout occurs, solver returns current incumbent and best LP bound
-    results = bnp_solver.solve(time_limit=1200, max_nodes=300)
+    results = bnp_solver.solve(time_limit=1200, max_nodes=300)  # 1200s = 20 minutes
 
     # ===========================
     # DERIVED VARIABLES COMPUTATION

@@ -232,7 +232,7 @@ def generate_patient_data(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scena
     utilization_rates = {
         'light': 0.60,
         'medium': 0.75,
-        'heavy': 0.90
+        'heavy': 0.85
     }
 
     if pttr_scenario not in utilization_rates:
@@ -583,7 +583,7 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     utilization_rates = {
         'light': 0.60,
         'medium': 0.75,
-        'heavy': 0.90
+        'heavy': 0.85
     }
 
     if pttr_scenario not in utilization_rates:
