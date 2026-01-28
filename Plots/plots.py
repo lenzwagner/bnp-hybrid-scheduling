@@ -2,32 +2,56 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
+import os
+
+# Output directory for TeX files
+TEX_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'results', 'parameter_study', 'plots')
 
 
-def _print_tex(fig, caption="Plot", label="fig:plot"):
+def _print_tex(fig, caption="Plot", label="fig:plot", save_to_file=True):
     """
-    Helper to print TikZ code for a matplotlib figure.
+    Helper to save TikZ code for a matplotlib figure to a file.
+    Uses matplotlib's pgf backend for reliable LaTeX output.
+    
+    Args:
+        fig: matplotlib figure object
+        caption: Caption for the figure
+        label: LaTeX label (also used for filename)
+        save_to_file: If True, saves to TEX_OUTPUT_DIR; if False, only prints
     """
     try:
-        import tikzplotlib
+        # Ensure output directory exists
+        os.makedirs(TEX_OUTPUT_DIR, exist_ok=True)
         
-        # Get TikZ code
-        tikz_code = tikzplotlib.get_tikz_code(figure=fig, include_disclaimer=False)
+        # Generate filename from label
+        basename = label.replace("fig:", "")
+        pgf_filepath = os.path.join(TEX_OUTPUT_DIR, f"{basename}.pgf")
+        tex_filepath = os.path.join(TEX_OUTPUT_DIR, f"{basename}.tex")
         
-        print("\n" + "%" * 40)
-        print(f"% LaTeX Code for {caption}")
-        print("%" * 40)
-        print("\\begin{figure}")
-        print("  \\centering")
-        print(tikz_code)
-        # print(f"  \\caption{{{caption}}}")
-        # print(f"  \\label{{{label}}}")
-        print("\\end{figure}")
-        print("%" * 40 + "\n")
+        # Save as PGF (native TikZ format)
+        fig.savefig(pgf_filepath, backend='pgf')
         
-    except ImportError:
-        print("\n[Warning] tikzplotlib not installed. Cannot print LaTeX code.")
-        print("Install with: pip install tikzplotlib\n")
+        # Create LaTeX wrapper file
+        tex_content = f"""% LaTeX Code for {caption}
+% Include with: \\input{{{basename}.pgf}}
+\\begin{{figure}}[htbp]
+  \\centering
+  \\input{{{basename}.pgf}}
+  \\caption{{{caption}}}
+  \\label{{{label}}}
+\\end{{figure}}
+"""
+        
+        if save_to_file:
+            with open(tex_filepath, 'w') as f:
+                f.write(tex_content)
+            print(f"✓ PGF saved to: {pgf_filepath}")
+            print(f"✓ TeX wrapper saved to: {tex_filepath}")
+        else:
+            print("\n" + "%" * 40)
+            print(tex_content)
+            print("%" * 40 + "\n")
+        
     except Exception as e:
         print(f"\n[Error] Could not generate TikZ code: {e}\n")
 
@@ -278,10 +302,9 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
 # ==========================================
 if __name__ == "__main__":
     import glob
-    import os
     
     # Results directory
-    results_dir = '../results/cg'
+    results_dir = '../results/parameter_study/results'
     excel_files = glob.glob(os.path.join(results_dir, '*.xlsx'))
     # Filter out temp files (starting with ~$)
     excel_files = [f for f in excel_files if not os.path.basename(f).startswith('~$')]
@@ -299,12 +322,15 @@ if __name__ == "__main__":
             # Convert DataFrame to dict for function call
             data_dict = df.to_dict('list')
             
-            # Plot 1: LOS Split Violin Plot
-            los_initial_plot(data_dict, normalize_by_focus=True)
+            # Plot 1: LOS Boxplot - save TeX to parameter_study/plots
+            los_initial_plot(data_dict, normalize_by_focus=True, print_tex=True)
             
-            # Plot 2: Sorted Savings Distribution
-            sorted_savings_plot(data_dict, workload='heavy')
+            # Plot 2: Sorted Savings Distribution - save TeX to parameter_study/plots
+            sorted_savings_plot(data_dict, workload='heavy', print_tex=True)
             
+            print("\nTeX files saved to results/parameter_study/plots/")
+            
+            # Show plots interactively
             plt.show()
             
         except Exception as e:
