@@ -325,7 +325,7 @@ class BranchAndPrice:
 
         if success:
             self.incumbent_computed_early = True
-            self.logger.info(f"\n✅ Early incumbent computed successfully!")
+            self.logger.info(f"\n[OK] Early incumbent computed successfully!")
             self.logger.info(f"   Incumbent: {self.incumbent:.6f}")
             self.logger.info(f"   CG will continue to convergence...\n")
         else:
@@ -538,7 +538,7 @@ class BranchAndPrice:
             root_node.status = 'integral'
             root_node.fathom_reason = 'integral'
             self.stats['integer_solutions_found'] += 1
-            self.logger.info(f"\n✅ ROOT NODE IS INTEGRAL (LP)!")
+            self.logger.info(f"\n[OK] ROOT NODE IS INTEGRAL (LP)!")
         else:
             root_node.status = 'solved'
             self.logger.warning(f"\n⚠️  ROOT NODE IS FRACTIONAL (LP) - Status: SOLVED")
@@ -578,7 +578,7 @@ class BranchAndPrice:
 
         if success:
             self.logger.info(f"\n{'=' * 100}")
-            self.logger.info("✅ FINAL INCUMBENT FOUND ".center(100, "="))
+            self.logger.info("[OK] FINAL INCUMBENT FOUND ".center(100, "="))
             self.logger.info(f"{'=' * 100}")
             self.logger.info(f"IP Objective:     {self.incumbent:.6f}")
             self.logger.info(f"LP Bound (root):  {master.Model.objBound:.6f}" if hasattr(master.Model, 'objBound') else "")
@@ -644,7 +644,7 @@ class BranchAndPrice:
                     self.stats['incumbent_updates'] += 1
                     self.update_gap()
 
-                    self.logger.info(f"\n✅ New incumbent found: {self.incumbent:.6f}")
+                    self.logger.info(f"\n[OK] New incumbent found: {self.incumbent:.6f}")
                     self.logger.info(f"   Gap: {self.gap:.4%}\n")
                     
                     # Save solution file
@@ -755,7 +755,7 @@ class BranchAndPrice:
 
             # Update incumbent if this is better
             if node.lp_bound < self.incumbent:
-                self.logger.info(f"\n✅ Node {node.node_id} found improving integral solution!")
+                self.logger.info(f"\n[OK] Node {node.node_id} found improving integral solution!")
                 self.logger.info(f"   Previous incumbent: {self.incumbent:.6f}")
                 self.logger.info(f"   New incumbent:      {node.lp_bound:.6f}")
 
@@ -850,7 +850,7 @@ class BranchAndPrice:
 
         # Check if root can be fathomed
         if self.should_fathom(root_node, root_lambdas):
-            self.logger.info(f"✅ Root node fathomed: {root_node.fathom_reason}")
+            self.logger.info(f"[OK] Root node fathomed: {root_node.fathom_reason}")
             self.logger.info(f"   Solution is optimal!\n")
             self.stats['nodes_fathomed'] = 1
             if 'by bound' in root_node.fathom_reason.lower() or 'infeasible' in root_node.fathom_reason.lower():
@@ -948,7 +948,7 @@ class BranchAndPrice:
 
                 # If incumbent improved significantly and no more open nodes, we're done
                 if improved and not self.open_nodes:
-                    self.logger.info("\n✅ All nodes fathomed after IP heuristic improvement!")
+                    self.logger.info("\n[OK] All nodes fathomed after IP heuristic improvement!")
                     break
 
             # If all nodes fathomed, terminate
@@ -1179,7 +1179,7 @@ class BranchAndPrice:
                 print(f"║    Reason: {current_node.fathom_reason}".ljust(99) + "║")
                 print("╚" + "═" * 98 + "╝\n")
 
-                self.logger.info(f"✅ Node {current_node_id} fathomed: {current_node.fathom_reason}")
+                self.logger.info(f"[OK] Node {current_node_id} fathomed: {current_node.fathom_reason}")
                 self.stats['nodes_fathomed'] += 1
                 # Track pruned nodes (by bound or infeasibility)
                 if 'by bound' in current_node.fathom_reason.lower() or 'infeasible' in current_node.fathom_reason.lower():
@@ -1195,7 +1195,7 @@ class BranchAndPrice:
 
                 continue
 
-            print(f"║ ✅ DECISION: BRANCH".ljust(99) + "║")
+            print(f"║ [OK] DECISION: BRANCH".ljust(99) + "║")
             print(f"║    Node is fractional and not fathomable".ljust(99) + "║")
             print("╚" + "═" * 98 + "╝\n")
 
@@ -1326,7 +1326,7 @@ class BranchAndPrice:
             current_node.status = 'branched'
             self.stats['nodes_branched'] += 1
 
-            self.logger.info(f"\n✅ Created child nodes:")
+            self.logger.info(f"\n[OK] Created child nodes:")
             self.logger.info(f"   ├─ Left:  Node {left_child.node_id} (path: '{left_child.path}')")
             self.logger.info(f"   └─ Right: Node {right_child.node_id} (path: '{right_child.path}')")
             self.logger.info(f"\n   Open nodes queue: {self.open_nodes}")
@@ -1340,7 +1340,7 @@ class BranchAndPrice:
 
         # Determine termination reason
         if not self.open_nodes:
-            self.logger.info(f"✅ All nodes explored - Tree complete!")
+            self.logger.info(f"[OK] All nodes explored - Tree complete!")
             self.stats['tree_complete'] = True
             # When tree is complete, lower bound equals incumbent (all nodes fathomed)
             if self.incumbent < float('inf'):
@@ -1883,7 +1883,7 @@ class BranchAndPrice:
         }
         
         pattern_str = "{" + ", ".join(f"({j},{t})" for j, t in sorted(pattern)) + "}"
-        self.logger.info(f"\n  ✅ Selected pattern for branching:")
+        self.logger.info(f"\n  [OK] Selected pattern for branching:")
         self.logger.info(f"     Profile: {profile}")
         self.logger.info(f"     Pattern: {pattern_str}")
         self.logger.info(f"     beta_P(k) = {beta_val:.6f}")
@@ -1929,7 +1929,7 @@ class BranchAndPrice:
         original_schedule = None
         if (n, a) in parent_node.column_pool:
             original_schedule = parent_node.column_pool[(n, a)].get('schedules_x', {})
-            self.logger.info(f"\n  ✅ Found column ({n},{a}) in parent's column pool")
+            self.logger.info(f"\n  [OK] Found column ({n},{a}) in parent's column pool")
             self.logger.info(f"     Schedule has {len(original_schedule)} assignments")
 
             # Show first few assignments
@@ -2501,7 +2501,7 @@ class BranchAndPrice:
                         
                         # Check if column has negative reduced cost below threshold
                         if col_data['reduced_cost'] < -threshold:
-                            self.logger.info(f'    [Parallel] ✅ Adding column (below threshold -{threshold})')
+                            self.logger.info(f'    [Parallel] [OK] Adding column (below threshold -{threshold})')
                             
                             # CRITICAL: Reassign col_id to ensure uniqueness
                             # The labeling algorithm returns columns with sequential IDs starting from next_col_id
@@ -2589,7 +2589,7 @@ class BranchAndPrice:
                                 
                                 # Check if column has negative reduced cost below threshold
                                 if col_data['reduced_cost'] < -threshold:
-                                    self.logger.info(f'    [Labeling] ✅ Adding column (below threshold -{threshold})')
+                                    self.logger.info(f'    [Labeling] [OK] Adding column (below threshold -{threshold})')
                                     
                                     # CRITICAL: Reassign col_id to ensure uniqueness
                                     correct_col_id = current_max_col_id + col_idx + 1
@@ -2640,7 +2640,7 @@ class BranchAndPrice:
                         if profile == branching_profile and self.save_lps:
                             sp_filename = f"LPs/SPs/pricing/sp_node_{node.node_id}_profile_{profile}_iter{cg_iteration}.lp"
                             sp.Model.write(sp_filename)
-                            self.logger.info(f"    ✅ [SP Saved] First pricing SP for branching profile {profile}: {sp_filename}")
+                            self.logger.info(f"    [OK] [SP Saved] First pricing SP for branching profile {profile}: {sp_filename}")
                         sp.solModel()
 
                         # Check reduced cost
@@ -2703,7 +2703,7 @@ class BranchAndPrice:
         is_integral, lp_obj, most_frac_info = master.check_fractionality()
 
         if is_integral:
-            self.logger.info(f"\n✅ INTEGRAL SOLUTION FOUND AT NODE {node.node_id}!")
+            self.logger.info(f"\n[OK] INTEGRAL SOLUTION FOUND AT NODE {node.node_id}!")
             self.logger.info(f"   LP Bound: {lp_obj:.6f}")
             
             # Save solution file
@@ -2761,7 +2761,7 @@ class BranchAndPrice:
 
         self.logger.info(f"    [Master] Basic model built with {len(master.Model.getConstrs())} constraints")
 
-        # ✅ CRITICAL FIX: Add initial columns (col_id=1) to all_schedules for SP branching
+        # [OK] CRITICAL FIX: Add initial columns (col_id=1) to all_schedules for SP branching
         self.logger.info(f"    [Master] Adding initial columns (col_id=1) to all_schedules...")
         initial_cols_added = 0
         for (profile, col_id), col_data in node.column_pool.items():
@@ -3618,9 +3618,9 @@ class BranchAndPrice:
 
         # Termination status
         if not self.open_nodes:
-            self.logger.info("✅ Status: OPTIMAL (all nodes explored)")
+            self.logger.info("[OK] Status: OPTIMAL (all nodes explored)")
         elif self.gap < 1e-4:
-            self.logger.info(f"✅ Status: OPTIMAL (gap < 0.01%)")
+            self.logger.info(f"[OK] Status: OPTIMAL (gap < 0.01%)")
         else:
             self.logger.warning(f"⚠️  Status: INCOMPLETE (time/node limit reached)")
 
@@ -3906,7 +3906,7 @@ class BranchAndPrice:
                         self.stats['time_to_first_incumbent'] = time.time() - self.start_time
                     self.update_gap()
 
-                    self.logger.info(f"\n  ✅ IMPROVED INCUMBENT FOUND!")
+                    self.logger.info(f"\n  [OK] IMPROVED INCUMBENT FOUND!")
                     self.logger.info(f"     Old incumbent: {old_incumbent:.6f}")
                     self.logger.info(f"     New incumbent: {self.incumbent:.6f}")
                     self.logger.info(f"     Improvement:   {old_incumbent - self.incumbent:.6f}")
@@ -3941,7 +3941,7 @@ class BranchAndPrice:
                     print(f"║ Open nodes after:  {len(self.open_nodes)}".ljust(99) + "║")
                     print("╠" + "═" * 98 + "╣")
                     if fathomed_count > 0:
-                        print(f"║ ✅ {fathomed_count} nodes can no longer improve the incumbent".ljust(99) + "║")
+                        print(f"║ [OK] {fathomed_count} nodes can no longer improve the incumbent".ljust(99) + "║")
                     if len(self.open_nodes) == 0:
                         print(f"║ 🎉 ALL NODES FATHOMED - OPTIMAL SOLUTION FOUND!".ljust(99) + "║")
                     print("╚" + "═" * 98 + "╝\n")
@@ -4123,7 +4123,7 @@ class BranchAndPrice:
             parent.fathom_reason = 'all_children_fathomed'
             parent.lp_bound = best_child_bound  # Update with best child bound
 
-            self.logger.info(f"\n  ✅ Parent Node {parent.node_id} fathomed: All children fathomed")
+            self.logger.info(f"\n  [OK] Parent Node {parent.node_id} fathomed: All children fathomed")
             self.logger.info(f"     Children: {[c.node_id for c in children]}")
             self.logger.info(f"     Best child bound: {best_child_bound:.6f}")
 
@@ -4395,7 +4395,7 @@ class BranchAndPrice:
         df = pd.DataFrame(rows)
         df.to_csv(filename, index=False)
 
-        self.logger.info(f"\n✅ Schedules exported to {filename}")
+        self.logger.info(f"\n[OK] Schedules exported to {filename}")
         self.logger.info(f"   Total rows: {len(df)}")
 
 
@@ -4512,7 +4512,7 @@ class _NodeWorker:
                     time_elapsed=time.time() - self.bnp.start_time
                 )
                 if updated:
-                    logger.info(f"[W{self.worker_id}] ✅ NEW INCUMBENT from Node {node.node_id}: {lp_bound:.6f}")
+                    logger.info(f"[W{self.worker_id}] [OK] NEW INCUMBENT from Node {node.node_id}: {lp_bound:.6f}")
             
             return True
         
