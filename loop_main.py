@@ -73,6 +73,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     save_lps = False  # Set to False for batch runs
     verbose_output = False
     print_solutions = False
+    save_transition_matrix = False
 
     # Solver settings
     deterministic = False
@@ -437,7 +438,10 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     # ===========================
     # SESSION TRANSITION MATRIX
     # ===========================
-    if results.get('incumbent_solution'):
+    # ===========================
+    # SESSION TRANSITION MATRIX
+    # ===========================
+    if save_transition_matrix and results.get('incumbent_solution'):
         try:
             # Compute transition matrix for all patients (Focus + Post)
             # theta_bins=None uses automatic Y-based bins from PWL breakpoints
