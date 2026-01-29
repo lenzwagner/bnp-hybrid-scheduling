@@ -3,9 +3,11 @@ import numpy as np
 import os
 
 def analyze_results():
-    # File paths
-    input_file = 'results_computational.xlsx'
-    output_file = 'aggr_stats.xlsx'
+    # File paths - use script directory as base
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    input_file = os.path.join(script_dir, 'results_computational.xlsx')
+    output_file = os.path.join(script_dir, 'aggr_stats.xlsx')
+
 
     # Check if input file exists
     if not os.path.exists(input_file):
@@ -165,6 +167,100 @@ def analyze_results():
         print(f"Successfully saved aggregated statistics to: {output_file}")
     except Exception as e:
         print(f"Error saving output Excel: {e}")
+    
+    # =========================================================================
+    # ADDITIONAL OUTPUT: MEAN + STD ONLY
+    # =========================================================================
+    print("\nCalculating mean + std statistics...")
+    
+    # 1. Continuous stats with mean and std
+    grouped_mean_std_cont = pd.DataFrame()
+    if valid_continuous:
+        grouped_mean_std_cont = df.groupby([group_col_T, group_col_D])[valid_continuous].agg(['mean', 'std'])
+        # Flatten MultiIndex columns
+        grouped_mean_std_cont.columns = ['_'.join(col).strip() for col in grouped_mean_std_cont.columns.values]
+    
+    # 2. Binary stats (Mean = Percentage) - same as before
+    grouped_mean_std_bin = pd.DataFrame()
+    if valid_binary:
+        grouped_mean_std_bin = df.groupby([group_col_T, group_col_D])[valid_binary].agg('mean')
+        grouped_mean_std_bin.columns = [f"{col}_pct" for col in grouped_mean_std_bin.columns]
+    
+    # Merge results
+    if not grouped_mean_std_cont.empty and not grouped_mean_std_bin.empty:
+        grouped_mean_std = pd.concat([grouped_mean_std_cont, grouped_mean_std_bin], axis=1)
+    elif not grouped_mean_std_cont.empty:
+        grouped_mean_std = grouped_mean_std_cont
+    else:
+        grouped_mean_std = grouped_mean_std_bin
+    
+    grouped_mean_std = grouped_mean_std.reset_index()
+    grouped_mean_std = grouped_mean_std.round(2)
+    
+    # Print to console
+    print("\n" + "="*80)
+    print(" AGGREGATED STATISTICS - MEAN ± STD (Grouped by T x D) ".center(80, "="))
+    print("="*80)
+    print(grouped_mean_std.to_string(float_format="%.2f"))
+    print("="*80 + "\n")
+    
+    # Copy-friendly output
+    print("\n" + "="*80)
+    print(" COPY-FRIENDLY OUTPUT - MEAN ± STD (Tab-separated) ".center(80, "="))
+    print("="*80)
+    print(grouped_mean_std.to_csv(sep='\t', index=False, float_format="%.2f"))
+    print("="*80 + "\n")
+    
+    # Save mean+std to separate Excel file
+    mean_std_output_file = os.path.join(script_dir, 'aggr_stats_mean_std.xlsx')
+    try:
+        grouped_mean_std.to_excel(mean_std_output_file, index=False)
+        print(f"Successfully saved mean±std statistics to: {mean_std_output_file}")
+    except Exception as e:
+        print(f"Error saving mean±std Excel: {e}")
+    
+    # =========================================================================
+    # OVERALL STATISTICS (ACROSS ALL SCENARIOS)
+    # =========================================================================
+    print("\nCalculating overall statistics (across all scenarios)...")
+    
+    # Calculate overall mean and std for continuous metrics
+    overall_stats = {}
+    if valid_continuous:
+        for metric in valid_continuous:
+            overall_stats[f"{metric}_mean"] = df[metric].mean()
+            overall_stats[f"{metric}_std"] = df[metric].std()
+    
+    # Calculate percentage for binary metrics
+    if valid_binary:
+        for metric in valid_binary:
+            overall_stats[f"{metric}_pct"] = df[metric].mean()
+    
+    # Convert to DataFrame for display
+    overall_df = pd.DataFrame([overall_stats]).round(2)
+    
+    # Print to console
+    print("\n" + "="*80)
+    print(" OVERALL STATISTICS - MEAN ± STD (All Scenarios) ".center(80, "="))
+    print("="*80)
+    print(overall_df.to_string(float_format="%.2f", index=False))
+    print("="*80 + "\n")
+    
+    # Copy-friendly output
+    print("\n" + "="*80)
+    print(" COPY-FRIENDLY OUTPUT - OVERALL (Tab-separated) ".center(80, "="))
+    print("="*80)
+    print(overall_df.to_csv(sep='\t', index=False, float_format="%.2f"))
+    print("="*80 + "\n")
+    
+    # Save overall stats to separate Excel file
+    overall_output_file = os.path.join(script_dir, 'aggr_stats_overall.xlsx')
+    try:
+        overall_df.to_excel(overall_output_file, index=False)
+        print(f"Successfully saved overall statistics to: {overall_output_file}")
+    except Exception as e:
+        print(f"Error saving overall Excel: {e}")
+
 
 if __name__ == "__main__":
     analyze_results()
