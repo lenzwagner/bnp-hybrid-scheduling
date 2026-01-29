@@ -420,9 +420,9 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'post_g_gap': p_g_gap,
         'post_z': p_z,
         
-        # Extra metrics with prefixes
-        **{f"focus_{k}": v for k, v in f_metrics.items()},
-        **{f"post_{k}": v for k, v in p_metrics.items()},
+        # Extra metrics with prefixes (excluding large trigram data)
+        **{f"focus_{k}": v for k, v in f_metrics.items() if k != 'trigrams_per_patient'},
+        **{f"post_{k}": v for k, v in p_metrics.items() if k != 'trigrams_per_patient'},
         
         # Combined metrics
         'drg_patients_E65A': drg_patients_E65A,
