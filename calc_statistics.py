@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 import ast
 
 
-def load_latest_results(results_dir='results/cg'):
+def load_latest_results(results_dir='results/parameter_study/results'):
     """
     Load the latest results from either pickle or Excel file.
     Returns a dictionary with instance_id as keys.
