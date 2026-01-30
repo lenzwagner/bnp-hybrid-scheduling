@@ -4,14 +4,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
+
+
+
 # Output directory for TeX files
 TEX_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'results', 'parameter_study', 'plots')
 
 
 def _print_tex(fig, caption="Plot", label="fig:plot", save_to_file=True):
     """
-    Helper to save TikZ code for a matplotlib figure to a file.
-    Uses matplotlib's pgf backend for reliable LaTeX output.
+    Helper to save plots as PDF and SVG for LaTeX documents.
+    Exports both formats for maximum flexibility in Overleaf.
     
     Args:
         fig: matplotlib figure object
@@ -22,21 +25,25 @@ def _print_tex(fig, caption="Plot", label="fig:plot", save_to_file=True):
     try:
         # Ensure output directory exists
         os.makedirs(TEX_OUTPUT_DIR, exist_ok=True)
-        
-        # Generate filename from label
         basename = label.replace("fig:", "")
-        pgf_filepath = os.path.join(TEX_OUTPUT_DIR, f"{basename}.pgf")
+        
+        # File paths
+        pdf_filepath = os.path.join(TEX_OUTPUT_DIR, f"{basename}.pdf")
+        svg_filepath = os.path.join(TEX_OUTPUT_DIR, f"{basename}.svg")
         tex_filepath = os.path.join(TEX_OUTPUT_DIR, f"{basename}.tex")
         
-        # Save as PGF (native TikZ format)
-        fig.savefig(pgf_filepath, backend='pgf')
+        # Save as PDF (for LaTeX/Overleaf)
+        fig.savefig(pdf_filepath, format='pdf', bbox_inches='tight', dpi=300)
+        
+        # Save as SVG (alternative vector format)
+        fig.savefig(svg_filepath, format='svg', bbox_inches='tight')
         
         # Create LaTeX wrapper file
         tex_content = f"""% LaTeX Code for {caption}
-% Include with: \\input{{{basename}.pgf}}
+% Include with: \\input{{{basename}.tex}}
 \\begin{{figure}}[htbp]
   \\centering
-  \\input{{{basename}.pgf}}
+  \\includegraphics[width=0.8\\textwidth]{{{basename}.pdf}}
   \\caption{{{caption}}}
   \\label{{{label}}}
 \\end{{figure}}
@@ -45,7 +52,8 @@ def _print_tex(fig, caption="Plot", label="fig:plot", save_to_file=True):
         if save_to_file:
             with open(tex_filepath, 'w') as f:
                 f.write(tex_content)
-            print(f"✓ PGF saved to: {pgf_filepath}")
+            print(f"✓ PDF saved to: {pdf_filepath}")
+            print(f"✓ SVG saved to: {svg_filepath}")
             print(f"✓ TeX wrapper saved to: {tex_filepath}")
         else:
             print("\n" + "%" * 40)
@@ -53,7 +61,10 @@ def _print_tex(fig, caption="Plot", label="fig:plot", save_to_file=True):
             print("%" * 40 + "\n")
         
     except Exception as e:
-        print(f"\n[Error] Could not generate TikZ code: {e}\n")
+        print(f"\n[Error] Could not generate plot files: {e}\n")
+
+
+
 
 
 def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
@@ -128,7 +139,7 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
         legend=False
     )
     
-    g.set_axis_labels("Pttr", y_label)
+    g.set_axis_labels("Patient-to-Therapist Ratio", y_label)
     g.set_titles("")
     
     # Center X-axis labels under boxplot groups
@@ -323,7 +334,7 @@ if __name__ == "__main__":
             data_dict = df.to_dict('list')
             
             # Plot 1: LOS Boxplot - save TeX to parameter_study/plots
-            los_initial_plot(data_dict, normalize_by_focus=True, print_tex=True)
+            los_initial_plot(data_dict, normalize_by_focus=False, print_tex=True)
             
             # Plot 2: Sorted Savings Distribution - save TeX to parameter_study/plots
             sorted_savings_plot(data_dict, workload='heavy', print_tex=True)

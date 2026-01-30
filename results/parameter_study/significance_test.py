@@ -1,65 +1,66 @@
 """
-Signifikanztest: Hybrid vs Human Only (LOS-Differenzen)
+Significance test: Hybrid vs. Human Only (LOS differences)
 =======================================================
 
-Dieses Skript testet, ob die beobachteten Unterschiede in der 
-Aufenthaltsdauer (Length of Stay, LOS) zwischen Hybrid und Human Only
-statistisch signifikant sind.
+This script tests whether the observed differences in
+length of stay (LOS) between Hybrid and Human Only
+are statistically significant.
 
-ABLAUF DES TESTS:
+TEST PROCEDURE:
 -----------------
 
-1. DATEN VORBEREITEN (Paired Observations)
-   Für jeden Seed werden die Ergebnisse von Hybrid und Human Only gepaart:
-   
-   | Seed | Human LOS | Hybrid LOS | Differenz |
-   |------|-----------|------------|-----------|
+1. PREPARE DATA (Paired Observations)
+   For each seed, the results of Hybrid and Human Only are paired:
+
+   | Seed | Human LOS | Hybrid LOS | Difference |
+   |------|-----------|------------|---------- -|
    | 42   | 720       | 699        | +21       |
    | 54   | 588       | 571        | +17       |
-   
-   So entstehen gepaarte Beobachtungen – dieselbe Instanz einmal mit 
-   und einmal ohne KI-Unterstützung.
+
+   This results in paired observations – the same instance once with
+   and once without AI support.
 
 
-2. PAIRED T-TEST (parametrisch)
-   Fragestellung: Ist der Mittelwert der Differenzen signifikant ≠ 0?
-   
-   - H₀: μ_diff = 0 (kein Unterschied zwischen Human und Hybrid)
-   - H₁: μ_diff ≠ 0 (es gibt einen Unterschied)
-   
-   Berechnung: t = (Mittelwert der Differenzen) / (Standardfehler)
-   
-   Wenn p < 0.05 → Unterschied ist statistisch signifikant.
+2. PAIR T-TEST (parametric)
+   Question: Is the mean of the differences significantly ≠ 0?
+
+   - H₀: μ_diff = 0 (no difference between human and hybrid)
+   - H₁: μ_diff ≠ 0 (there is a difference)
+
+   Calculation: t = (mean of the differences) / (standard error)
+
+   If p < 0.05 → difference is statistically significant.
 
 
-3. WILCOXON SIGNED-RANK TEST (nicht-parametrisch)
-   Alternative zum t-Test:
-   - Macht keine Annahme über Normalverteilung
-   - Testet, ob Rangsummen der positiven/negativen Differenzen gleich sind
-   - Robuster bei Ausreißern
+3. WILCOXON SIGNED-RANK TEST (non-parametric)
+   Alternative to the t-test:
+   - Makes no assumption about normal distribution
+   - Tests whether the rank sums of the positive/negative differences are equal
+   - More robust with outliers
 
 
-4. COHEN'S D (Effektstärke)
-   Zeigt wie groß der Unterschied praktisch ist:
-   
-   d = Mittelwert der Differenzen / Standardabweichung
-   
+4. COHEN'S D (effect size)
+   Shows how large the difference is in practical terms:
+
+   d = mean of the differences / standard deviation
+
    | d       | Interpretation   |
-   |---------|------------------|
-   | < 0.2   | vernachlässigbar |
-   | 0.2-0.5 | klein            |
-   | 0.5-0.8 | mittel           |
-   | > 0.8   | groß             |
+   |---------|----------------- -|
+   | < 0.2   | negligible |
+   | 0.2-0.5 | small            |
+   | 0.5-0.8 | medium           |
+   | > 0.8   | large             |
 
 
 INTERPRETATION:
 ---------------
-Der Test beantwortet: "Spart Hybrid wirklich signifikant LOS gegenüber 
-Human Only, oder könnte der Unterschied Zufall sein?"
+The test answers: "Does hybrid really save significantly LOS compared to
+human only, or could the difference be random?"
 
-Typisches Ergebnis: Hybrid spart ~24 Tage LOS, dieser Unterschied ist 
-hochsignifikant (p < 0.0001) mit großer Effektstärke (d ≈ 2.0).
+Typical result: Hybrid saves ~24 days LOS, this difference is
+highly significant (p < 0.0001) with large effect size (d ≈ 2.0).
 """
+
 
 import pandas as pd
 import numpy as np
@@ -183,6 +184,7 @@ def run_significance_tests(paired_df: pd.DataFrame,
             'mean_hybrid': np.mean(all_hybrid),
             'mean_difference': np.mean(all_diff),
             'std_difference': np.std(all_diff, ddof=1),
+            'variance_difference': np.var(all_diff, ddof=1),
             't_statistic': t_stat,
             't_pvalue': t_pvalue,
             't_significant': t_pvalue < alpha,
@@ -226,6 +228,7 @@ def run_significance_tests(paired_df: pd.DataFrame,
                 'mean_hybrid': np.mean(hybrid),
                 'mean_difference': np.mean(diff),
                 'std_difference': np.std(diff, ddof=1),
+                'variance_difference': np.var(diff, ddof=1),
                 't_statistic': t_stat,
                 't_pvalue': t_pvalue,
                 't_significant': t_pvalue < alpha,
@@ -256,7 +259,9 @@ def print_results(results: dict, alpha: float = 0.05):
         print(f"  Sample size (pairs): {res['n_pairs']}")
         print(f"  Mean Human LOS:      {res['mean_human']:.4f}")
         print(f"  Mean Hybrid LOS:     {res['mean_hybrid']:.4f}")
-        print(f"  Mean Difference:     {res['mean_difference']:.4f} ± {res['std_difference']:.4f}")
+        print(f"  Mean Difference:     {res['mean_difference']:.4f}")
+        print(f"  Std. Dev. Difference:{res['std_difference']:.4f}")
+        print(f"  Variance Difference: {res['variance_difference']:.4f}")
         print()
         
         # Paired t-test
