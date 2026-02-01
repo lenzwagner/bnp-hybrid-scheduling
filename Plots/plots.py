@@ -79,6 +79,10 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
     # Convert dictionary to DataFrame
     df = pd.DataFrame(data_dict)
     
+    # Ensure sum_focus_los is numeric (handle potential malformed data)
+    if 'sum_focus_los' in df.columns:
+        df['sum_focus_los'] = pd.to_numeric(df['sum_focus_los'], errors='coerce')
+    
     # ==========================================
     # DATA CLEANING & PREPARATION
     # ==========================================
@@ -105,8 +109,8 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
             y_col = "normalized_los"
             y_label = "Avg Focus Length of Stay (Days per Patient)"
     
-    # A. Mapping for OnlyHuman (1 = Human Only, 0 = Hybrid/App)
-    df['Service_Model'] = df['OnlyHuman'].map({1: 'Human Only', 0: 'Hybrid (App)'})
+    # A. Mapping for OnlyHuman (1 = HOM (Baseline), 0 = HBM (AI-Hybrid))
+    df['Service_Model'] = df['OnlyHuman'].map({1: 'HOM (Baseline)', 0: 'HBM (AI-Hybrid)'})
     
     # B. Mapping for pttr (clean labels)
     pttr_mapping = {
@@ -132,7 +136,8 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
         col="T",
         row="D",
         order=pttr_order,
-        palette=['#FFC20A', '#0C7BDC'],  # Yellow (Human) / Blue (Hybrid)
+        hue_order=['HOM (Baseline)', 'HBM (AI-Hybrid)'],
+        palette=['#FFC20A', '#0C7BDC'],  # Yellow (HOM) / Blue (HBM)
         height=4,
         aspect=1.2,
         sharey=False,
@@ -147,7 +152,19 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
         ax.set_xticks([0, 1, 2])
         ax.set_xticklabels(pttr_order)
     
+    # Manually create legend to avoid duplicates
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#FFC20A', edgecolor='white', label='HOM (Baseline)'),
+        Patch(facecolor='#0C7BDC', edgecolor='white', label='HBM (AI-Hybrid)')
+    ]
+    g.figure.legend(handles=legend_elements, 
+                    loc='center left', bbox_to_anchor=(0.85, 0.5),
+                    ncol=1,
+                    frameon=True)
+    
     plt.tight_layout()
+    g.figure.subplots_adjust(right=0.8, wspace=0.3)
     
     if print_tex:
         _print_tex(g.figure, caption="LOS Initial Plot", label="fig:los_initial")
@@ -314,9 +331,16 @@ def sorted_savings_plot(data_dict, workload='heavy', print_tex=False):
 if __name__ == "__main__":
     import glob
     
-    # Results directory
-    results_dir = '../results/parameter_study/results'
-    excel_files = glob.glob(os.path.join(results_dir, '*.xlsx'))
+    # Results directory (robust to CWD)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    results_dir = os.path.join(script_dir, '..', 'results', 'parameter_study', 'results')
+    
+    if not os.path.exists(results_dir):
+         print(f"Directory not found: {results_dir}")
+         excel_files = []
+    else:
+        excel_files = glob.glob(os.path.join(results_dir, '*.xlsx'))
+    
     # Filter out temp files (starting with ~$)
     excel_files = [f for f in excel_files if not os.path.basename(f).startswith('~$')]
     

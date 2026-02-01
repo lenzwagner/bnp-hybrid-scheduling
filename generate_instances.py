@@ -68,10 +68,10 @@ class InstanceGenerator:
             'daily': [4]
         }
 
-        self.dual_improvement_iter = 20
-        self.dual_stagnation_threshold = 1e-5
+        self.dual_improvement_iter = 40
+        self.dual_stagnation_threshold = 1e-6
         self.max_itr = 100
-        self.threshold = 1e-5
+        self.threshold = 5e-6
         self.show_plots = False
         self.pricing_filtering = True
         self.therapist_agg = False
