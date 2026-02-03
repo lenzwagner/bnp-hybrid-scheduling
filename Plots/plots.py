@@ -89,7 +89,7 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
     
     # Optional: Normalize
     y_col = "sum_focus_los"
-    y_label = "Focus Length of Stay (Days)"
+    y_label = " Length of Stay (Days)"
     
     if normalize_by_focus:
         # Check column name (D_focus or D_focus_count)

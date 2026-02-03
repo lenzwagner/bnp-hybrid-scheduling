@@ -44,7 +44,7 @@ def los_split_violin_r_plot(data_dict, normalize_by_focus=False):
 
     # Data preparation
     y_col = "sum_focus_los"
-    y_label = "Focus Length of Stay (Days)"
+    y_label = "Length of Stay (Days)"
 
     if normalize_by_focus:
         if 'D_focus' in df.columns:
