@@ -476,7 +476,7 @@ def aggregate_therapists(T, Max_t, W_on, W_off, D, verbose=False):
     return G_C, g_j_C, Q_flat, therapist_to_type
 
 
-def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scenario='medium', seed=42, plot_show=False, verbose=False):
+def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_scenario='medium', seed=42, plot_show=False, verbose=False, T_demand=None):
     """
     Generate patient data based on computational study specifications.
 
@@ -490,6 +490,9 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     - seed: Random seed for reproducibility
     - plot_show: Whether to show plots
     - verbose: If True, print detailed output
+    - T_demand: Number of therapists to base demand generation on (optional). 
+                If None, defaults to T. 
+                Use this to keep patient count constant while changing T.
 
     Returns:
     - requirements_dict: Dictionary with patient requirements
@@ -506,6 +509,9 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
 
     np.random.seed(seed)
     random.seed(seed)
+    
+    # Use T_demand if provided, otherwise default to T for demand calculation
+    T_for_generation = T if T_demand is None else T_demand
 
     # Calculate derived parameters based on study specifications
     W_coeff = W_on / (W_on + W_off)
@@ -577,7 +583,7 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
     total_days = len(D_full)
     working_days = math.ceil(total_days * W_coeff)
     daily_capacity = daily
-    total_capacity = working_days * daily_capacity * T
+    total_capacity = working_days * daily_capacity * T_for_generation
 
     # Define PTTR scenarios
     utilization_rates = {

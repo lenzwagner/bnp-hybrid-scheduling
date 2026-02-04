@@ -219,8 +219,8 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     }
 
     # Instance parameters
-    T = 5  # Number of therapists
-    D_focus = 14  # Number of focus days
+    T = 4  # Number of therapists
+    D_focus = 10  # Number of focus days
 
     # Algorithm parameters
     dual_improvement_iter = 20  # Max Iterations without dual improvement
@@ -864,7 +864,7 @@ def main(allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None):
     # ===========================
     # Old derived variable block removed as it is now integrated above
     pass
-    print(cg_solver.Nr_agg, cg_solver.agg_to_patient, sep="\n")
+    #print(cg_solver.Nr_agg, cg_solver.agg_to_patient, sep="\n")
     return results
 
 

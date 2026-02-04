@@ -14,7 +14,7 @@ from calculate_transition_matrix import compute_session_transition_matrix, print
 
 logger = get_logger(__name__)
 
-def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0):
+def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None):
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
@@ -41,6 +41,16 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'W_off': [2],
         'daily': [4]
     }
+
+    # Apply overrides if provided
+    if app_data_overrides:
+        for key, value in app_data_overrides.items():
+            if key in app_data:
+                # Ensure value is a list as expected by the rest of the code
+                app_data[key] = [value] if not isinstance(value, list) else value
+                logger.info(f"Overriding {key} with {value}")
+            else:
+                logger.warning(f"Override key {key} not found in app_data")
 
     # Algorithm parameters
     dual_improvement_iter = 20
@@ -129,7 +139,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         verbose=verbose_output,
         deterministic=deterministic,
         use_warmstart=use_warmstart,
-        dual_smoothing_alpha=dual_smoothing_alpha
+        dual_smoothing_alpha=dual_smoothing_alpha,
+        T_demand=T_demand
     )
 
     cg_solver.setup()

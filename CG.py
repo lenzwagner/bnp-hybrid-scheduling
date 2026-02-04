@@ -21,7 +21,7 @@ class ColumnGeneration:
                  pttr='medium', show_plots=False, pricing_filtering=True, therapist_agg=False,
                  max_stagnation_itr=5, stagnation_threshold=1e-4, learn_method='pwl', callback_after_iteration=None,
                  save_lps=True, verbose=True, deterministic=False, use_warmstart=True,
-                 dual_smoothing_alpha=0.5):
+                 dual_smoothing_alpha=0.5, T_demand=None):
         """
         Initialize Column Generation solver.
 
@@ -41,11 +41,13 @@ class ColumnGeneration:
             save_lps: Whether to save LP and SOL files
             verbose: Whether to print detailed output
             deterministic: Use deterministic solver settings (single-threaded, barrier method)
+            T_demand: Number of therapists for demand generation (optional)
         """
         # Store parameters
         self.seed = seed
         self.app_data = app_data
         self.T_param = T
+        self.T_demand = T_demand if T_demand is not None else T
         self.D_focus = D_focus
         self.max_itr = max_itr
         self.threshold = threshold
@@ -125,7 +127,8 @@ class ColumnGeneration:
                 pttr_scenario=self.pttr,
                 seed=self.seed,
                 plot_show=self.show_plots,
-                verbose=self.verbose
+                verbose=self.verbose,
+                T_demand=self.T_demand
             )
 
         # Create mappings

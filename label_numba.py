@@ -1290,12 +1290,8 @@ def run_with_branching_constraints_numba(
                             if not mu_valid: continue
                             
                             # Terminal Zeta Check
-                            if has_nogood_cuts:
-                                all_deviated = True
-                                for cut_idx in range(num_nogood_cuts):
-                                    if (final_zeta >> cut_idx) & 1 == 0:
-                                        all_deviated = False; break
-                                if not all_deviated: continue
+                            # Terminal Zeta Check
+                            # (MP Branching handled via pruning)
                             
                             condition_met = (final_prog >= s_k - epsilon)
                             is_valid = False
@@ -1325,12 +1321,7 @@ def run_with_branching_constraints_numba(
                                 
                                 # Final Branching Updates
                                 final_zeta = zeta_mask
-                                if has_nogood_cuts:
-                                    for cut_idx in range(num_nogood_cuts):
-                                        if (final_zeta >> cut_idx) & 1 == 0:
-                                            forbidden_val = nogood_patterns[cut_idx, j, tau]
-                                            if forbidden_val != 0 and forbidden_val > 0:
-                                                final_zeta = final_zeta | (1 << cut_idx)
+                                # (MP Branching updates handled via pruning, no zeta update needed)
                                 final_rho = rho_encoded
                                 final_mu = mu_encoded
                                 mu_valid = True
@@ -1353,12 +1344,7 @@ def run_with_branching_constraints_numba(
                                             right_reward += right_pattern_duals[pat_idx]
                                 if not mu_valid: continue
                                 
-                                if has_nogood_cuts:
-                                    all_deviated = True
-                                    for cut_idx in range(num_nogood_cuts):
-                                        if (final_zeta >> cut_idx) & 1 == 0:
-                                            all_deviated = False; break
-                                    if not all_deviated: continue
+                                # (MP Branching check handled via pruning)
 
                                 condition_met = (final_prog >= s_k - epsilon)
                                 is_valid = False
@@ -1386,12 +1372,7 @@ def run_with_branching_constraints_numba(
                                 
                                 # Final Branching Updates (Approx same as AI)
                                 final_zeta = zeta_mask
-                                if has_nogood_cuts:
-                                    for cut_idx in range(num_nogood_cuts):
-                                        if (final_zeta >> cut_idx) & 1 == 0:
-                                            forbidden_val = nogood_patterns[cut_idx, j, tau]
-                                            if forbidden_val != 0 and forbidden_val > 0:
-                                                final_zeta = final_zeta | (1 << cut_idx)
+                                # (MP Branching updates handled via pruning)
                                 final_rho = rho_encoded
                                 final_mu = mu_encoded
                                 mu_valid = True
@@ -1414,12 +1395,7 @@ def run_with_branching_constraints_numba(
                                             right_reward += right_pattern_duals[pat_idx]
                                 if not mu_valid: continue
                                 
-                                if has_nogood_cuts:
-                                    all_deviated = True
-                                    for cut_idx in range(num_nogood_cuts):
-                                        if (final_zeta >> cut_idx) & 1 == 0:
-                                            all_deviated = False; break
-                                    if not all_deviated: continue
+                                # (MP Branching check handled via pruning)
                                 
                                 is_focus = (obj_mode > 0.5)
                                 is_valid = (final_prog >= s_k - epsilon) if is_focus else ((final_prog >= s_k - epsilon) or is_timeout_scenario)
