@@ -786,11 +786,13 @@ class BranchAndPrice:
             return True
 
         # Check 3: Bound worse than incumbent
-        if node.lp_bound >= self.incumbent - 1e-5:
+        # Integer Pruning (Objective is always integer)
+        # If ceil(LB) >= UB, we can prune because no integer solution can be strictly better than UB.
+        if math.ceil(node.lp_bound - 1e-5) >= self.incumbent:
             node.status = 'fathomed'
             node.fathom_reason = 'bound'
-            self.logger.info(f"   Node {node.node_id} fathomed by bound: "
-                        f"LP={node.lp_bound:.6f} >= UB={self.incumbent:.6f}")
+            self.logger.info(f"   Node {node.node_id} fathomed by bound (Integer): "
+                        f"ceil({node.lp_bound:.6f}) >= UB={self.incumbent:.6f}")
             return True
 
         # Check 4:
