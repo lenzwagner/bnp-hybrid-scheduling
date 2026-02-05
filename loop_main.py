@@ -14,7 +14,7 @@ from calculate_transition_matrix import compute_session_transition_matrix, print
 
 logger = get_logger(__name__)
 
-def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None):
+def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None, pre_generated_data=None):
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
@@ -140,7 +140,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         deterministic=deterministic,
         use_warmstart=use_warmstart,
         dual_smoothing_alpha=dual_smoothing_alpha,
-        T_demand=T_demand
+        T_demand=T_demand,
+        pre_generated_data=pre_generated_data
     )
 
     cg_solver.setup()

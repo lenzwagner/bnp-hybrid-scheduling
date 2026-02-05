@@ -21,7 +21,7 @@ class ColumnGeneration:
                  pttr='medium', show_plots=False, pricing_filtering=True, therapist_agg=False,
                  max_stagnation_itr=5, stagnation_threshold=1e-4, learn_method='pwl', callback_after_iteration=None,
                  save_lps=True, verbose=True, deterministic=False, use_warmstart=True,
-                 dual_smoothing_alpha=0.5, T_demand=None):
+                 dual_smoothing_alpha=0.5, T_demand=None, pre_generated_data=None):
         """
         Initialize Column Generation solver.
 
@@ -42,6 +42,7 @@ class ColumnGeneration:
             verbose: Whether to print detailed output
             deterministic: Use deterministic solver settings (single-threaded, barrier method)
             T_demand: Number of therapists for demand generation (optional)
+            pre_generated_data: Optional dictionary containing already generated patient data
         """
         # Store parameters
         self.seed = seed
@@ -66,6 +67,7 @@ class ColumnGeneration:
         self.dual_smoothing_alpha = dual_smoothing_alpha
         self.smoothed_duals_pi = None
         self.smoothed_duals_gamma = None
+        self.pre_generated_data = pre_generated_data
 
         # Initialize random seed
         random.seed(seed)
@@ -114,22 +116,37 @@ class ColumnGeneration:
             'const': self.app_data['theta_base'][0]
         }
 
-        # Generate patient and therapist data
-        if self.verbose:
-            print("\n[Setup] Generating patient and therapist data...")
-        self.Req, self.Entry, self.Max_t, self.P, self.D, self.D_Ext, self.D_Full, self.T, self.M_p, self.W_coeff, self.DRG = \
-            generate_patient_data_log(
-                T=self.T_param,
-                D_focus=self.D_focus,
-                W_on=self.app_data["W_on"][0],
-                W_off=self.app_data["W_off"][0],
-                daily=self.app_data["daily"][0],
-                pttr_scenario=self.pttr,
-                seed=self.seed,
-                plot_show=self.show_plots,
-                verbose=self.verbose,
-                T_demand=self.T_demand
-            )
+        # Generate patient and therapist data OR use pre-generated data
+        if self.pre_generated_data:
+            if self.verbose:
+                print("\n[Setup] Using PRE-GENERATED patient data...")
+            self.Req = self.pre_generated_data['Req']
+            self.Entry = self.pre_generated_data['Entry']
+            self.Max_t = self.pre_generated_data['Max_t']
+            self.P = self.pre_generated_data['P']
+            self.D = self.pre_generated_data['D']
+            self.D_Ext = self.pre_generated_data['D_Ext']
+            self.D_Full = self.pre_generated_data['D_Full']
+            self.T = self.pre_generated_data['T']
+            self.M_p = self.pre_generated_data['M_p']
+            self.W_coeff = self.pre_generated_data['W_coeff']
+            self.DRG = self.pre_generated_data['DRG']
+        else:
+            if self.verbose:
+                print("\n[Setup] Generating patient and therapist data...")
+            self.Req, self.Entry, self.Max_t, self.P, self.D, self.D_Ext, self.D_Full, self.T, self.M_p, self.W_coeff, self.DRG = \
+                generate_patient_data_log(
+                    T=self.T_param,
+                    D_focus=self.D_focus,
+                    W_on=self.app_data["W_on"][0],
+                    W_off=self.app_data["W_off"][0],
+                    daily=self.app_data["daily"][0],
+                    pttr_scenario=self.pttr,
+                    seed=self.seed,
+                    plot_show=self.show_plots,
+                    verbose=self.verbose,
+                    T_demand=self.T_demand
+                )
 
         # Create mappings
         if self.verbose:
