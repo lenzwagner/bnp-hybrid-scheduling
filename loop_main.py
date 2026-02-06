@@ -33,8 +33,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'learn_type': [learn_type],
         'theta_base': [0.3],
         'lin_increase': [0.05],
-        'k_learn': [0.3],
-        'infl_point': [5],
+        'k_learn': [1.5],
+        'infl_point': [4],
         'MS': [5],
         'MS_min': [2],
         'W_on': [5],
@@ -557,7 +557,7 @@ def main_loop():
         print("=" * 100 + "\n")
         
         # Iterate over learn_types
-        learn_types = ['sigmoid']
+        learn_types = ['exp']
         
         for lt in learn_types:
             # Create a unique instance_id for this learn_type

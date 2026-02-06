@@ -30,7 +30,7 @@ class Problem_d:
         self.Req = Req
         self.P_Join = [p for p, d in self.Entry.items() if d >= min(self.D_F)]
         self.learn_method = learn_method
-        self.pwl = True
+        self.pwl = False
         self.num_tangents = num_tangents
         self.W_coeff = W_coeff
         self.Max_t = Max_t
