@@ -565,6 +565,16 @@ def main_loop():
                 'lin_increase': 0,
                 'infl_point': 0
             }
+        },
+        {
+            'name': 0,
+            'overrides': {
+                'learn_type': 0,  # Assumed name from 'exp'
+                'theta_base': 0.3,
+                'k_learn': 0.732,
+                'lin_increase': 0,
+                'infl_point': 0
+            }
         }
     ]
 
