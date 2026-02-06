@@ -541,7 +541,7 @@ def main_loop():
             'overrides': {
                 'learn_type': 'lin',
                 'theta_base': 0.3,
-                'lin_increase': 0.07,
+                'lin_increase': 0.088,
                 'k_learn': 0, # Not used for linear, but good to reset
                 'infl_point': 0 # Not used
             }
@@ -551,8 +551,8 @@ def main_loop():
             'overrides': {
                 'learn_type': 'sigmoid',
                 'theta_base': 0.3,
-                'k_learn': 0.5,
-                'infl_point': 5,
+                'k_learn': 1.5,
+                'infl_point': 4,
                 'lin_increase': 0 # Not used
             }
         },
@@ -561,7 +561,7 @@ def main_loop():
             'overrides': {
                 'learn_type': 'exp',  # Assumed name from 'exp'
                 'theta_base': 0.3,
-                'k_learn': 0.13,
+                'k_learn': 0.732,
                 'lin_increase': 0,
                 'infl_point': 0
             }
