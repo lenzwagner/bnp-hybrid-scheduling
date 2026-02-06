@@ -21,6 +21,7 @@ class Problem_d:
         self.Model.Params.Seed = 0  # Fixed seed for reproducibility across different PCs
         self.deterministic = deterministic
 
+
         # Apply deterministic settings if requested
         if self.deterministic:
             self.Model.Params.Threads = 1  # Single thread for determinism
@@ -33,6 +34,8 @@ class Problem_d:
         self.num_tangents = num_tangents
         self.W_coeff = W_coeff
         self.Max_t = Max_t
+        print(self.Max_t)
+
         self.pre_x = pre_x
         self.app_data = app_data
         self.M = len(self.D) + 1
@@ -204,18 +207,35 @@ class Problem_d:
                                          name=f"equivalent_{p}_{d}")
 
         elif self.app_data["learn_type"][0] == 'lin':
+            # Add h_eff variable (daily effective AI contribution)
+            self.h_eff = self.Model.addVars(self.P_Join, self.D, vtype=gu.GRB.CONTINUOUS, lb=0, ub=1, name="h_eff")
             self.App = self.Model.addVars(self.P_Join, self.D, vtype=gu.GRB.CONTINUOUS, lb=0, ub=1, name="App")
+            
             for p in self.P_Join:
                 for d in self.D:
+                    # Define S[p,d]: cumulative AI sessions
                     self.Model.addLConstr(
-                        self.S[p, d] == gu.quicksum(self.y[p, t] for t in range(self.Entry[p], d + 1)))
+                        self.S[p, d] == gu.quicksum(self.y[p, t] for t in range(self.Entry[p], d + 1)),
+                        name=f"define_S_{p}_{d}")
+                    
+                    # Define App[p,d]: cumulative AI effectiveness at day d
                     self.Model.addLConstr(
-                        self.App[p, d] <= self.app_data["theta_base"][0] + self.app_data["lin_increase"][0] * self.S[p, d])
-                    self.Model.addLConstr(self.App[p, d] <= 1)
-                    self.Model.addConstr(self.l[p, d] * self.Req[p] <= gu.quicksum(
-                        gu.quicksum(self.x[p, t, j] for j in range(self.Entry[p], d + 1)) for t in
-                        self.T) + gu.quicksum(self.App[p, j] for j in range(self.Entry[p], d + 1)),
-                                         name=f"equivalent_{p}_{d}")
+                        self.App[p, d] <= self.app_data["theta_base"][0] + self.app_data["lin_increase"][0] * self.S[p, d],
+                        name=f"App_linear_{p}_{d}")
+                    self.Model.addLConstr(self.App[p, d] <= 1, name=f"App_ub_{p}_{d}")
+                    
+                    # Link h_eff[p,d] to y[p,d] and App[p,d]
+                    # These 3 constraints enforce: h_eff[p,d] = y[p,d] * App[p,d]
+                    self.Model.addConstr(self.h_eff[p, d] <= self.y[p, d], name=f"h_eff_y_{p}_{d}")
+                    self.Model.addConstr(self.h_eff[p, d] <= self.App[p, d], name=f"h_eff_theta_{p}_{d}")
+                    self.Model.addConstr(self.h_eff[p, d] >= self.App[p, d] - (1 - self.y[p, d]), name=f"h_eff_linear_{p}_{d}")
+                    
+                    # Use h_eff (not App) in requirement constraint
+                    self.Model.addConstr(
+                        self.l[p, d] * self.Req[p] <= gu.quicksum(
+                            gu.quicksum(self.x[p, t, j] for j in range(self.Entry[p], d + 1)) for t in self.T
+                        ) + gu.quicksum(self.h_eff[p, j] for j in range(self.Entry[p], d + 1)),
+                        name=f"equivalent_{p}_{d}")
 
         else:
             for p in self.P_Join:

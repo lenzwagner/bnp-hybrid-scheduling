@@ -561,7 +561,7 @@ def main_loop():
             'overrides': {
                 'learn_type': 'exp',  # Assumed name from 'exp'
                 'theta_base': 0.3,
-                'k_learn': 0.14,
+                'k_learn': 0.13,
                 'lin_increase': 0,
                 'infl_point': 0
             }
