@@ -194,14 +194,18 @@ class ColumnGeneration:
         # Preprocessing
         if self.verbose:
             print("[Setup] Running preprocessing for pre-patients...")
-        self.pre_x, self.pre_y, self.pre_los, self.pre_x_filtered, self.pre_x_filt = \
-            pre_processing_schedule(
+        pre_process_result = pre_processing_schedule(
                 self.P_Pre, self.P_F, self.T, self.D_Ext, self.Entry_agg, self.Req_agg,
                 self.app_data['learn_type'][0], self.learning_params,
                 self.app_data['MS'][0], self.app_data['MS_min'][0],
                 self.Max_t, self.Nr_agg, self.therapist_to_type,
                 verbose=self.verbose
             )
+
+        if isinstance(pre_process_result, tuple) and pre_process_result[0] == 'Infeasible':
+             raise ValueError(f"Pre-processing Infeasible: {pre_process_result[1]}")
+        
+        self.pre_x, self.pre_y, self.pre_los, self.pre_x_filtered, self.pre_x_filt = pre_process_result
 
         if self.verbose:
             print('Focus-Patients', self.P_F)

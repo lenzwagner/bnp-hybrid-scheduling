@@ -57,18 +57,19 @@ def pre_processing_schedule(P, P_F, T, D, Entry_p, CReq_p, theta_app_type, learn
                 print(f"{status} Period {d}: {demand} demand, {capacity} capacity (slack: {slack})")
 
     if not feasible:
+        error_msg = f"Infeasible Periods: {bottlenecks}. "
+        for d in bottlenecks:
+            demand = entry_demand[d]
+            capacity = sum(Max_t_input.get((t, d), 0) for t in T)
+            error_msg += f"Period {d}: Needs {demand}, Has {capacity} (Deficit {demand-capacity}). "
+
         if verbose:
             print("\n" + "=" * 100)
             print("❌ PRE-PATIENT SCHEDULING IS STRUCTURALLY INFEASIBLE!")
             print("=" * 100)
-            print("\nBottleneck periods: " + str(bottlenecks))
-            print("\nPossible solutions:")
-            print("  1. Increase therapist capacity Q_{jt} at bottleneck periods")
-            print("  2. Adjust patient entry days (shift some patients)")
-            print("  3. Reduce profile counts nr_c (if using aggregated profiles)")
-            print("  4. Re-generate instance with different parameters")
+            print(error_msg)
             print("=" * 100)
-        return 'Infeasible'
+        return 'Infeasible', error_msg
 
     if verbose:
         print("✅ PRE-CHECK PASSED - PROCEEDING WITH SCHEDULING")

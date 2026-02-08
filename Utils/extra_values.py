@@ -465,67 +465,17 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['avg_consecutive_ai'] = avg_consecutive_ai
 
     # ==============================================================================
-    # CONSOLIDATED OUTPUT - All Metrics Summary
+    # CONSOLIDATED OUTPUT - All Metrics Summary (SUPPRESSED FOR STRESS TEST)
     # ==============================================================================
-    print(f"\n{'='*80}")
-    print(f" E.2 RESOURCE UTILIZATION METRICS ({len(patients_list)} patients) ".center(80, '='))
-    print(f"{'='*80}")
+    # print(f"\n{'='*80}")
+    # print(f" E.2 RESOURCE UTILIZATION METRICS ({len(patients_list)} patients) ".center(80, '='))
+    # ...
 
-    print(f"\n--- PERIOD SCOPE (Days {period_start}-{period_end}) ---")
-    print(f"  N_human:              {period_N_human:.1f}")
-    print(f"  N_AI:                 {period_N_AI:.1f}")
-    print(f"  N_total:              {period_N_total:.1f}")
-    print(f"  AI Share:             {period_ai_share:.2f}%")
-    print(f"  Human Share:          {period_human_share:.2f}%")
-    print(f"  C_total (gross):      {period_C_total}")
-    print(f"  C_net (avail):        {period_C_net}")
-    print(f"  Human Utilization:    {period_human_util:.2f}% (of available capacity)")
-    print(f"  Avg Therapist Workload: {period_avg_workload:.2f}")
-    print(f"  Peak Therapist Workload: {period_peak_workload:.1f}")
-    print(f"  Peak Day Workload:    {period_peak_day_workload:.1f}")
-    print(f"  Peak Period Util:     {period_peak_util:.2f}% (System-wide Peak Day)")
-    print(f"  Avg Peak Daily Load:  {avg_peak_daily_load_per_therapist:.2f}% (Average of max daily util per therapist)")
-    
-    print(f"\n--- Detailed Therapist Daily Utilization (Net Capacity) ---")
-    print(f"  Max Daily Util per T: {therapist_max_util}")
-    print(f"  Avg Daily Util per T: {therapist_avg_util}")
-    print(f"  Full Daily Util Dict: {dict(therapist_daily_util_dict)}")
 
-    print(f"\n--- PATIENT SCOPE (Days {patient_start}-{patient_end}) ---")
-    print(f"  N_human:              {patient_N_human:.1f}")
-    print(f"  N_AI:                 {patient_N_AI:.1f}")
-    print(f"  N_total:              {patient_N_total:.1f}")
-    print(f"  AI Share:             {period_ai_share:.2f}%")
-    print(f"  Human Share:          {patient_human_share:.2f}%")
-    print(f"  C_total (gross):      {patient_C_total}")
-    print(f"  C_net (avail):        {patient_C_net}")
-    print(f"  Human Utilization:    {patient_human_util:.2f}% (of available capacity)")
-    print(f"  Avg Therapist Workload: {patient_avg_workload:.2f}")
-    print(f"  Peak Therapist Workload: {patient_peak_workload:.1f}")
-    print(f"  Peak Day Workload:    {patient_peak_day_workload:.1f}")
-    print(f"  Peak Period Util:     {patient_peak_util:.2f}%")
-    print(f"  Avg Human Sessions:   {metrics['patient_avg_human_sessions']:.2f}")
+    # print(f"\n{'='*80}")
+    # print(f" E.3 AI LEARNING DYNAMICS METRICS ".center(80, '='))
+    # ...
 
-    print(f"\n{'='*80}")
-    print(f" E.3 AI LEARNING DYNAMICS METRICS ".center(80, '='))
-    print(f"{'='*80}")
-
-    print(f"\n--- Per-Patient Dicts ---")
-    print(f"  Initial Theta:        {initial_theta}")
-    print(f"  Final Theta:          {final_theta}")
-    print(f"  Max Theta:            {max_theta}")
-    print(f"  Min Theta (First AI): {min_theta_at_first_ai}")
-    print(f"  AI Sessions/Patient:  {ai_sessions_per_patient}")
-    print(f"  Time to Proficiency:  {time_to_proficiency}")
-    print(f"  Max Consec AI:        {max_consecutive_ai}")
-
-    print(f"\n--- Aggregate Values ---")
-    print(f"  Avg Final Theta:      {avg_final_theta:.4f}")
-    print(f"  Avg Theta (AI used):  {avg_theta_when_ai_used:.4f}")
-    print(f"  Avg AI Sessions:      {avg_ai_sessions:.2f}")
-    print(f"  Avg Time to Prof:     {avg_time_to_proficiency if avg_time_to_proficiency else 'N/A'}")
-    print(f"  Max Consec AI (glob): {max_consecutive_ai_global}")
-    print(f"  Avg Consec AI:        {avg_consecutive_ai:.2f}")
 
     # ==============================================================================
     # E.4 THERAPIST CONTINUITY METRICS
@@ -576,21 +526,10 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['num_continuity_violations'] = num_continuity_violations
 
     # Print E.4
-    print(f"\n{'='*80}")
-    print(f" E.4 THERAPIST CONTINUITY METRICS ".center(80, '='))
-    print(f"{'='*80}")
+    # print(f"\n{'='*80}")
+    # print(f" E.4 THERAPIST CONTINUITY METRICS ".center(80, '='))
+    # ...
 
-    print(f"\n--- Per-Patient ---")
-    print(f"  Therapists Assigned: {therapists_assigned}")
-    print(f"  Primary Therapist:   {primary_therapist}")
-
-    print(f"\n--- Per-Therapist ---")
-    print(f"  Patients per Therapist: {patients_per_therapist}")
-
-    print(f"\n--- Aggregate ---")
-    print(f"  Continuity Violations: {num_continuity_violations}")
-    if continuity_violations:
-        print(f"  Violating Patients:    {continuity_violations}")
 
     # ==============================================================================
     # E.5 TREATMENT GAP METRICS (Relaxed Continuity Only)
@@ -670,19 +609,10 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['avg_theta_during_gaps'] = avg_theta_during_gaps
 
     # Print E.5
-    print(f"\n{'='*80}")
-    print(f" E.5 TREATMENT GAP METRICS ".center(80, '='))
-    print(f"{'='*80}")
+    # print(f"\n{'='*80}")
+    # print(f" E.5 TREATMENT GAP METRICS ".center(80, '='))
+    # ...
 
-    print(f"\n--- Per-Patient ---")
-    print(f"  Total Gaps:     {total_gaps_per_patient}")
-    print(f"  Longest Gap:    {longest_gap_per_patient}")
-    print(f"  Theta in Gaps:  {theta_during_gaps}")
-
-    print(f"\n--- Aggregate ---")
-    print(f"  Total Idle Days:      {total_idle_days}")
-    print(f"  Avg Gaps/Patient:     {avg_gaps_per_patient:.2f}")
-    print(f"  Avg Theta in Gaps:    {avg_theta_during_gaps:.4f}" if avg_theta_during_gaps else "  Avg Theta in Gaps:    N/A (no gaps)")
 
     # ==============================================================================
     # E.6 DRG-SPECIFIC METRICS
@@ -782,27 +712,10 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['drg_ai_share'] = drg_ai_share
 
     # Print E.6
-    print(f"\n{'='*80}")
-    print(f" E.6 DRG-SPECIFIC METRICS ".center(80, '='))
-    print(f"{'='*80}")
+    # print(f"\n{'='*80}")
+    # print(f" E.6 DRG-SPECIFIC METRICS ".center(80, '='))
+    # ...
 
-    print(f"\n--- Global (All Patients) ---")
-    print(f"  Avg LoS:             {metrics['avg_los']:.2f}")
-
-    for g in drg_groups:
-        count = drg_patient_count[g]
-        avg_los = drg_avg_los[g]
-        avg_req = drg_avg_req[g]
-        ai_share = drg_ai_share[g]
-        profiles = drg_patients[g]
-        print(f"\n  {g}:")
-        print(f"    Profiles:          {profiles}")
-        print(f"    Patient Count:     {count}")
-        print(f"    Avg LoS:           {avg_los:.2f}" if avg_los else f"    Avg LoS:           N/A")
-        print(f"    Avg Requirement:   {avg_req:.2f}" if avg_req else f"    Avg Requirement:   N/A")
-        print(f"    AI Share:          {ai_share:.2f}%" if ai_share is not None else f"    AI Share:          N/A")
-
-    print(f"{'='*80}\n")
 
     # ==============================================================================
     # E.7 SESSION PATTERN ANALYSIS
@@ -878,28 +791,28 @@ def calculate_extra_metrics(cg_solver, inc_sol, patients_list, derived_data, T, 
     metrics['trigram_frequency'] = trigram_frequency
 
     # Print E.7
-    print(f"\n{'='*80}")
-    print(f" E.7 SESSION PATTERN ANALYSIS ".center(80, '='))
-    print(f"{'='*80}")
+    # print(f"\n{'='*80}")
+    # print(f" E.7 SESSION PATTERN ANALYSIS ".center(80, '='))
+    # print(f"{'='*80}")
 
-    print(f"\n--- Session Dict per Patient (day -> type) ---")
-    for p, days_dict in session_dict.items():
-        print(f"  Patient {p}: {days_dict}")
+    # print(f"\n--- Session Dict per Patient (day -> type) ---")
+    # for p, days_dict in session_dict.items():
+    #     print(f"  Patient {p}: {days_dict}")
 
-    print(f"\n--- Session Strings ---")
-    for p, seq in session_string.items():
-        print(f"  Patient {p}: {seq}")
+    # print(f"\n--- Session Strings ---")
+    # for p, seq in session_string.items():
+    #     print(f"  Patient {p}: {seq}")
 
-    print(f"\n--- Trigrams per Patient ---")
-    for p, tris in trigrams_per_patient.items():
-        print(f"  Patient {p}: {tris}")
+    # print(f"\n--- Trigrams per Patient ---")
+    # for p, tris in trigrams_per_patient.items():
+    #     print(f"  Patient {p}: {tris}")
 
-    print(f"\n--- Trigram Frequency ---")
-    sorted_trigrams = sorted(trigram_frequency.items(), key=lambda x: -x[1])
-    for trigram, count in sorted_trigrams:
-        print(f"  {trigram}: {count}")
+    # print(f"\n--- Trigram Frequency ---")
+    # sorted_trigrams = sorted(trigram_frequency.items(), key=lambda x: -x[1])
+    # for trigram, count in sorted_trigrams:
+    #     print(f"  {trigram}: {count}")
 
-    print(f"{'='*80}\n")
+    # print(f"{'='*80}\n")
 
     
     # ===========================
