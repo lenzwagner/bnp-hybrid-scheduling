@@ -542,8 +542,8 @@ def main_loop():
                 'learn_type': 'lin',
                 'theta_base': 0.3,
                 'lin_increase': 0.088,
-                'k_learn': 0, # Not used for linear, but good to reset
-                'infl_point': 0 # Not used
+                'k_learn': 0,
+                'infl_point': 0
             }
         },
         {
@@ -553,13 +553,13 @@ def main_loop():
                 'theta_base': 0.3,
                 'k_learn': 1.5,
                 'infl_point': 4,
-                'lin_increase': 0 # Not used
+                'lin_increase': 0
             }
         },
         {
             'name': 'exponential',
             'overrides': {
-                'learn_type': 'exp',  # Assumed name from 'exp'
+                'learn_type': 'exp',
                 'theta_base': 0.3,
                 'k_learn': 0.732,
                 'lin_increase': 0,
@@ -567,11 +567,11 @@ def main_loop():
             }
         },
         {
-            'name': 0,
+            'name': 'humanonly',
             'overrides': {
-                'learn_type': 0,  # Assumed name from 'exp'
-                'theta_base': 0.3,
-                'k_learn': 0.732,
+                'learn_type': 0,
+                'theta_base': 0,
+                'k_learn': 0,
                 'lin_increase': 0,
                 'infl_point': 0
             }
