@@ -109,8 +109,8 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
             y_col = "normalized_los"
             y_label = "Avg Focus Length of Stay (Days per Patient)"
     
-    # A. Mapping for OnlyHuman (1 = HOM (Baseline), 0 = HBM (AI-Hybrid))
-    df['Service_Model'] = df['OnlyHuman'].map({1: 'HOM (Baseline)', 0: 'HBM (AI-Hybrid)'})
+    # A. Mapping for OnlyHuman (1 = HOM (Baseline), 0 = HYB (AI-Hybrid))
+    df['Service_Model'] = df['OnlyHuman'].map({1: 'HOM (Baseline)', 0: 'HYB (AI-Hybrid)'})
     
     # B. Mapping for pttr (clean labels)
     pttr_mapping = {
@@ -136,12 +136,16 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
         col="T",
         row="D",
         order=pttr_order,
-        hue_order=['HOM (Baseline)', 'HBM (AI-Hybrid)'],
-        palette=['#FFC20A', '#0C7BDC'],  # Yellow (HOM) / Blue (HBM)
+        hue_order=['HYB (AI-Hybrid)', 'HOM (Baseline)'],
+        palette=['#0C7BDC', '#FFC20A'],  # Blue (HYB) / Yellow (HOM)
         height=4,
         aspect=1.2,
         sharey=False,
-        legend=False
+        legend=False,
+        showmeans=True,  # Show mean markers
+        showfliers=True,  # Show outliers
+        meanprops=dict(marker='D', markerfacecolor='darkgreen', 
+                      markeredgecolor='darkgreen', markersize=6)
     )
     
     g.set_axis_labels("Patient-to-Therapist Ratio", y_label)
@@ -155,8 +159,8 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
     # Manually create legend to avoid duplicates
     from matplotlib.patches import Patch
     legend_elements = [
-        Patch(facecolor='#FFC20A', edgecolor='white', label='HOM (Baseline)'),
-        Patch(facecolor='#0C7BDC', edgecolor='white', label='HBM (AI-Hybrid)')
+        Patch(facecolor='#0C7BDC', edgecolor='white', label='HYB (AI-Hybrid)'),
+        Patch(facecolor='#FFC20A', edgecolor='white', label='HOM (Baseline)')
     ]
     g.figure.legend(handles=legend_elements, 
                     loc='center left', bbox_to_anchor=(0.85, 0.5),
@@ -358,7 +362,7 @@ if __name__ == "__main__":
             data_dict = df.to_dict('list')
             
             # Plot 1: LOS Boxplot - save TeX to parameter_study/plots
-            los_initial_plot(data_dict, normalize_by_focus=False, print_tex=True)
+            los_initial_plot(data_dict, normalize_by_focus=True, print_tex=True)
             
             # Plot 2: Sorted Savings Distribution - save TeX to parameter_study/plots
             sorted_savings_plot(data_dict, workload='heavy', print_tex=True)
