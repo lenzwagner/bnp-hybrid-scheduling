@@ -240,7 +240,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
                 original_P_Pre.extend(patients)
                 
                 # Disaggregate history
-                p_hist_x = cg_solver.pre_x.get(profile_id, {})
+                # Extract all pre_x entries for this profile_id: (profile_id, t, d) -> {(t, d): value}
+                p_hist_x = {(t, d): v for (p, t, d), v in cg_solver.pre_x.items() if p == profile_id}
                 p_hist_los = cg_solver.pre_los.get(profile_id, 0)
                 
                 for p_orig in patients:
@@ -542,8 +543,8 @@ def main_loop():
                 'learn_type': 'lin',
                 'theta_base': 0.3,
                 'lin_increase': 0.088,
-                'k_learn': 0, # Not used for linear, but good to reset
-                'infl_point': 0 # Not used
+                'k_learn': 0,
+                'infl_point': 0
             }
         },
         {
@@ -553,13 +554,13 @@ def main_loop():
                 'theta_base': 0.3,
                 'k_learn': 1.5,
                 'infl_point': 4,
-                'lin_increase': 0 # Not used
+                'lin_increase': 0
             }
         },
         {
             'name': 'exponential',
             'overrides': {
-                'learn_type': 'exp',  # Assumed name from 'exp'
+                'learn_type': 'exp',
                 'theta_base': 0.3,
                 'k_learn': 0.732,
                 'lin_increase': 0,
@@ -567,11 +568,11 @@ def main_loop():
             }
         },
         {
-            'name': 0,
+            'name': 'humanonly',
             'overrides': {
-                'learn_type': 0,  # Assumed name from 'exp'
-                'theta_base': 0.3,
-                'k_learn': 0.732,
+                'learn_type': 0,
+                'theta_base': 0,
+                'k_learn': 0,
                 'lin_increase': 0,
                 'infl_point': 0
             }
@@ -595,12 +596,42 @@ def main_loop():
         print(f" seed={seed}, D_focus={D_focus}, pttr={pttr}, T={T} ".center(100, "="))
         print("=" * 100 + "\n")
         
+        # Flag to track if we should skip remaining configs for this seed
+        skip_remaining_configs = False
+        
         for config in configurations:
             lt_name = config['name']
             overrides = config['overrides']
             
             # Create a unique instance_id for this learn_type
             current_instance_id = f"{instance_id}_{lt_name}"
+            
+            # Skip this configuration if a previous one was not optimal
+            if skip_remaining_configs:
+                print(f"\n⊘ Skipping learn_type: {lt_name} (ID: {current_instance_id}) - previous config was not optimal")
+                
+                # Store skipped indication with NOT_OPTIMAL status
+                results_dict[current_instance_id] = {
+                    'instance_id': current_instance_id,
+                    'original_instance_id': instance_id,
+                    'seed': seed,
+                    'D_focus': D_focus,
+                    'pttr': pttr,
+                    'T': T,
+                    'learn_type': overrides['learn_type'],
+                    'config_name': lt_name,
+                    'status': 'SKIPPED',
+                    'is_optimal': False,
+                    'final_ub': None,
+                    'final_lb': None,
+                    'final_gap': None,
+                    'total_time': None,
+                    'total_nodes': None
+                }
+                
+                # Add to DataFrame
+                results_df = pd.concat([results_df, pd.DataFrame([results_dict[current_instance_id]])], ignore_index=True)
+                continue
             
             print(f"\n Solving for learn_type: {lt_name} (ID: {current_instance_id})")
             
@@ -640,6 +671,11 @@ def main_loop():
                 print(f"  - Total nodes: {instance_data['total_nodes']}")
                 print(f"  - Is optimal: {instance_data['is_optimal']}")
                 
+                # Check if solution is NOT optimal - if so, skip remaining configs for this seed
+                if not instance_data.get('is_optimal', False):
+                    print(f"\n⚠ Solution is NOT optimal - skipping remaining configurations for seed {seed}")
+                    skip_remaining_configs = True
+                
             except Exception as e:
                 print(f"\n✗ Instance {current_instance}/{total_instances} [{lt_name}] FAILED:")
                 print(f"  Error: {str(e)}")
@@ -656,8 +692,13 @@ def main_loop():
                     'learn_type': overrides['learn_type'],
                     'config_name': lt_name,
                     'error': str(e),
-                    'status': 'FAILED'
+                    'status': 'FAILED',
+                    'is_optimal': False
                 }
+                
+                # Also skip remaining configs if there's a failure
+                print(f"\n⚠ Solver failed - skipping remaining configurations for seed {seed}")
+                skip_remaining_configs = True
     
     # ===========================
     # SAVE RESULTS
@@ -688,10 +729,16 @@ def main_loop():
     print("\n" + "=" * 100)
     print(" BATCH RUN SUMMARY ".center(100, "="))
     print("=" * 100)
-    print(f"Total instances: {total_instances}")
-    print(f"Completed successfully: {len([v for v in results_dict.values() if v.get('status') != 'FAILED'])}")
+    print(f"Total scenarios (seeds): {total_instances}")
+    print(f"Total configurations: {total_instances * len(configurations)}")
+    
+    completed_instances = [v for v in results_dict.values() if v.get('status') not in ['FAILED', 'SKIPPED']]
     failed_instances = [v for v in results_dict.values() if v.get('status') == 'FAILED']
+    skipped_instances = [v for v in results_dict.values() if v.get('status') == 'SKIPPED']
+    
+    print(f"Completed successfully: {len(completed_instances)}")
     print(f"Failed: {len(failed_instances)}")
+    print(f"Skipped (non-optimal predecessor): {len(skipped_instances)}")
     
     if failed_instances:
         print("\n" + "-" * 50)
@@ -711,6 +758,8 @@ def main_loop():
     for instance_id, data in results_dict.items():
         if data.get('status') == 'FAILED':
             print(f"{instance_id:<30} {data.get('seed', 'N/A'):<8} {data.get('D_focus', 'N/A'):<10} {data.get('pttr', 'N/A'):<10} {data.get('config_name', 'N/A'):<12} {'FAILED':<15} {'':<15} {'':<12} {'':<12} {'':<10} {'':<10}")
+        elif data.get('status') == 'SKIPPED':
+            print(f"{instance_id:<30} {data.get('seed', 'N/A'):<8} {data.get('D_focus', 'N/A'):<10} {data.get('pttr', 'N/A'):<10} {data.get('config_name', 'N/A'):<12} {'SKIPPED':<15} {'':<15} {'':<12} {'':<12} {'':<10} {'No':<10}")
         else:
             ub = f"{data.get('final_ub', 'N/A'):.2f}" if data.get('final_ub') else "N/A"
             lb = f"{data.get('final_lb', 'N/A'):.2f}" if data.get('final_lb') else "N/A"
