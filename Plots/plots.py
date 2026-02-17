@@ -337,7 +337,7 @@ if __name__ == "__main__":
     
     # Results directory (robust to CWD)
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    results_dir = os.path.join(script_dir, '..', 'results', 'parameter_study', 'results')
+    results_dir = os.path.join(script_dir, '..', 'results', 'parameter_study', 'learning', 'results')
     
     if not os.path.exists(results_dir):
          print(f"Directory not found: {results_dir}")
