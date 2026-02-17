@@ -107,7 +107,7 @@ def los_initial_plot(data_dict, normalize_by_focus=False, print_tex=False):
             # Create normalized column
             df['normalized_los'] = df['sum_focus_los'] / df[d_col]
             y_col = "normalized_los"
-            y_label = "Avg Focus Length of Stay (Days per Patient)"
+            y_label = r'Avg. Length of Stay $\bar{F}_i$ in Days'
     
     # A. Mapping for OnlyHuman (1 = HOM (Baseline), 0 = HYB (AI-Hybrid))
     df['Service_Model'] = df['OnlyHuman'].map({1: 'HOM (Baseline)', 0: 'HYB (AI-Hybrid)'})

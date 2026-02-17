@@ -446,6 +446,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'combined_patients_per_therapist': combined_patients_per_therapist,
         'ub_equals_focus_los': ub_equals_focus_los,
         'sum_focus_los': sum_focus_los,
+        'focus_patient_count': len(save_P_F),  # Count of focus patients
     }
     
     # ===========================
