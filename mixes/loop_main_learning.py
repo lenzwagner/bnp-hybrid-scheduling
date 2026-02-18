@@ -11,7 +11,6 @@ import glob
 import os
 from collections import defaultdict
 from main import disaggregate_solution
-from calculate_transition_matrix import compute_session_transition_matrix, print_transition_matrix
 
 logger = get_logger(__name__)
 
@@ -451,42 +450,6 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'focus_patient_count': len(save_P_F),  # Count of focus patients
     }
     
-    # ===========================
-    # SESSION TRANSITION MATRIX
-    # ===========================
-    if save_transition_matrix and results.get('incumbent_solution'):
-        try:
-            # Compute transition matrix for all patients (Focus + Post)
-            # theta_bins=None uses automatic Y-based bins from PWL breakpoints
-            transition_probs, transition_df, transition_counts = compute_session_transition_matrix(
-                cg_solver=cg_solver,
-                inc_sol=disagg_sol,
-                app_data=app_data,
-                theta_bins=None,  # Automatic: one bin per Y value (cumulative AI sessions)
-                patients_list=original_P_F + original_P_Post  # All patients
-            )
-            
-            # Add transition matrix summary to instance_data
-            # Store as flattened metrics for Excel export
-            for _, row in transition_df.iterrows():
-                theta_range = row['Theta_Range'].replace('[', '').replace(')', '').replace(',', '_')
-                from_session = row['From_Session']
-                key_prefix = f"trans_{theta_range}_{from_session}"
-                instance_data[f"{key_prefix}_to_Human"] = row['To_Human']
-                instance_data[f"{key_prefix}_to_AI"] = row['To_AI']
-                instance_data[f"{key_prefix}_to_Gap"] = row['To_Gap']
-                instance_data[f"{key_prefix}_count"] = row['Total_Transitions']
-            
-            # Store full transition probabilities dict for later analysis
-            instance_data['transition_probabilities'] = transition_probs
-            instance_data['transition_counts'] = transition_counts
-            
-            logger.info("Session transition matrix computed successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to compute transition matrix: {str(e)}", exc_info=True)
-            instance_data['transition_matrix_error'] = str(e)
-    
     return instance_data
 
 
@@ -618,6 +581,11 @@ def main_loop():
             import ast
             severity_mix = ast.literal_eval(row['severity_mix'])
         
+        # Read config label from Excel (e.g. 'baseline', 'neuro', 'ortho')
+        config_label = row.get('config', None)
+        if pd.isna(config_label) if config_label is not None else True:
+            config_label = None
+        
         print("\n" + "=" * 100)
         print(f" Instance {current_instance}/{total_instances}: {instance_id} ".center(100, "="))
         print(f" seed={seed}, D_focus={D_focus}, pttr={pttr}, T={T} ".center(100, "="))
@@ -646,7 +614,7 @@ def main_loop():
                     'pttr': pttr,
                     'T': T,
                     'learn_type': overrides['learn_type'],
-                    'config_name': lt_name,
+                    'config_name': config_label if config_label is not None else lt_name,
                     'status': 'SKIPPED',
                     'is_optimal': False,
                     'final_ub': None,
@@ -681,7 +649,7 @@ def main_loop():
                 instance_data['instance_id'] = current_instance_id
                 instance_data['scenario_nr'] = row.get('scenario_nr', idx)
                 instance_data['original_instance_id'] = instance_id
-                instance_data['config_name'] = lt_name
+                instance_data['config_name'] = config_label if config_label is not None else lt_name
                 
                 # Store in dictionary with instance_id as key
                 results_dict[current_instance_id] = instance_data
@@ -718,7 +686,7 @@ def main_loop():
                     'pttr': pttr,
                     'T': T,
                     'learn_type': overrides['learn_type'],
-                    'config_name': lt_name,
+                    'config_name': config_label if config_label is not None else lt_name,
                     'error': str(e),
                     'status': 'FAILED',
                     'is_optimal': False
@@ -734,7 +702,7 @@ def main_loop():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Save to Excel
-    excel_filename = f"results/cg/results_loop_learning_{timestamp}.xlsx"
+    excel_filename = f"results/results_loop_learning_{timestamp}.xlsx"
     try:
         os.makedirs('results/cg', exist_ok=True)
         results_df.to_excel(excel_filename, index=False)

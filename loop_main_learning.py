@@ -11,7 +11,6 @@ import glob
 import os
 from collections import defaultdict
 from main import disaggregate_solution
-from calculate_transition_matrix import compute_session_transition_matrix, print_transition_matrix
 
 logger = get_logger(__name__)
 
@@ -448,42 +447,6 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         'sum_focus_los': sum_focus_los,
         'focus_patient_count': len(save_P_F),  # Count of focus patients
     }
-    
-    # ===========================
-    # SESSION TRANSITION MATRIX
-    # ===========================
-    if save_transition_matrix and results.get('incumbent_solution'):
-        try:
-            # Compute transition matrix for all patients (Focus + Post)
-            # theta_bins=None uses automatic Y-based bins from PWL breakpoints
-            transition_probs, transition_df, transition_counts = compute_session_transition_matrix(
-                cg_solver=cg_solver,
-                inc_sol=disagg_sol,
-                app_data=app_data,
-                theta_bins=None,  # Automatic: one bin per Y value (cumulative AI sessions)
-                patients_list=original_P_F + original_P_Post  # All patients
-            )
-            
-            # Add transition matrix summary to instance_data
-            # Store as flattened metrics for Excel export
-            for _, row in transition_df.iterrows():
-                theta_range = row['Theta_Range'].replace('[', '').replace(')', '').replace(',', '_')
-                from_session = row['From_Session']
-                key_prefix = f"trans_{theta_range}_{from_session}"
-                instance_data[f"{key_prefix}_to_Human"] = row['To_Human']
-                instance_data[f"{key_prefix}_to_AI"] = row['To_AI']
-                instance_data[f"{key_prefix}_to_Gap"] = row['To_Gap']
-                instance_data[f"{key_prefix}_count"] = row['Total_Transitions']
-            
-            # Store full transition probabilities dict for later analysis
-            instance_data['transition_probabilities'] = transition_probs
-            instance_data['transition_counts'] = transition_counts
-            
-            logger.info("Session transition matrix computed successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to compute transition matrix: {str(e)}", exc_info=True)
-            instance_data['transition_matrix_error'] = str(e)
     
     return instance_data
 
