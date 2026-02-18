@@ -151,9 +151,11 @@ class InstanceGenerator:
                 self.record_failed_instance(seed, pttr, T, D_focus, "Pre-processing failed")
                 return None
 
+            # Normalize severity_mix_name: None -> 'baseline'
+            config_name = severity_mix_name if severity_mix_name is not None else 'baseline'
+
             # Create instance identifier
-            mix_suffix = f"_{severity_mix_name}" if severity_mix_name else ""
-            instance_id = f"seed{seed}_pttr{pttr}_T{T}_D{D_focus}{mix_suffix}"
+            instance_id = f"seed{seed}_pttr{pttr}_T{T}_D{D_focus}_{config_name}"
 
             # Extract all relevant instance data
             instance_data = {
@@ -165,6 +167,7 @@ class InstanceGenerator:
                 'D_focus_count': D_focus,
                 'severity_mix': str(severity_mix) if severity_mix else None,
                 'severity_mix_name': severity_mix_name,
+                'config': config_name,  # 'baseline', 'neuro', or 'ortho'
 
                 # ===== Learning Parameters =====
                 'learn_type': self.app_data['learn_type'][0],
@@ -492,6 +495,8 @@ class InstanceGenerator:
                 'pttr': inst_data['pttr'],
                 'T_count': inst_data['T_count'],
                 'D_focus_count': inst_data['D_focus_count'],
+                'config': inst_data.get('config', 'baseline'),  # 'baseline', 'neuro', or 'ortho'
+                'severity_mix_name': inst_data.get('severity_mix_name'),
 
                 # ===== Learning Parameters =====
                 'learn_type': inst_data['learn_type'],
