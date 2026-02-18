@@ -14,7 +14,7 @@ from main import disaggregate_solution
 
 logger = get_logger(__name__)
 
-def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None, pre_generated_data=None):
+def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None, pre_generated_data=None, lp_output_path=None):
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
@@ -79,7 +79,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     n_tree_workers = min(os.cpu_count() // 2, 4) if use_parallel_tree else 1
 
     # Output settings
-    save_lps = False  # Set to False for batch runs
+    save_lps = lp_output_path is not None  # Enable LP saving only when an output path is given
     verbose_output = False
     print_solutions = False
     save_transition_matrix = False
@@ -163,6 +163,23 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     # Solve with 20-minute timeout per instance
     # If timeout occurs, solver returns current incumbent and best LP bound
     results = bnp_solver.solve(time_limit=1200, max_nodes=300)  # 1200s = 20 minutes
+
+    # Export LP files if requested
+    if lp_output_path is not None:
+        try:
+            import os as _os
+            _os.makedirs(lp_output_path, exist_ok=True)
+            final_lp = _os.path.join(lp_output_path, 'final_incumbent.lp')
+            
+            # Export ONLY the incumbent MIP (LP format with Integer vars)
+            cg_solver.export_models(
+                master_filename=None, 
+                compact_filename=None, 
+                incumbent_lp_filename=final_lp
+            )
+            logger.info(f"Incumbent LP written to {final_lp}")
+        except Exception as _e:
+            logger.warning(f"LP export failed: {_e}")
 
     # ===========================
     # DERIVED VARIABLES COMPUTATION
