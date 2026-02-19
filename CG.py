@@ -641,14 +641,40 @@ class ColumnGeneration:
 
         print("\n" + "=" * 100 + "\n")
 
-    def export_models(self, master_filename='Master_2.lp', compact_filename='Compact.lp'):
+    def export_models(self, master_filename=None, compact_filename=None, incumbent_lp_filename=None):
         """
-        Export master and compact models to LP files.
+        Export models to LP files.
+        - master_filename: Write current master model (continuous relaxation)
+        - compact_filename: Write compact model
+        - incumbent_lp_filename: Write master model as MIP (convert to Integer) - "LP of the incumbent"
         """
         if self.save_lps:
-            self.master.Model.write(master_filename)
-            self.problem.Model.write(compact_filename)
-            print(f"[Export] Models saved to {master_filename} and {compact_filename}")
+            # 1. Continuous Master LP
+            if master_filename:
+                self.master.Model.write(master_filename)
+                print(f"[Export] Master LP saved to {master_filename}")
+            
+            # 2. Compact Model
+            if compact_filename:
+                self.problem.Model.write(compact_filename)
+                print(f"[Export] Compact LP saved to {compact_filename}")
+
+            # 3. Incumbent LP (MIP)
+            if incumbent_lp_filename:
+                try:
+                    # Enforce integrality on lambda variables to create the "Incumbent LP" (MIP)
+                    # This replicates the logic from MasterProblem_d.finSol()
+                    for var in self.master.lmbda.values():
+                        var.VType = gp.GRB.INTEGER
+                    self.master.Model.update()
+                    
+                    self.master.Model.write(incumbent_lp_filename)
+                    print(f"[Export] Incumbent MIP (LP) saved to {incumbent_lp_filename}")
+                    
+                    # Note: We leave it as Integer (solver is done anyway)
+                except Exception as e:
+                    print(f"[Export] Failed to save incumbent LP: {e}")
+
         else:
             print(f"[Export] LP saving disabled, skipping export")
 

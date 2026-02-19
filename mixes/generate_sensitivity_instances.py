@@ -5,7 +5,7 @@ Generate instances for Patient Mix Sensitivity Study
 This script creates instances for three severity mix configurations:
 - Baseline: Default DRG distribution (4.8%, 27.8%, 67.4%)
 - Φ_Neuro: High-Complexity mix (70%, 20%, 10%)
-- Φ_Ortho: High-Turnover mix (10%, 20%, 70%)
+- Φ_Bias-Free: High-Turnover mix (10%, 20%, 70%)
 """
 
 import sys
@@ -47,11 +47,11 @@ def main():
     print("\nSeverity Mix Konfiguration:")
     print("  1 = Nur Baseline")
     print("  2 = Baseline + Neuro")
-    print("  3 = Baseline + Ortho")
-    print("  4 = Alle drei (Baseline + Neuro + Ortho)")
+    print("  3 = Baseline + Bias-Free")
+    print("  4 = Alle drei (Baseline + Neuro + Bias-Free)")
     print("  5 = Nur Neuro")
-    print("  6 = Nur Ortho")
-    print("  7 = Neuro + Ortho (ohne Baseline)")
+    print("  6 = Nur Bias-Free")
+    print("  7 = Neuro + Bias-Free (ohne Baseline)")
     
     mix_choice = input("\nWähle eine Option (1-7) [Standard: 4]: ").strip()
     
@@ -60,18 +60,18 @@ def main():
     elif mix_choice == '2':
         severity_mix_variants = [(None, None), ('neuro', (0.7, 0.2, 0.1))]
     elif mix_choice == '3':
-        severity_mix_variants = [(None, None), ('ortho', (0.1, 0.2, 0.7))]
+        severity_mix_variants = [(None, None), ('biasfree', (0.33, 0.34, 0.33))]
     elif mix_choice == '5':
         severity_mix_variants = [('neuro', (0.7, 0.2, 0.1))]
     elif mix_choice == '6':
-        severity_mix_variants = [('ortho', (0.1, 0.2, 0.7))]
+        severity_mix_variants = [('biasfree', (0.33, 0.34, 0.33))]
     elif mix_choice == '7':
-        severity_mix_variants = [('neuro', (0.7, 0.2, 0.1)), ('ortho', (0.1, 0.2, 0.7))]
+        severity_mix_variants = [('neuro', (0.7, 0.2, 0.1)), ('biasfree', (0.33, 0.34, 0.33))]
     else:  # Default: 4 or any other input
         severity_mix_variants = [
             (None, None),
             ('neuro', (0.7, 0.2, 0.1)),
-            ('ortho', (0.1, 0.2, 0.7)),
+            ('biasfree', (0.33, 0.34, 0.33)),
         ]
     
     print("\n" + "=" * 80)

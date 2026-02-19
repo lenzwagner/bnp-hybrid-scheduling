@@ -494,7 +494,6 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
                 If None, defaults to T. 
                 Use this to keep patient count constant while changing T.
     - severity_mix: Tuple of (E65A%, E65B%, E65C%) to override default distribution (optional).
-                   Example: (0.7, 0.2, 0.1) for High-Complexity or (0.1, 0.2, 0.7) for High-Turnover.
                    If None, uses default case distribution.
 
     Returns:
@@ -534,6 +533,13 @@ def generate_patient_data_log(T=10, D_focus=30, W_on=5, W_off=2, daily=4, pttr_s
             'distribution': 'gamma'
         }
     }
+
+    if severity_mix is not None:
+        if len(severity_mix) != 3:
+            raise ValueError("severity_mix must be a tuple of 3 percentages (E65A%, E65B%, E65C%)")
+        drg_data['E65A']['percentage'] = severity_mix[0] * 100
+        drg_data['E65B']['percentage'] = severity_mix[1] * 100
+        drg_data['E65C']['percentage'] = severity_mix[2] * 100
 
     # Calculate distribution parameters based on the methodology described in the paper
     def calculate_distribution_parameters(drg_info):

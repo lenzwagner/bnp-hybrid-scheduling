@@ -49,7 +49,7 @@ class InstanceGenerator:
             T_variants: List of therapist counts (e.g., [2, 4, 6])
             D_focus_variants: List of focus day counts (e.g., [4, 8, 12])
             severity_mix_variants: List of tuples [(name, (E65A%, E65B%, E65C%))], 
-                                  e.g., [('neuro', (0.7, 0.2, 0.1)), ('ortho', (0.1, 0.2, 0.7))]
+                                  e.g., [('neuro', (0.7, 0.2, 0.1)), ('biasfree', (0.33, 0.34, 0.33))]
                                   If None, uses default distribution.
         """
         self.seeds = seeds
@@ -201,6 +201,7 @@ class InstanceGenerator:
                 # ===== Other =====
                 'W_coeff': cg_solver.W_coeff,
                 'M_p': cg_solver.M_p,
+                'avg_req': sum(cg_solver.Req.values()) / len(cg_solver.Req) if cg_solver.Req else 0,
             }
 
             # Store detailed data separately (for Excel sheets)
@@ -530,6 +531,7 @@ class InstanceGenerator:
                 # ===== Other =====
                 'W_coeff': inst_data['W_coeff'],
                 'M_p': inst_data['M_p'],
+                'avg_req': inst_data['avg_req'],
 
                 # ===== Lists (as JSON strings) =====
                 'P': json.dumps(details['P']),
