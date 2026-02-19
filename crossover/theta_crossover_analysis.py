@@ -121,7 +121,7 @@ def run_crossover_analysis(
     print(f"  Baseline:   T={T}, learn_type=0 (kein App)")
     print(f"  Challenger: T={T_challenger}, learn_type={learn_type}")
     print(f"  Seed={seed}, D_focus={D_focus}, pttr={pttr}")
-    print(f"  Theta-Sweep: 0.0 bis 1.0 in {steps} Schritten (Δ={1/steps:.4f})")
+    print(f"  Theta-Sweep: >0.0 bis 1.0 in {steps} steps (start at {1/steps:.4f})")
     print("=" * 100 + "\n")
 
     # ----------------------------------------------------------
@@ -215,7 +215,7 @@ def run_crossover_analysis(
     # ----------------------------------------------------------
     # 4. Theta-Sweep
     # ----------------------------------------------------------
-    theta_values = [round(i / steps, 6) for i in range(0, steps + 1)]
+    theta_values = [round(i / steps, 6) for i in range(1, steps + 1)]
 
     print(f"\n{'=' * 100}")
     print(f" THETA SWEEP ({len(theta_values)} values) ".center(100, "="))
@@ -297,8 +297,68 @@ def run_crossover_analysis(
 
             # Early stop at first crossover
             if is_better and crossover_theta is None:
-                crossover_theta = theta
-                print(f"\n  🎯 CROSSOVER FOUND at theta_base = {theta:.4f}")
+                # REFINEMENT STEP: Check if we can find a more precise crossover in (prev_theta, theta]
+                # Assuming current step size is > 0.01
+                current_step_size = 1 / steps
+                if current_step_size > 0.01:
+                    print(f"\n  🔍 Coarse crossover at {theta:.4f}. Refining search in range ({theta - current_step_size:.4f}, {theta:.4f}]...")
+                    
+                    # Define refinement range
+                    prev_theta = theta - current_step_size
+                    # Create steps of 0.01
+                    # Start from prev + 0.01 up to theta (inclusive)
+                    refined_thetas = []
+                    t = prev_theta + 0.01
+                    while t < theta - 0.0001: # -epsilon to avoid float issues
+                        refined_thetas.append(round(t, 4))
+                        t += 0.01
+                    
+                    if not refined_thetas and (theta - prev_theta) > 0.005:
+                         # Fallback if range is small but > 0.005
+                         refined_thetas = [round(prev_theta + (theta - prev_theta)/2, 4)]
+
+                    print(f"     Checking refined values: {refined_thetas}")
+                    
+                    found_refined = False
+                    for ref_theta in refined_thetas:
+                        # Solve for refined theta
+                        lp_path_refined = os.path.join(lp_base_dir, f"challenger_T{T_challenger}_theta{ref_theta:.4f}")
+                        try:
+                            ref_result = solve_instance(
+                                seed=seed,
+                                D_focus=D_focus,
+                                pttr=pttr,
+                                T=T_challenger,
+                                learn_type=learn_type,
+                                app_data_overrides={
+                                    'learn_type': learn_type,
+                                    'theta_base': ref_theta,
+                                    'k_learn': k_learn,
+                                    'infl_point': infl_point,
+                                    'lin_increase': lin_increase,
+                                },
+                                pre_generated_data=reduced_pre_generated_data,
+                                lp_output_path=lp_path_refined,
+                            )
+                            ref_LOS = ref_result.get('final_ub')
+                            
+                            print(f"     [{ref_theta:.2f}] LOS: {ref_LOS} (Baseline: {LOS_baseline}) -> {'BETTER' if ref_LOS <= LOS_baseline else 'WORSE'}")
+
+                            if ref_LOS is not None and ref_LOS <= LOS_baseline:
+                                crossover_theta = ref_theta
+                                found_refined = True
+                                print(f"  🎯 REFINED CROSSOVER FOUND at theta_base = {crossover_theta:.4f}")
+                                break
+                        except Exception as e:
+                            print(f"     Warning: Refinement check at {ref_theta} failed: {e}")
+
+                    if not found_refined:
+                         crossover_theta = theta
+                         print(f"  🎯 Refinement yielded no earlier point. Keeping coarse crossover at {theta:.4f}")
+                else:
+                    crossover_theta = theta
+                    print(f"\n  🎯 CROSSOVER FOUND at theta_base = {theta:.4f}")
+
                 print(f"     LOS_challenger ({LOS_challenger}) ≤ LOS_baseline ({LOS_baseline})")
                 print(f"     → Stopping sweep (early stop)")
                 break
@@ -517,11 +577,11 @@ def main():
         if seed is None:
             seed = int(row['seed'])
         if D_focus is None:
-            D_focus = int(row['D_focus_count'])
+            D_focus = int(row['D_focus'])
         if pttr is None:
             pttr = str(row.get('pttr', 'medium'))
         if T is None:
-            T = int(row.get('T_count', 10))
+            T = int(row.get('T', 10))
 
         print(f"  Parameters read: seed={seed}, D_focus={D_focus}, pttr={pttr}, T={T}")
 
