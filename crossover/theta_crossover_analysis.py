@@ -321,6 +321,59 @@ def run_crossover_analysis(
             })
 
     # ----------------------------------------------------------
+    # 4b. Solve Baseline + App (T therapists, with crossover theta)
+    # ----------------------------------------------------------
+    LOS_baseline_app = None
+
+    if crossover_theta is not None:
+        print("\n" + "─" * 100)
+        print(" SOLVE: BASELINE + APP (Verification) ".center(100, "─"))
+        print("─" * 100)
+        print(f"  Model       : Baseline + App")
+        print(f"  Therapists  : T = {T}")
+        print(f"  App         : YES  (learn_type = {learn_type})")
+        print(f"  theta_base  : {crossover_theta:.4f} (Crossover Point)")
+        print(f"  k_learn     : {k_learn}")
+        print(f"  infl_point  : {infl_point}")
+        print(f"  lin_increase: {lin_increase}")
+        print("─" * 100)
+
+        # Baseline App LP path
+        lp_path_baseline_app = os.path.join(lp_base_dir, f"baseline_app_T{T}_theta{crossover_theta:.4f}")
+
+        try:
+            baseline_app_result = solve_instance(
+                seed=seed,
+                D_focus=D_focus,
+                pttr=pttr,
+                T=T,
+                learn_type=learn_type,
+                app_data_overrides={
+                    'learn_type': learn_type,
+                    'theta_base': crossover_theta,
+                    'k_learn': k_learn,
+                    'infl_point': infl_point,
+                    'lin_increase': lin_increase,
+                },
+                pre_generated_data=base_pre_generated_data,
+                lp_output_path=lp_path_baseline_app,
+            )
+
+            LOS_baseline_app = baseline_app_result.get('final_ub')
+            ba_P_F    = baseline_app_result.get('P_F', [])
+            ba_P_Post = baseline_app_result.get('P_Post', [])
+
+            print(f"\n  Result:")
+            print(f"    LOS_baseline_app: {LOS_baseline_app}")
+            print(f"    LOS_baseline    : {LOS_baseline}") # T, no app
+            print(f"    Focus patients  ({len(ba_P_F):>3}): {sorted(ba_P_F)}")
+            print(f"    Post  patients  ({len(ba_P_Post):>3}): {sorted(ba_P_Post)}")
+
+        except Exception as e:
+            print(f"  ✗ Error at Baseline + App run: {e}")
+            logger.error(f"Baseline + App theta={crossover_theta} failed: {e}", exc_info=True)
+
+    # ----------------------------------------------------------
     # 5. Save results
     # ----------------------------------------------------------
     print("\n" + "=" * 100)
@@ -335,6 +388,11 @@ def run_crossover_analysis(
         print(f"     T={T_challenger} + App does not outperform T={T} without App at any theta_base.")
 
     print(f"\n  LOS_baseline (T={T}, no app): {LOS_baseline}")
+    if LOS_baseline_app is not None:
+        print(f"  LOS_baseline_app (T={T}, app, theta={crossover_theta:.4f}): {LOS_baseline_app}")
+        if LOS_baseline is not None and LOS_baseline > 0:
+            imp = (LOS_baseline - LOS_baseline_app) / LOS_baseline * 100
+            print(f"  → Improvement with App: {imp:.2f}%")
     print("=" * 100 + "\n")
 
     # Speichern
@@ -361,6 +419,7 @@ def run_crossover_analysis(
                 'sweep_results': sweep_results,
                 'crossover_theta': crossover_theta,
                 'LOS_baseline': LOS_baseline,
+                'LOS_baseline_app': LOS_baseline_app,
                 'T': T,
                 'T_challenger': T_challenger,
                 'seed': seed,
@@ -375,6 +434,7 @@ def run_crossover_analysis(
     return {
         'crossover_theta': crossover_theta,
         'LOS_baseline': LOS_baseline,
+        'LOS_baseline_app': LOS_baseline_app,
         'sweep_results': sweep_results,
     }
 

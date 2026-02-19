@@ -29,7 +29,7 @@ import numpy as np
 # Define severity mixes to test
 SEVERITY_MIXES = {
     'Φ_Neuro (High-Complexity)': (0.7, 0.2, 0.1),
-    'Φ_Ortho (High-Turnover)': (0.1, 0.2, 0.7),
+    'Φ_Biasfree (High-Turnover)': (0.33, 0.34, 0.33),
     'Baseline (Default)': None
 }
 
