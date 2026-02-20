@@ -527,7 +527,7 @@ def main():
     # GRID SEARCH TOGGLE (Einfach hier True/False setzen!)
     # ----------------------------------------------------
     ENABLE_GRID_DEFAULT = True 
-    K_LEARN_LIST_DEFAULT = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0]
+    K_LEARN_LIST_DEFAULT = [round(1.0 + i * 0.1, 1) for i in range(41)] # 1.0, 1.1, ..., 5.0
     
     parser.add_argument('--grid', action='store_true', default=ENABLE_GRID_DEFAULT,
                         help='Enable 2D Grid-Search over multiple k_learn values')
