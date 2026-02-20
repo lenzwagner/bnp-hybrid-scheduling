@@ -533,13 +533,21 @@ def main():
         row = scenarios_df.iloc[0]
 
         if seed is None:
-            seed = int(row['seed'])
+            seed = int(row.get('seed', 42))
         if D_focus is None:
-            D_focus = int(row['D_focus'])
+            D_focus = int(row.get('D_focus', row.get('D_focus_count', 14)))
         if pttr is None:
             pttr = str(row.get('pttr', 'medium'))
         if T is None:
-            T = int(row.get('T', 10))
+            if 'T_count' in row:
+                T = int(row['T_count'])
+            else:
+                T_val = row.get('T', 10)
+                try:
+                    T = int(T_val)
+                except ValueError:
+                    import ast
+                    T = len(ast.literal_eval(T_val))
 
         print(f"  Parameters read: seed={seed}, D_focus={D_focus}, pttr={pttr}, T={T}")
 
