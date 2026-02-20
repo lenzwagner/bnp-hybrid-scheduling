@@ -213,27 +213,36 @@ def run_crossover_analysis(
     print(f"  Remaining therapists : {reduced_pre_generated_data['T']}")
 
     # ----------------------------------------------------------
-    # 4. Theta-Sweep
     # ----------------------------------------------------------
-    theta_values = [round(i / steps, 6) for i in range(1, steps + 1)]
+    # 4. Theta Binary Search (Divide and Conquer)
+    # ----------------------------------------------------------
+    # We want to find the lowest theta in [0, 1] where LOS_challenger <= LOS_baseline.
+    precision = 0.01
 
     print(f"\n{'=' * 100}")
-    print(f" THETA SWEEP ({len(theta_values)} values) ".center(100, "="))
+    print(f" THETA BINARY SEARCH (precision: {precision}) ".center(100, "="))
     print(f"{'=' * 100}")
     print(f"  {'theta_base':<15} {'LOS_challenger':<20} {'LOS_baseline':<20} {'Better?':<10}")
     print(f"  {'-'*15} {'-'*20} {'-'*20} {'-'*10}")
 
     sweep_results = []
     crossover_theta = None
+    
+    left = 0.0
+    right = 1.0
+    step_nr = 0
 
-    for step_nr, theta in enumerate(theta_values, start=1):
+    while (right - left) >= precision / 2:
+        step_nr += 1
+        theta = round((left + right) / 2.0, 4)
+        
         print("\n" + "─" * 100)
-        print(f" SOLVE: CHALLENGER {step_nr}/{len(theta_values)} ".center(100, "─"))
+        print(f" SOLVE: CHALLENGER STEP {step_nr} ".center(100, "─"))
         print("─" * 100)
         print(f"  Model       : Challenger (with app)")
         print(f"  Therapists  : T = {T_challenger}  (baseline T={T}, reduction={reduction})")
         print(f"  App         : YES  (learn_type = {learn_type})")
-        print(f"  theta_base  : {theta:.4f}")
+        print(f"  theta_base  : {theta:.4f}  (Search range: [{left:.4f}, {right:.4f}])")
         print(f"  k_learn     : {k_learn}")
         print(f"  infl_point  : {infl_point}")
         print(f"  lin_increase: {lin_increase}")
@@ -295,72 +304,16 @@ def run_crossover_analysis(
                 'total_time_baseline': baseline_result.get('total_time'),
             })
 
-            # Early stop at first crossover
-            if is_better and crossover_theta is None:
-                # REFINEMENT STEP: Check if we can find a more precise crossover in (prev_theta, theta]
-                # Assuming current step size is > 0.01
-                current_step_size = 1 / steps
-                if current_step_size > 0.01:
-                    print(f"\n  🔍 Coarse crossover at {theta:.4f}. Refining search in range ({theta - current_step_size:.4f}, {theta:.4f}]...")
-                    
-                    # Define refinement range
-                    prev_theta = theta - current_step_size
-                    # Create steps of 0.01
-                    # Start from prev + 0.01 up to theta (inclusive)
-                    refined_thetas = []
-                    t = prev_theta + 0.01
-                    while t < theta - 0.0001: # -epsilon to avoid float issues
-                        refined_thetas.append(round(t, 4))
-                        t += 0.01
-                    
-                    if not refined_thetas and (theta - prev_theta) > 0.005:
-                         # Fallback if range is small but > 0.005
-                         refined_thetas = [round(prev_theta + (theta - prev_theta)/2, 4)]
+            if is_better:
+                crossover_theta = theta
+                right = theta
+                print(f"  🎯 App is better! Crossover is <= {theta:.4f}. Narrowing search to [{left:.4f}, {right:.4f}].")
+            else:
+                left = theta
+                print(f"  ✗ App is worse. Crossover is > {theta:.4f}. Narrowing search to [{left:.4f}, {right:.4f}].")
 
-                    print(f"     Checking refined values: {refined_thetas}")
-                    
-                    found_refined = False
-                    for ref_theta in refined_thetas:
-                        # Solve for refined theta
-                        lp_path_refined = os.path.join(lp_base_dir, f"challenger_T{T_challenger}_theta{ref_theta:.4f}")
-                        try:
-                            ref_result = solve_instance(
-                                seed=seed,
-                                D_focus=D_focus,
-                                pttr=pttr,
-                                T=T_challenger,
-                                learn_type=learn_type,
-                                app_data_overrides={
-                                    'learn_type': learn_type,
-                                    'theta_base': ref_theta,
-                                    'k_learn': k_learn,
-                                    'infl_point': infl_point,
-                                    'lin_increase': lin_increase,
-                                },
-                                pre_generated_data=reduced_pre_generated_data,
-                                lp_output_path=lp_path_refined,
-                            )
-                            ref_LOS = ref_result.get('final_ub')
-                            
-                            print(f"     [{ref_theta:.2f}] LOS: {ref_LOS} (Baseline: {LOS_baseline}) -> {'BETTER' if ref_LOS <= LOS_baseline else 'WORSE'}")
-
-                            if ref_LOS is not None and ref_LOS <= LOS_baseline:
-                                crossover_theta = ref_theta
-                                found_refined = True
-                                print(f"  🎯 REFINED CROSSOVER FOUND at theta_base = {crossover_theta:.4f}")
-                                break
-                        except Exception as e:
-                            print(f"     Warning: Refinement check at {ref_theta} failed: {e}")
-
-                    if not found_refined:
-                         crossover_theta = theta
-                         print(f"  🎯 Refinement yielded no earlier point. Keeping coarse crossover at {theta:.4f}")
-                else:
-                    crossover_theta = theta
-                    print(f"\n  🎯 CROSSOVER FOUND at theta_base = {theta:.4f}")
-
-                print(f"     LOS_challenger ({LOS_challenger}) ≤ LOS_baseline ({LOS_baseline})")
-                print(f"     → Stopping sweep (early stop)")
+            if (right - left) < precision:
+                print(f"  🔍 Precision of {precision} reached. Stopping binary search.")
                 break
 
         except Exception as e:
@@ -379,6 +332,11 @@ def run_crossover_analysis(
                 'pttr': pttr,
                 'error': str(e),
             })
+            # Handle solver failure by assuming it's unfeasible/worse and needs higher theta
+            left = theta
+            print(f"  ⚠️ Error encountered, assuming we need higher theta. Narrowing search to [{left:.4f}, {right:.4f}].")
+            if (right - left) < precision:
+                break
 
     # ----------------------------------------------------------
     # 4b. Solve Baseline + App (T therapists, with crossover theta)
