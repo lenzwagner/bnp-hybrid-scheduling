@@ -96,6 +96,8 @@ def run_crossover_analysis(
     k_learn: float,
     infl_point: float,
     lin_increase: float,
+    enable_grid: bool = False,
+    k_learn_list: list = None
 ):
     """
     Führt die Crossover-Analyse durch.
@@ -111,7 +113,13 @@ def run_crossover_analysis(
         k_learn:      k_learn Parameter für Challenger
         infl_point:   infl_point Parameter für Challenger
         lin_increase: lin_increase Parameter für Challenger
+        enable_grid:  Wenn True, wird über eine Liste von k_learn Iteriert
+        k_learn_list: Liste von k_learn Werten für Grid-Search
     """
+    if enable_grid and not k_learn_list:
+        k_learn_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0]
+    elif not enable_grid:
+        k_learn_list = [k_learn]
 
     T_challenger = T - reduction
 
@@ -121,7 +129,9 @@ def run_crossover_analysis(
     print(f"  Baseline:   T={T}, learn_type=0 (kein App)")
     print(f"  Challenger: T={T_challenger}, learn_type={learn_type}")
     print(f"  Seed={seed}, D_focus={D_focus}, pttr={pttr}")
-    print(f"  Theta-Sweep: 0.0 bis 1.0 in {steps} Schritten (Δ={1/steps:.4f})")
+    if enable_grid:
+        print(f"  Grid-Search : Active für k_learn={k_learn_list}")
+    print(f"  Theta-Search: Binary search with 0.5% (0.005) granularity")
     print("=" * 100 + "\n")
 
     # ----------------------------------------------------------
@@ -213,165 +223,196 @@ def run_crossover_analysis(
     print(f"  Remaining therapists : {reduced_pre_generated_data['T']}")
 
     # ----------------------------------------------------------
-    # 4. Theta-Sweep
     # ----------------------------------------------------------
-    theta_values = [round(i / steps, 6) for i in range(0, steps + 1)]
-
-    print(f"\n{'=' * 100}")
-    print(f" THETA SWEEP ({len(theta_values)} values) ".center(100, "="))
-    print(f"{'=' * 100}")
-    print(f"  {'theta_base':<15} {'LOS_challenger':<20} {'LOS_baseline':<20} {'Better?':<10}")
-    print(f"  {'-'*15} {'-'*20} {'-'*20} {'-'*10}")
+    # 4. Theta Binary Search (Divide and Conquer)
+    # ----------------------------------------------------------
+    # We want to find the lowest theta in [0, 1] where LOS_challenger <= LOS_baseline.
+    step_size = 0.005 # 0.5% steps
+    max_idx = int(1.0 / step_size)
+    precision = step_size
 
     sweep_results = []
-    crossover_theta = None
+    grid_results = []
 
-    for step_nr, theta in enumerate(theta_values, start=1):
-        print("\n" + "─" * 100)
-        print(f" SOLVE: CHALLENGER {step_nr}/{len(theta_values)} ".center(100, "─"))
-        print("─" * 100)
-        print(f"  Model       : Challenger (with app)")
-        print(f"  Therapists  : T = {T_challenger}  (baseline T={T}, reduction={reduction})")
-        print(f"  App         : YES  (learn_type = {learn_type})")
-        print(f"  theta_base  : {theta:.4f}")
-        print(f"  k_learn     : {k_learn}")
-        print(f"  infl_point  : {infl_point}")
-        print(f"  lin_increase: {lin_increase}")
-        print(f"  D_focus     : {D_focus}")
-        print(f"  PTTR        : {pttr}")
-        print(f"  LOS_baseline: {LOS_baseline}  (target: LOS_challenger ≤ {LOS_baseline})")
-        print("─" * 100)
+    for current_k in k_learn_list:
+        print(f"\n{'=' * 100}")
+        print(f" THETA BINARY SEARCH FOR k_learn={current_k} (precision: {precision}) ".center(100, "="))
+        print(f"{'=' * 100}")
+        print(f"  {'theta_base':<15} {'LOS_challenger':<20} {'LOS_baseline':<20} {'Better?':<10}")
+        print(f"  {'-'*15} {'-'*20} {'-'*20} {'-'*10}")
 
-        # Challenger LP path
-        lp_path_challenger = os.path.join(lp_base_dir, f"challenger_T{T_challenger}_theta{theta:.4f}")
+        crossover_theta = None
+        left_idx = 0
+        right_idx = max_idx
+        step_nr = 0
 
-        try:
-            challenger_result = solve_instance(
-                seed=seed,
-                D_focus=D_focus,
-                pttr=pttr,
-                T=T_challenger,
-                learn_type=learn_type,
-                app_data_overrides={
-                    'learn_type': learn_type,
+        while left_idx <= right_idx:
+            step_nr += 1
+            mid_idx = (left_idx + right_idx) // 2
+            theta = round(mid_idx * step_size, 3)
+            
+            left_theta_bound = round(left_idx * step_size, 3)
+            right_theta_bound = round(right_idx * step_size, 3)
+            
+            print("\n" + "─" * 100)
+            print(f" SOLVE: CHALLENGER STEP {step_nr} ".center(100, "─"))
+            print("─" * 100)
+            print(f"  Model       : Challenger (with app)")
+            print(f"  Therapists  : T = {T_challenger}  (baseline T={T}, reduction={reduction})")
+            print(f"  App         : YES  (learn_type = {learn_type})")
+            print(f"  theta_base  : {theta:.3f}  (Search range: [{left_theta_bound:.3f}, {right_theta_bound:.3f}])")
+            print(f"  k_learn     : {current_k}")
+            print(f"  infl_point  : {infl_point}")
+            print(f"  lin_increase: {lin_increase}")
+            print(f"  D_focus     : {D_focus}")
+            print(f"  PTTR        : {pttr}")
+            print(f"  LOS_baseline: {LOS_baseline}  (target: LOS_challenger ≤ {LOS_baseline})")
+            print("─" * 100)
+
+            # Challenger LP path
+            lp_path_challenger = os.path.join(lp_base_dir, f"challenger_T{T_challenger}_theta{theta:.3f}_k{current_k}")
+
+            try:
+                challenger_result = solve_instance(
+                    seed=seed,
+                    D_focus=D_focus,
+                    pttr=pttr,
+                    T=T_challenger,
+                    learn_type=learn_type,
+                    app_data_overrides={
+                        'learn_type': learn_type,
+                        'theta_base': theta,
+                        'k_learn': current_k,
+                        'infl_point': infl_point,
+                        'lin_increase': lin_increase,
+                    },
+                    pre_generated_data=reduced_pre_generated_data,
+                    lp_output_path=lp_path_challenger,
+                )
+
+                LOS_challenger = challenger_result.get('final_ub')
+                c_P_F    = challenger_result.get('P_F', [])
+                c_P_Post = challenger_result.get('P_Post', [])
+                is_better = (LOS_challenger is not None) and (LOS_challenger <= LOS_baseline)
+
+                print(f"\n  Result:")
+                print(f"    LOS_challenger  : {LOS_challenger}")
+                print(f"    LOS_baseline    : {LOS_baseline}")
+                print(f"    Better?         : {'YES ✓' if is_better else 'NO ✗'}")
+                print(f"    Focus patients  ({len(c_P_F):>3}): {sorted(c_P_F)}")
+                print(f"    Post  patients  ({len(c_P_Post):>3}): {sorted(c_P_Post)}")
+
+                print(f"\n  {'theta_base':<15} {'LOS_challenger':<20} {'LOS_baseline':<20} {'Better?':<10}")
+                print(f"  {theta:<15.3f} {str(LOS_challenger):<20} {str(LOS_baseline):<20} {'YES ✓' if is_better else 'NO ✗':<10}")
+
+                sweep_results.append({
                     'theta_base': theta,
-                    'k_learn': k_learn,
-                    'infl_point': infl_point,
-                    'lin_increase': lin_increase,
-                },
-                pre_generated_data=reduced_pre_generated_data,
-                lp_output_path=lp_path_challenger,
-            )
-
-            LOS_challenger = challenger_result.get('final_ub')
-            c_P_F    = challenger_result.get('P_F', [])
-            c_P_Post = challenger_result.get('P_Post', [])
-            is_better = (LOS_challenger is not None) and (LOS_challenger <= LOS_baseline)
-
-            print(f"\n  Result:")
-            print(f"    LOS_challenger  : {LOS_challenger}")
-            print(f"    LOS_baseline    : {LOS_baseline}")
-            print(f"    Better?         : {'YES ✓' if is_better else 'NO ✗'}")
-            print(f"    Focus patients  ({len(c_P_F):>3}): {sorted(c_P_F)}")
-            print(f"    Post  patients  ({len(c_P_Post):>3}): {sorted(c_P_Post)}")
-
-            print(f"\n  {'theta_base':<15} {'LOS_challenger':<20} {'LOS_baseline':<20} {'Better?':<10}")
-            print(f"  {theta:<15.4f} {str(LOS_challenger):<20} {str(LOS_baseline):<20} {'YES ✓' if is_better else 'NO ✗':<10}")
-
-            sweep_results.append({
-                'theta_base': theta,
-                'LOS_baseline': LOS_baseline,
-                'LOS_challenger': LOS_challenger,
-                'is_better': is_better,
-                'T_baseline': T,
-                'T_challenger': T_challenger,
-                'learn_type': learn_type,
-                'seed': seed,
-                'D_focus': D_focus,
-                'pttr': pttr,
-                'is_optimal_challenger': challenger_result.get('is_optimal'),
-                'total_time_challenger': challenger_result.get('total_time'),
-                'is_optimal_baseline': baseline_result.get('is_optimal'),
-                'total_time_baseline': baseline_result.get('total_time'),
-            })
-
-            # Early stop at first crossover
-            if is_better and crossover_theta is None:
-                crossover_theta = theta
-                print(f"\n  🎯 CROSSOVER FOUND at theta_base = {theta:.4f}")
-                print(f"     LOS_challenger ({LOS_challenger}) ≤ LOS_baseline ({LOS_baseline})")
-                print(f"     → Stopping sweep (early stop)")
-                break
-
-        except Exception as e:
-            print(f"  ✗ Error at theta={theta:.4f}: {e}")
-            logger.error(f"Challenger theta={theta} failed: {e}", exc_info=True)
-            sweep_results.append({
-                'theta_base': theta,
-                'LOS_baseline': LOS_baseline,
-                'LOS_challenger': None,
-                'is_better': False,
-                'T_baseline': T,
-                'T_challenger': T_challenger,
-                'learn_type': learn_type,
-                'seed': seed,
-                'D_focus': D_focus,
-                'pttr': pttr,
-                'error': str(e),
-            })
-
-    # ----------------------------------------------------------
-    # 4b. Solve Baseline + App (T therapists, with crossover theta)
-    # ----------------------------------------------------------
-    LOS_baseline_app = None
-
-    if crossover_theta is not None:
-        print("\n" + "─" * 100)
-        print(" SOLVE: BASELINE + APP (Verification) ".center(100, "─"))
-        print("─" * 100)
-        print(f"  Model       : Baseline + App")
-        print(f"  Therapists  : T = {T}")
-        print(f"  App         : YES  (learn_type = {learn_type})")
-        print(f"  theta_base  : {crossover_theta:.4f} (Crossover Point)")
-        print(f"  k_learn     : {k_learn}")
-        print(f"  infl_point  : {infl_point}")
-        print(f"  lin_increase: {lin_increase}")
-        print("─" * 100)
-
-        # Baseline App LP path
-        lp_path_baseline_app = os.path.join(lp_base_dir, f"baseline_app_T{T}_theta{crossover_theta:.4f}")
-
-        try:
-            baseline_app_result = solve_instance(
-                seed=seed,
-                D_focus=D_focus,
-                pttr=pttr,
-                T=T,
-                learn_type=learn_type,
-                app_data_overrides={
+                    'k_learn': current_k,
+                    'LOS_baseline': LOS_baseline,
+                    'LOS_challenger': LOS_challenger,
+                    'is_better': is_better,
+                    'T_baseline': T,
+                    'T_challenger': T_challenger,
                     'learn_type': learn_type,
-                    'theta_base': crossover_theta,
-                    'k_learn': k_learn,
-                    'infl_point': infl_point,
-                    'lin_increase': lin_increase,
-                },
-                pre_generated_data=base_pre_generated_data,
-                lp_output_path=lp_path_baseline_app,
-            )
+                    'seed': seed,
+                    'D_focus': D_focus,
+                    'pttr': pttr,
+                    'is_optimal_challenger': challenger_result.get('is_optimal'),
+                    'total_time_challenger': challenger_result.get('total_time'),
+                    'is_optimal_baseline': baseline_result.get('is_optimal'),
+                    'total_time_baseline': baseline_result.get('total_time'),
+                })
 
-            LOS_baseline_app = baseline_app_result.get('final_ub')
-            ba_P_F    = baseline_app_result.get('P_F', [])
-            ba_P_Post = baseline_app_result.get('P_Post', [])
+                if is_better:
+                    crossover_theta = theta
+                    right_idx = mid_idx - 1
+                    new_right_bound = round(right_idx * step_size, 3)
+                    print(f"  🎯 App is better! Crossover is <= {theta:.3f}. Narrowing search to [{left_theta_bound:.3f}, {new_right_bound:.3f}].")
+                else:
+                    left_idx = mid_idx + 1
+                    new_left_bound = round(left_idx * step_size, 3)
+                    print(f"  ✗ App is worse. Crossover is > {theta:.3f}. Narrowing search to [{new_left_bound:.3f}, {right_theta_bound:.3f}].")
 
-            print(f"\n  Result:")
-            print(f"    LOS_baseline_app: {LOS_baseline_app}")
-            print(f"    LOS_baseline    : {LOS_baseline}") # T, no app
-            print(f"    Focus patients  ({len(ba_P_F):>3}): {sorted(ba_P_F)}")
-            print(f"    Post  patients  ({len(ba_P_Post):>3}): {sorted(ba_P_Post)}")
+            except Exception as e:
+                print(f"  ✗ Error at theta={theta:.3f}: {e}")
+                logger.error(f"Challenger theta={theta} failed: {e}", exc_info=True)
+                sweep_results.append({
+                    'theta_base': theta,
+                    'k_learn': current_k,
+                    'LOS_baseline': LOS_baseline,
+                    'LOS_challenger': None,
+                    'is_better': False,
+                    'T_baseline': T,
+                    'T_challenger': T_challenger,
+                    'learn_type': learn_type,
+                    'seed': seed,
+                    'D_focus': D_focus,
+                    'pttr': pttr,
+                    'error': str(e),
+                })
+                # Handle solver failure by assuming it's unfeasible/worse and needs higher theta
+                left_idx = mid_idx + 1
+                new_left_bound = round(left_idx * step_size, 3)
+                print(f"  ⚠️ Error encountered, assuming we need higher theta. Narrowing search to [{new_left_bound:.3f}, {right_theta_bound:.3f}].")
 
-        except Exception as e:
-            print(f"  ✗ Error at Baseline + App run: {e}")
-            logger.error(f"Baseline + App theta={crossover_theta} failed: {e}", exc_info=True)
+        # ----------------------------------------------------------
+        # 4b. Solve Baseline + App (T therapists, with crossover theta)
+        # ----------------------------------------------------------
+        LOS_baseline_app = None
+
+        if crossover_theta is not None:
+            print("\n" + "─" * 100)
+            print(" SOLVE: BASELINE + APP (Verification) ".center(100, "─"))
+            print("─" * 100)
+            print(f"  Model       : Baseline + App")
+            print(f"  Therapists  : T = {T}")
+            print(f"  App         : YES  (learn_type = {learn_type})")
+            print(f"  theta_base  : {crossover_theta:.3f} (Crossover Point)")
+            print(f"  k_learn     : {current_k}")
+            print(f"  infl_point  : {infl_point}")
+            print(f"  lin_increase: {lin_increase}")
+            print("─" * 100)
+
+            # Baseline App LP path
+            lp_path_baseline_app = os.path.join(lp_base_dir, f"baseline_app_T{T}_theta{crossover_theta:.3f}_k{current_k}")
+
+            try:
+                baseline_app_result = solve_instance(
+                    seed=seed,
+                    D_focus=D_focus,
+                    pttr=pttr,
+                    T=T,
+                    learn_type=learn_type,
+                    app_data_overrides={
+                        'learn_type': learn_type,
+                        'theta_base': crossover_theta,
+                        'k_learn': current_k,
+                        'infl_point': infl_point,
+                        'lin_increase': lin_increase,
+                    },
+                    pre_generated_data=base_pre_generated_data,
+                    lp_output_path=lp_path_baseline_app,
+                )
+
+                LOS_baseline_app = baseline_app_result.get('final_ub')
+                ba_P_F    = baseline_app_result.get('P_F', [])
+                ba_P_Post = baseline_app_result.get('P_Post', [])
+
+                print(f"\n  Result:")
+                print(f"    LOS_baseline_app: {LOS_baseline_app}")
+                print(f"    LOS_baseline    : {LOS_baseline}") # T, no app
+                print(f"    Focus patients  ({len(ba_P_F):>3}): {sorted(ba_P_F)}")
+                print(f"    Post  patients  ({len(ba_P_Post):>3}): {sorted(ba_P_Post)}")
+
+            except Exception as e:
+                print(f"  ✗ Error at Baseline + App run: {e}")
+                logger.error(f"Baseline + App theta={crossover_theta} failed: {e}", exc_info=True)
+
+        grid_results.append({
+            'k_learn': current_k,
+            'crossover_theta': crossover_theta,
+            'LOS_baseline_app': LOS_baseline_app
+        })
 
     # ----------------------------------------------------------
     # 5. Save results
@@ -380,19 +421,24 @@ def run_crossover_analysis(
     print(" RESULT ".center(100, "="))
     print("=" * 100)
 
-    if crossover_theta is not None:
-        print(f"  ✅ Crossover threshold: theta_base = {crossover_theta:.4f}")
-        print(f"     From this value onwards, T={T_challenger} + App outperforms T={T} without App.")
-    else:
-        print(f"  ❌ No crossover found in range [0.0, 1.0].")
-        print(f"     T={T_challenger} + App does not outperform T={T} without App at any theta_base.")
+    for res in grid_results:
+        k_val = res['k_learn']
+        ctheta = res['crossover_theta']
+        lba = res['LOS_baseline_app']
+        print(f"\n  [k_learn = {k_val}]")
+        if ctheta is not None:
+            print(f"  ✅ Crossover threshold: theta_base = {ctheta:.3f}")
+            print(f"     From this value onwards, T={T_challenger} + App outperforms T={T} without App.")
+        else:
+            print(f"  ❌ No crossover found in range [0.0, 1.0].")
 
-    print(f"\n  LOS_baseline (T={T}, no app): {LOS_baseline}")
-    if LOS_baseline_app is not None:
-        print(f"  LOS_baseline_app (T={T}, app, theta={crossover_theta:.4f}): {LOS_baseline_app}")
-        if LOS_baseline is not None and LOS_baseline > 0:
-            imp = (LOS_baseline - LOS_baseline_app) / LOS_baseline * 100
-            print(f"  → Improvement with App: {imp:.2f}%")
+        print(f"  LOS_baseline (T={T}, no app): {LOS_baseline}")
+        if lba is not None:
+            print(f"  LOS_baseline_app (T={T}, app, theta={ctheta:.3f}): {lba}")
+            if LOS_baseline is not None and LOS_baseline > 0:
+                imp = (LOS_baseline - lba) / LOS_baseline * 100
+                print(f"  → Improvement with App: {imp:.2f}%")
+    
     print("=" * 100 + "\n")
 
     # Speichern
@@ -417,9 +463,8 @@ def run_crossover_analysis(
         with open(pickle_path, 'wb') as f:
             pickle.dump({
                 'sweep_results': sweep_results,
-                'crossover_theta': crossover_theta,
+                'grid_results': grid_results,
                 'LOS_baseline': LOS_baseline,
-                'LOS_baseline_app': LOS_baseline_app,
                 'T': T,
                 'T_challenger': T_challenger,
                 'seed': seed,
@@ -432,9 +477,8 @@ def run_crossover_analysis(
         print(f"  ✗ Pickle error: {e}")
 
     return {
-        'crossover_theta': crossover_theta,
+        'grid_results': grid_results,
         'LOS_baseline': LOS_baseline,
-        'LOS_baseline_app': LOS_baseline_app,
         'sweep_results': sweep_results,
     }
 
@@ -478,6 +522,17 @@ def main():
                         help='infl_point parameter (default: 4.0)')
     parser.add_argument('--lin_increase', type=float, default=0.0,
                         help='lin_increase parameter (default: 0.0)')
+    
+    # ----------------------------------------------------
+    # GRID SEARCH TOGGLE (Einfach hier True/False setzen!)
+    # ----------------------------------------------------
+    ENABLE_GRID_DEFAULT = True 
+    K_LEARN_LIST_DEFAULT = [round(1.0 + i * 0.1, 1) for i in range(41)] # 1.0, 1.1, ..., 5.0
+    
+    parser.add_argument('--grid', action='store_true', default=ENABLE_GRID_DEFAULT,
+                        help='Enable 2D Grid-Search over multiple k_learn values')
+    parser.add_argument('--k_learn_list', nargs='+', type=float, default=K_LEARN_LIST_DEFAULT,
+                        help='List of k_learn values for Grid-Search')
 
     args = parser.parse_args()
 
@@ -515,13 +570,21 @@ def main():
         row = scenarios_df.iloc[0]
 
         if seed is None:
-            seed = int(row['seed'])
+            seed = int(row.get('seed', 42))
         if D_focus is None:
-            D_focus = int(row['D_focus_count'])
+            D_focus = int(row.get('D_focus', row.get('D_focus_count', 14)))
         if pttr is None:
             pttr = str(row.get('pttr', 'medium'))
         if T is None:
-            T = int(row.get('T_count', 10))
+            if 'T_count' in row:
+                T = int(row['T_count'])
+            else:
+                T_val = row.get('T', 10)
+                try:
+                    T = int(T_val)
+                except ValueError:
+                    import ast
+                    T = len(ast.literal_eval(T_val))
 
         print(f"  Parameters read: seed={seed}, D_focus={D_focus}, pttr={pttr}, T={T}")
 
@@ -542,6 +605,8 @@ def main():
         k_learn=args.k_learn,
         infl_point=args.infl_point,
         lin_increase=args.lin_increase,
+        enable_grid=args.grid,
+        k_learn_list=args.k_learn_list,
     )
 
 
