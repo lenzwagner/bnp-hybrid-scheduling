@@ -815,7 +815,7 @@ class BranchAndPrice:
         else:
             self.gap = float('inf')
 
-    def solve(self, time_limit=3600, max_nodes=10000):
+    def solve(self, time_limit=3600, max_nodes=10000, cutoff=None):
         """
         Main solve method for Branch-and-Price with full tree exploration.
         """
@@ -826,6 +826,8 @@ class BranchAndPrice:
         self.logger.info("=" * 100)
         self.logger.info(f"Time limit: {time_limit}s")
         self.logger.info(f"Max nodes: {max_nodes}")
+        if cutoff is not None:
+            self.logger.info(f"Cutoff: {cutoff}")
         self.logger.info(f"Branching strategy: {self.branching_strategy.upper()}")
         self.logger.info("=" * 100 + "\n")
 
@@ -845,6 +847,19 @@ class BranchAndPrice:
 
         lp_bound, is_integral, frac_info, root_lambdas = self.solve_root_node()
         self.stats['nodes_explored'] = 1
+
+        if cutoff is not None and math.ceil(lp_bound - 1e-5) > cutoff:
+            self.logger.info(f"\n[OK] Root node LP bound {lp_bound:.6f} exceeds cutoff {cutoff}. Early termination.")
+            self.stats['nodes_fathomed'] = 1
+            self.stats['tree_complete'] = True
+            
+            # Record that we were cut off
+            res = self._get_results_dict()
+            res['cutoff_exceeded'] = True
+            
+            self._finalize_and_print_results()
+            self._cleanup_pricing_pool()
+            return res
 
         # Add root node to open list with its solved bound for 'bfs'
         if self.search_strategy == 'bfs' and not is_integral:

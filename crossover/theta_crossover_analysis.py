@@ -117,7 +117,7 @@ def run_crossover_analysis(
         k_learn_list: Liste von k_learn Werten für Grid-Search
     """
     if enable_grid and not k_learn_list:
-        k_learn_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0]
+        k_learn_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2]
     elif not enable_grid:
         k_learn_list = [k_learn]
 
@@ -288,28 +288,38 @@ def run_crossover_analysis(
                     },
                     pre_generated_data=reduced_pre_generated_data,
                     lp_output_path=lp_path_challenger,
+                    cutoff=LOS_baseline,
                 )
 
-                LOS_challenger = challenger_result.get('final_ub')
-                c_P_F    = challenger_result.get('P_F', [])
-                c_P_Post = challenger_result.get('P_Post', [])
-                is_better = (LOS_challenger is not None) and (LOS_challenger <= LOS_baseline)
+                if challenger_result.get('cutoff_exceeded', False):
+                    LOS_challenger = None
+                    is_better = False
+                    print(f"\n  Result:")
+                    print(f"    LOS_challenger  : Cutoff (>{LOS_baseline})")
+                    print(f"    LOS_baseline    : {LOS_baseline}")
+                    print(f"    Better?         : NO ✗ (Early Cutoff)")
+                else:
+                    LOS_challenger = challenger_result.get('final_ub')
+                    c_P_F    = challenger_result.get('P_F', [])
+                    c_P_Post = challenger_result.get('P_Post', [])
+                    is_better = (LOS_challenger is not None) and (LOS_challenger <= LOS_baseline)
 
-                print(f"\n  Result:")
-                print(f"    LOS_challenger  : {LOS_challenger}")
-                print(f"    LOS_baseline    : {LOS_baseline}")
-                print(f"    Better?         : {'YES ✓' if is_better else 'NO ✗'}")
-                print(f"    Focus patients  ({len(c_P_F):>3}): {sorted(c_P_F)}")
-                print(f"    Post  patients  ({len(c_P_Post):>3}): {sorted(c_P_Post)}")
+                    print(f"\n  Result:")
+                    print(f"    LOS_challenger  : {LOS_challenger}")
+                    print(f"    LOS_baseline    : {LOS_baseline}")
+                    print(f"    Better?         : {'YES ✓' if is_better else 'NO ✗'}")
+                    print(f"    Focus patients  ({len(c_P_F):>3}): {sorted(c_P_F)}")
+                    print(f"    Post  patients  ({len(c_P_Post):>3}): {sorted(c_P_Post)}")
 
                 print(f"\n  {'theta_base':<15} {'LOS_challenger':<20} {'LOS_baseline':<20} {'Better?':<10}")
-                print(f"  {theta:<15.3f} {str(LOS_challenger):<20} {str(LOS_baseline):<20} {'YES ✓' if is_better else 'NO ✗':<10}")
+                print(f"  {theta:<15.3f} {str(LOS_challenger) if not challenger_result.get('cutoff_exceeded') else '> '+str(LOS_baseline):<20} {str(LOS_baseline):<20} {'YES ✓' if is_better else 'NO ✗':<10}")
 
                 sweep_results.append({
                     'theta_base': theta,
                     'k_learn': current_k,
                     'LOS_baseline': LOS_baseline,
                     'LOS_challenger': LOS_challenger,
+                    'cutoff_exceeded': challenger_result.get('cutoff_exceeded', False),
                     'is_better': is_better,
                     'T_baseline': T,
                     'T_challenger': T_challenger,
@@ -417,9 +427,68 @@ def run_crossover_analysis(
     # ----------------------------------------------------------
     # 5. Save results
     # ----------------------------------------------------------
+    import math
+
     print("\n" + "=" * 100)
     print(" RESULT ".center(100, "="))
     print("=" * 100)
+
+    # Analytical Threshold Prediction
+    rho = T_challenger / T
+    analytical_theta_req = 1 - rho
+    print(f"  📊 Analytical Prediction:")
+    print(f"     rho = T_challenger / T = {T_challenger} / {T} = {rho:.3f}")
+    print(f"     Calculated Break-Even (theta_req) = 1 - rho = {analytical_theta_req:.3f}")
+    print("-" * 100)
+
+    # Calculation for Average Horizons (N_k)
+    # Average across all patients in join set
+    if len(base_pre_generated_data['P']) > 0:
+        sum_N_k = 0
+        total_patients = 0
+        for p in base_pre_generated_data['P']:
+            d_entry = base_pre_generated_data['Entry'].get(p, 0)
+            d_max = max(base_pre_generated_data['D'])
+            N_k = d_max - d_entry + 1
+            if N_k > 0:
+                sum_N_k += N_k
+                total_patients += 1
+        avg_N_k = sum_N_k / total_patients if total_patients > 0 else 0
+    else:
+        avg_N_k = 0
+
+    print(f"  📈 Theoretical Equivalent Starting Proficiencies (for avg N_k = {avg_N_k:.2f} sessions):")
+
+    for current_k in k_learn_list:
+
+        # Linear
+        theta_req_lin = analytical_theta_req - lin_increase * (avg_N_k - 1) / 2
+        print(f"     * Linear     (rate={lin_increase:.3f}) : theta_req_0 = {theta_req_lin:.3f}")
+
+        # Exponential
+        # H(N, k) = (1 - e^(-k N)) / (1 - e^(-k))
+        if current_k > 0:
+            H_N_k = (1 - math.exp(-current_k * avg_N_k)) / (1 - math.exp(-current_k))
+            theta_req_exp = 1 - (avg_N_k * (1 - analytical_theta_req)) / H_N_k
+        else:
+            theta_req_exp = analytical_theta_req
+        print(f"     * Exponent.  (rate={current_k:.3f}) : theta_req_0 = {theta_req_exp:.3f}")
+
+        # Sigmoidal
+        # S(N, k, infl) = (1/N) * sum_{n=0}^{N-1} 1 / (1 + exp(-k * (n - infl)))
+        S_N_k = 0
+        n_limit = int(avg_N_k)
+        for n in range(n_limit):
+            S_N_k += 1 / (1 + math.exp(-current_k * (n - infl_point)))
+        if avg_N_k > 0:
+            S_N_k /= avg_N_k
+        
+        if (1 - S_N_k) != 0:
+            theta_req_sig = (analytical_theta_req - S_N_k) / (1 - S_N_k)
+        else:
+            theta_req_sig = float('inf')
+        print(f"     * Sigmoidal  (rate={current_k:.3f}, infl={infl_point}) : theta_req_0 = {theta_req_sig:.3f}")
+        print("  " + "-" * 98)
 
     for res in grid_results:
         k_val = res['k_learn']
@@ -527,7 +596,7 @@ def main():
     # GRID SEARCH TOGGLE (Einfach hier True/False setzen!)
     # ----------------------------------------------------
     ENABLE_GRID_DEFAULT = True 
-    K_LEARN_LIST_DEFAULT = [round(1.0 + i * 0.1, 1) for i in range(41)] # 1.0, 1.1, ..., 5.0
+    K_LEARN_LIST_DEFAULT = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2]
     
     parser.add_argument('--grid', action='store_true', default=ENABLE_GRID_DEFAULT,
                         help='Enable 2D Grid-Search over multiple k_learn values')

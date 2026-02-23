@@ -14,7 +14,7 @@ from main import disaggregate_solution
 
 logger = get_logger(__name__)
 
-def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None, pre_generated_data=None, lp_output_path=None):
+def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None, pre_generated_data=None, lp_output_path=None, cutoff=None):
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
@@ -22,6 +22,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     logger.info("=" * 100)
     logger.info(f"SOLVING INSTANCE: seed={seed}, D_focus={D_focus}, learn_type={learn_type}")
+    if cutoff is not None:
+        logger.info(f"CUTOFF LIMIT: {cutoff}")
     logger.info("=" * 100)
     
     # ===========================
@@ -162,7 +164,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     # Solve with 20-minute timeout per instance
     # If timeout occurs, solver returns current incumbent and best LP bound
-    results = bnp_solver.solve(time_limit=2400, max_nodes=500)  # 1200s = 20 minutes
+    results = bnp_solver.solve(time_limit=2400, max_nodes=500, cutoff=cutoff)  # 1200s = 20 minutes
 
     # Export LP files if requested
     if lp_output_path is not None:
