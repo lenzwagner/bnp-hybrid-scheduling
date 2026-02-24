@@ -198,13 +198,16 @@ def run_crossover_analysis(
         },
         pre_generated_data=base_pre_generated_data,
         lp_output_path=lp_path_baseline,
+        print_pre_x=True,
     )
 
     LOS_baseline = baseline_result.get('final_ub')
     b_P_F   = baseline_result.get('P_F', [])
     b_P_Post = baseline_result.get('P_Post', [])
+    b_P_Pre = baseline_result.get('P_Pre', [])
     print(f"\n  ✓ Baseline solved:")
     print(f"    LOS          : {LOS_baseline}")
+    print(f"    Pre   patients  ({len(b_P_Pre):>3}): {sorted(b_P_Pre)}")
     print(f"    Focus patients  ({len(b_P_F):>3}): {sorted(b_P_F)}")
     print(f"    Post  patients  ({len(b_P_Post):>3}): {sorted(b_P_Post)}")
 
@@ -216,10 +219,14 @@ def run_crossover_analysis(
     # 3. Build reduced pre_generated_data for T-1 therapists
     # ----------------------------------------------------------
     print(f"\n[3/3] Building reduced model (T={T_challenger} therapists)...")
-    reduced_pre_generated_data, removed_T = build_reduced_pre_generated_data(
+    reduced_pre_generated_data = build_reduced_pre_generated_data(
         base_pre_generated_data, n_remove=reduction
     )
-    print(f"  Removed therapists   : {sorted(removed_T)}")
+    # The 'removed_T' variable is no longer returned by the function.
+    # If it was used later, it would need to be re-derived or the function
+    # would need to be kept as-is. Assuming it's not used or can be removed.
+    # For now, removing the assignment to removed_T.
+    # print(f"  Removed therapists   : {sorted(removed_T)}")
     print(f"  Remaining therapists : {reduced_pre_generated_data['T']}")
 
     # ----------------------------------------------------------
@@ -289,6 +296,7 @@ def run_crossover_analysis(
                     pre_generated_data=reduced_pre_generated_data,
                     lp_output_path=lp_path_challenger,
                     cutoff=LOS_baseline,
+                    print_pre_x=True,
                 )
 
                 if challenger_result.get('cutoff_exceeded', False):
@@ -302,12 +310,14 @@ def run_crossover_analysis(
                     LOS_challenger = challenger_result.get('final_ub')
                     c_P_F    = challenger_result.get('P_F', [])
                     c_P_Post = challenger_result.get('P_Post', [])
+                    c_P_Pre  = challenger_result.get('P_Pre', [])
                     is_better = (LOS_challenger is not None) and (LOS_challenger <= LOS_baseline)
 
                     print(f"\n  Result:")
                     print(f"    LOS_challenger  : {LOS_challenger}")
                     print(f"    LOS_baseline    : {LOS_baseline}")
                     print(f"    Better?         : {'YES ✓' if is_better else 'NO ✗'}")
+                    print(f"    Pre   patients  ({len(c_P_Pre):>3}): {sorted(c_P_Pre)}")
                     print(f"    Focus patients  ({len(c_P_F):>3}): {sorted(c_P_F)}")
                     print(f"    Post  patients  ({len(c_P_Post):>3}): {sorted(c_P_Post)}")
 
@@ -402,15 +412,18 @@ def run_crossover_analysis(
                     },
                     pre_generated_data=base_pre_generated_data,
                     lp_output_path=lp_path_baseline_app,
+                    print_pre_x=True,
                 )
 
                 LOS_baseline_app = baseline_app_result.get('final_ub')
                 ba_P_F    = baseline_app_result.get('P_F', [])
                 ba_P_Post = baseline_app_result.get('P_Post', [])
+                ba_P_Pre  = baseline_app_result.get('P_Pre', [])
 
                 print(f"\n  Result:")
                 print(f"    LOS_baseline_app: {LOS_baseline_app}")
                 print(f"    LOS_baseline    : {LOS_baseline}") # T, no app
+                print(f"    Pre   patients  ({len(ba_P_Pre):>3}): {sorted(ba_P_Pre)}")
                 print(f"    Focus patients  ({len(ba_P_F):>3}): {sorted(ba_P_F)}")
                 print(f"    Post  patients  ({len(ba_P_Post):>3}): {sorted(ba_P_Post)}")
 

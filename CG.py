@@ -207,6 +207,32 @@ class ColumnGeneration:
         
         self.pre_x, self.pre_y, self.pre_los, self.pre_x_filtered, self.pre_x_filt = pre_process_result
 
+        print("\n" + "❖"*80)
+        print(f" PRE-PATIENTS ASSIGNMENTS (Learn Type: {self.app_data['learn_type'][0]}) ".center(80, " "))
+        print("❖"*80)
+        for p in sorted(self.P_Pre):
+            assignments = []
+            for (pt, t, d), val in self.pre_x.items():
+                if pt == p:
+                    assignments.append((d, f"Therapist {t} ({int(val)}x)"))
+            if isinstance(self.pre_y, dict):
+                for (pt, d), val in self.pre_y.items():
+                    if pt == p:
+                        assignments.append((d, "App session"))
+            
+            req_val = self.Req_agg.get(p, "N/A")
+            entry_val = self.Entry_agg.get(p, "N/A")
+            los_val = self.pre_los.get(p, "N/A")
+            print(f"  ➔ Patient {p} (Entry Day: {entry_val}, Req: {req_val}, LOS: {los_val})")
+            
+            if assignments:
+                assignments.sort(key=lambda x: x[0])
+                for d, desc in assignments:
+                    print(f"      • Day {d:2d}: {desc}")
+            else:
+                print("      • No assignments")
+        print("❖"*80 + "\n")
+
         if self.verbose:
             print('Focus-Patients', self.P_F)
             print('Nr-Agg', self.Nr_agg)
