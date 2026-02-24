@@ -16,6 +16,14 @@ Instanzparameter werden aus der neuesten Excel-Datei in results/instances/ geles
 import argparse
 import glob
 import os
+import sys
+
+# Add root directory to path to allow importing from root modules
+script_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(script_dir)
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
 import pickle
 from datetime import datetime
 
@@ -198,18 +206,27 @@ def run_crossover_analysis(
         },
         pre_generated_data=base_pre_generated_data,
         lp_output_path=lp_path_baseline,
-        print_pre_x=True,
     )
 
     LOS_baseline = baseline_result.get('final_ub')
     b_P_F   = baseline_result.get('P_F', [])
     b_P_Post = baseline_result.get('P_Post', [])
     b_P_Pre = baseline_result.get('P_Pre', [])
+    b_pre_x = baseline_result.get('pre_x', {})
+    
+    # Filter pre_x to only include days >= 1
+    b_pre_x_filtered = {
+        p: {td: v for td, v in p_dict.items() if td[1] >= 1}
+        for p, p_dict in b_pre_x.items()
+        if any(td[1] >= 1 for td in p_dict.keys())
+    }
+
     print(f"\n  ✓ Baseline solved:")
     print(f"    LOS          : {LOS_baseline}")
     print(f"    Pre   patients  ({len(b_P_Pre):>3}): {sorted(b_P_Pre)}")
     print(f"    Focus patients  ({len(b_P_F):>3}): {sorted(b_P_F)}")
     print(f"    Post  patients  ({len(b_P_Post):>3}): {sorted(b_P_Post)}")
+    print(f"    pre_x (d >= 1)  : {b_pre_x_filtered}")
 
     if LOS_baseline is None:
         print("  ✗ Baseline could not be solved. Aborting.")
@@ -219,14 +236,10 @@ def run_crossover_analysis(
     # 3. Build reduced pre_generated_data for T-1 therapists
     # ----------------------------------------------------------
     print(f"\n[3/3] Building reduced model (T={T_challenger} therapists)...")
-    reduced_pre_generated_data = build_reduced_pre_generated_data(
+    reduced_pre_generated_data, removed_T = build_reduced_pre_generated_data(
         base_pre_generated_data, n_remove=reduction
     )
-    # The 'removed_T' variable is no longer returned by the function.
-    # If it was used later, it would need to be re-derived or the function
-    # would need to be kept as-is. Assuming it's not used or can be removed.
-    # For now, removing the assignment to removed_T.
-    # print(f"  Removed therapists   : {sorted(removed_T)}")
+    print(f"  Removed therapists   : {sorted(removed_T)}")
     print(f"  Remaining therapists : {reduced_pre_generated_data['T']}")
 
     # ----------------------------------------------------------
@@ -296,7 +309,6 @@ def run_crossover_analysis(
                     pre_generated_data=reduced_pre_generated_data,
                     lp_output_path=lp_path_challenger,
                     cutoff=LOS_baseline,
-                    print_pre_x=True,
                 )
 
                 if challenger_result.get('cutoff_exceeded', False):
@@ -311,7 +323,15 @@ def run_crossover_analysis(
                     c_P_F    = challenger_result.get('P_F', [])
                     c_P_Post = challenger_result.get('P_Post', [])
                     c_P_Pre  = challenger_result.get('P_Pre', [])
+                    c_pre_x  = challenger_result.get('pre_x', {})
                     is_better = (LOS_challenger is not None) and (LOS_challenger <= LOS_baseline)
+                    
+                    # Filter pre_x to only include days >= 1
+                    c_pre_x_filtered = {
+                        p: {td: v for td, v in p_dict.items() if td[1] >= 1}
+                        for p, p_dict in c_pre_x.items()
+                        if any(td[1] >= 1 for td in p_dict.keys())
+                    }
 
                     print(f"\n  Result:")
                     print(f"    LOS_challenger  : {LOS_challenger}")
@@ -320,6 +340,7 @@ def run_crossover_analysis(
                     print(f"    Pre   patients  ({len(c_P_Pre):>3}): {sorted(c_P_Pre)}")
                     print(f"    Focus patients  ({len(c_P_F):>3}): {sorted(c_P_F)}")
                     print(f"    Post  patients  ({len(c_P_Post):>3}): {sorted(c_P_Post)}")
+                    print(f"    pre_x (d >= 1)  : {c_pre_x_filtered}")
 
                 print(f"\n  {'theta_base':<15} {'LOS_challenger':<20} {'LOS_baseline':<20} {'Better?':<10}")
                 print(f"  {theta:<15.3f} {str(LOS_challenger) if not challenger_result.get('cutoff_exceeded') else '> '+str(LOS_baseline):<20} {str(LOS_baseline):<20} {'YES ✓' if is_better else 'NO ✗':<10}")
@@ -419,6 +440,14 @@ def run_crossover_analysis(
                 ba_P_F    = baseline_app_result.get('P_F', [])
                 ba_P_Post = baseline_app_result.get('P_Post', [])
                 ba_P_Pre  = baseline_app_result.get('P_Pre', [])
+                ba_pre_x  = baseline_app_result.get('pre_x', {})
+                
+                # Filter pre_x to only include days >= 1
+                ba_pre_x_filtered = {
+                    p: {td: v for td, v in p_dict.items() if td[1] >= 1}
+                    for p, p_dict in ba_pre_x.items()
+                    if any(td[1] >= 1 for td in p_dict.keys())
+                }
 
                 print(f"\n  Result:")
                 print(f"    LOS_baseline_app: {LOS_baseline_app}")
@@ -426,6 +455,7 @@ def run_crossover_analysis(
                 print(f"    Pre   patients  ({len(ba_P_Pre):>3}): {sorted(ba_P_Pre)}")
                 print(f"    Focus patients  ({len(ba_P_F):>3}): {sorted(ba_P_F)}")
                 print(f"    Post  patients  ({len(ba_P_Post):>3}): {sorted(ba_P_Post)}")
+                print(f"    pre_x (d >= 1)  : {ba_pre_x_filtered}")
 
             except Exception as e:
                 print(f"  ✗ Error at Baseline + App run: {e}")
