@@ -14,7 +14,7 @@ from main import disaggregate_solution
 
 logger = get_logger(__name__)
 
-def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None, pre_generated_data=None, lp_output_path=None):
+def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warmstart=True, dual_smoothing_alpha=None, learn_type=0, app_data_overrides=None, T_demand=None, pre_generated_data=None, lp_output_path=None, cutoff=None, print_pre_x=False):
     """
     Solve a single instance with given seed, D_focus, pttr, and T.
     Returns a dictionary with instance parameters and results.
@@ -22,6 +22,8 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     logger.info("=" * 100)
     logger.info(f"SOLVING INSTANCE: seed={seed}, D_focus={D_focus}, learn_type={learn_type}")
+    if cutoff is not None:
+        logger.info(f"CUTOFF LIMIT: {cutoff}")
     logger.info("=" * 100)
     
     # ===========================
@@ -145,6 +147,30 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
 
     cg_solver.setup()
 
+    if print_pre_x:
+        print("\n  [PRE-PATIENT ASSIGNMENTS (pre_x)]")
+        if not cg_solver.pre_x:
+            print("    None (No pre-patients or no assignments)")
+        else:
+            # Group by patient for nicer output
+            from collections import defaultdict
+            p_assignments = defaultdict(list)
+            for (p, t, d), val in cg_solver.pre_x.items():
+                if val > 0:
+                    p_assignments[p].append((t, d))
+            
+            printed_any = False
+            for p, assigns in sorted(p_assignments.items()):
+                entry = cg_solver.Entry_agg.get(p, 0)
+                los = cg_solver.pre_los.get(p, 0)
+                if entry + los >= 0:
+                    print(f"    Patient {p} (Entry: {entry}, LOS: {los}): {sorted(assigns)}")
+                    printed_any = True
+            
+            if not printed_any:
+                print("    None (All patients filtered out due to entry + LOS < 0)")
+        print("  " + "-"*40)
+
     # ===========================
     # SOLVE
     # ===========================
@@ -162,7 +188,7 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
     
     # Solve with 20-minute timeout per instance
     # If timeout occurs, solver returns current incumbent and best LP bound
-    results = bnp_solver.solve(time_limit=2400, max_nodes=500)  # 1200s = 20 minutes
+    results = bnp_solver.solve(time_limit=2400, max_nodes=500, cutoff=cutoff)  # 1200s = 20 minutes
 
     # Export LP files if requested
     if lp_output_path is not None:
@@ -359,6 +385,15 @@ def solve_instance(seed, D_focus, pttr='medium', T=2, allow_gaps=False, use_warm
         sum_focus_los = int(round(sum(agg_focus_los.values())))
         if abs(results.get('incumbent') - sum_focus_los) < 1e-6:
             ub_equals_focus_los = 1
+
+    # Filter P_Pre to only include patients with Entry + LOS >= 0
+    filtered_P_Pre = []
+    for p in save_P_Pre:
+        entry = save_Entry.get(p, 0)
+        los = save_pre_los.get(p, 0)
+        if entry + los >= 0:
+            filtered_P_Pre.append(p)
+    save_P_Pre = filtered_P_Pre
 
     # ===========================
     # BUILD INSTANCE DATA DICTIONARY

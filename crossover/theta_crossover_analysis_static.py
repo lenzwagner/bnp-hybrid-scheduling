@@ -219,14 +219,10 @@ def run_crossover_analysis(
     # 3. Build reduced pre_generated_data for T-1 therapists
     # ----------------------------------------------------------
     print(f"\n[3/3] Building reduced model (T={T_challenger} therapists)...")
-    reduced_pre_generated_data = build_reduced_pre_generated_data(
+    reduced_pre_generated_data, removed_T = build_reduced_pre_generated_data(
         base_pre_generated_data, n_remove=reduction
     )
-    # The 'removed_T' variable is no longer returned by the function.
-    # If it was used later, it would need to be re-derived or the function
-    # would need to be kept as-is. Assuming it's not used or can be removed.
-    # For now, removing the assignment to removed_T.
-    # print(f"  Removed therapists   : {sorted(removed_T)}")
+    print(f"  Removed therapists   : {sorted(removed_T)}")
     print(f"  Remaining therapists : {reduced_pre_generated_data['T']}")
 
     # ----------------------------------------------------------
@@ -509,7 +505,7 @@ def run_crossover_analysis(
         lba = res['LOS_baseline_app']
         print(f"\n  [k_learn = {k_val}]")
         if ctheta is not None:
-            print(f"  ✅ Crossover threshold: theta_base = {ctheta:.3f}")
+            print(f"  ✅ Empirical Crossover threshold: theta_base = {ctheta:.3f}")
             print(f"     From this value onwards, T={T_challenger} + App outperforms T={T} without App.")
         else:
             print(f"  ❌ No crossover found in range [0.0, 1.0].")
@@ -594,28 +590,6 @@ def main():
     parser.add_argument('--steps', type=int, default=20,
                         help='Number of theta steps from 0 to 1 (default: 20 → Δ=0.05)')
 
-    # Challenger learning curve
-    parser.add_argument('--learn_type', type=str, default='sigmoid',
-                        choices=['sigmoid', 'exp', 'lin'],
-                        help='Learning curve type for challenger (default: sigmoid)')
-    parser.add_argument('--k_learn', type=float, default=1.5,
-                        help='k_learn parameter (default: 1.5)')
-    parser.add_argument('--infl_point', type=float, default=4.0,
-                        help='infl_point parameter (default: 4.0)')
-    parser.add_argument('--lin_increase', type=float, default=0.0,
-                        help='lin_increase parameter (default: 0.0)')
-    
-    # ----------------------------------------------------
-    # GRID SEARCH TOGGLE (Einfach hier True/False setzen!)
-    # ----------------------------------------------------
-    ENABLE_GRID_DEFAULT = True 
-    K_LEARN_LIST_DEFAULT = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2]
-    
-    parser.add_argument('--grid', action='store_true', default=ENABLE_GRID_DEFAULT,
-                        help='Enable 2D Grid-Search over multiple k_learn values')
-    parser.add_argument('--k_learn_list', nargs='+', type=float, default=K_LEARN_LIST_DEFAULT,
-                        help='List of k_learn values for Grid-Search')
-
     args = parser.parse_args()
 
     # ----------------------------------------------------------
@@ -683,12 +657,12 @@ def main():
         T=T,
         reduction=args.reduction,
         steps=args.steps,
-        learn_type=args.learn_type,
-        k_learn=args.k_learn,
-        infl_point=args.infl_point,
-        lin_increase=args.lin_increase,
-        enable_grid=args.grid,
-        k_learn_list=args.k_learn_list,
+        learn_type=0, # 0 means "static", no learning curve, must be int
+        k_learn=0.0,
+        infl_point=0.0,
+        lin_increase=0.0,
+        enable_grid=False,
+        k_learn_list=[0.0],
     )
 
 

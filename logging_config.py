@@ -98,38 +98,8 @@ def setup_multi_level_logging(base_log_dir='logs', enable_console=True, print_al
         console_handler.setFormatter(console_formatter)
         root_logger.addHandler(console_handler)
     
-    # Create timestamp for all log files
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    
-    # Define log levels and their directories
-    log_levels = {
-        'DEBUG': logging.DEBUG,
-        'INFO': logging.INFO,
-        'WARNING': logging.WARNING,
-        'ERROR': logging.ERROR,
-    }
-    
-    # Create file handler for each level
-    for level_name, level_num in log_levels.items():
-        # Create directory
-        log_dir = os.path.join(base_log_dir, level_name.lower())
-        os.makedirs(log_dir, exist_ok=True)
-        
-        # Create log file
-        log_file = os.path.join(log_dir, f'bnp_{timestamp}.log')
-        
-        # Create file handler
-        file_handler = logging.FileHandler(log_file, mode='w')
-        file_handler.setLevel(level_num)
-        
-        # Add level filter to ensure only this level is written
-        file_handler.addFilter(LevelFilter(level_num))
-        
-        # Set formatter
-        file_handler.setFormatter(file_formatter)
-        
-        # Add to root logger
-        root_logger.addHandler(file_handler)
+    # Remove the file handlers code entirely
+    # No directories or log files will be created
     
     return root_logger
 
@@ -170,18 +140,9 @@ def setup_logging(log_level='INFO', log_to_file=True, log_dir='logs'):
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
-    # File handler (optional)
-    if log_to_file:
-        import os
-        os.makedirs(log_dir, exist_ok=True)
-
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_file = os.path.join(log_dir, f'bnp_{timestamp}.log')
-
-        file_handler = logging.FileHandler(log_file, mode='w')
-        file_handler.setLevel(numeric_level)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
+    # File handler (removed to prevent creating logs/)
+    # (The log_to_file and log_dir arguments are kept for backward compatibility with existing calls,
+    # but they do nothing now)
 
     return root_logger
 
