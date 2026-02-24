@@ -21,39 +21,39 @@ def main():
     print(" PATIENT MIX SENSITIVITY STUDY - INSTANCE GENERATION ".center(80, "="))
     print("=" * 80 + "\n")
     
-    print("Bitte gib die Konfiguration ein:\n")
+    print("Please enter the configuration:\n")
     
     # Interactive configuration
     # Seeds
-    seeds_input = input("Seeds (kommasepariert, z.B. '42,43,44,45,46'): ").strip()
+    seeds_input = input("Seeds (comma-separated, e.g. '42,43,44,45,46'): ").strip()
     seeds = [int(s.strip()) for s in seeds_input.split(',')]
     
     # PTTR variants
-    pttr_input = input("PTTR Varianten (kommasepariert, z.B. 'light,medium,heavy'): ").strip()
+    pttr_input = input("PTTR variants (comma-separated, e.g. 'light,medium,heavy'): ").strip()
     if pttr_input:
         pttr_variants = [p.strip() for p in pttr_input.split(',')]
     else:
         pttr_variants = ['medium']
     
     # T variants
-    T_input = input("Therapeuten T (kommasepariert, z.B. '10' oder '8,10,12'): ").strip()
+    T_input = input("Therapists T (comma-separated, e.g. '10' or '8,10,12'): ").strip()
     T_variants = [int(t.strip()) for t in T_input.split(',')]
     
     # D_focus variants
-    D_input = input("Fokus-Tage D (kommasepariert, z.B. '30' oder '20,30,40'): ").strip()
+    D_input = input("Focus days D (comma-separated, e.g. '30' or '20,30,40'): ").strip()
     D_focus_variants = [int(d.strip()) for d in D_input.split(',')]
     
     # Severity mix configurations
-    print("\nSeverity Mix Konfiguration:")
-    print("  1 = Nur Baseline")
+    print("\nSeverity Mix Configuration:")
+    print("  1 = Baseline only")
     print("  2 = Baseline + Neuro")
     print("  3 = Baseline + Bias-Free")
-    print("  4 = Alle drei (Baseline + Neuro + Bias-Free)")
-    print("  5 = Nur Neuro")
-    print("  6 = Nur Bias-Free")
-    print("  7 = Neuro + Bias-Free (ohne Baseline)")
+    print("  4 = All three (Baseline + Neuro + Bias-Free)")
+    print("  5 = Neuro only")
+    print("  6 = Bias-Free only")
+    print("  7 = Neuro + Bias-Free (without Baseline)")
     
-    mix_choice = input("\nWähle eine Option (1-7) [Standard: 4]: ").strip()
+    mix_choice = input("\nChoose an option (1-7) [Default: 4]: ").strip()
     
     if mix_choice == '1':
         severity_mix_variants = [(None, None)]

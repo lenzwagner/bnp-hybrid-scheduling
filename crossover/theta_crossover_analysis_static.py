@@ -1,16 +1,16 @@
 """
 Theta-Base Crossover Analysis
 ==============================
-Bestimmt den Schwellenwert von theta_base, ab dem das Modell mit
-T-1 Therapeuten + App besser ist als T Therapeuten ohne App.
+Determines the threshold of theta_base where the model with
+T-1 Therapeuten + App is better than T therapists without App.
 
-Ablauf:
+Procedure:
   1. Baseline: T Therapeuten, kein App (learn_type=0) → LOS_baseline
-  2. Sweep:    T-1 Therapeuten + App, theta_base von 0 bis 1 in Schritten
+  2. Sweep:    T-1 Therapeuten + App, theta_base von 0 bis 1 in steps
                → LOS_challenger(theta)
-  3. Crossover: erster theta-Wert, bei dem LOS_challenger <= LOS_baseline
+  3. Crossover: first theta value where LOS_challenger <= LOS_baseline
 
-Instanzparameter werden aus der neuesten Excel-Datei in results/instances/ gelesen.
+Instance parameters are read from the newest Excel file in results/instances/.
 """
 
 import argparse
@@ -37,35 +37,35 @@ logger = get_logger(__name__)
 
 
 # ============================================================
-# Hilfsfunktion: pre_generated_data für T-1 Therapeuten bauen
+# Helper function: build pre_generated_data for T-1 therapists
 # ============================================================
 
 def build_reduced_pre_generated_data(base_data: dict, n_remove: int = 1) -> dict:
     """
-    Baut ein pre_generated_data-Dict für T-n Therapeuten aus dem Basis-Dict.
+    Builds a pre_generated_data dict for T-n therapists from the base dict.
 
-    Die letzten n Therapeuten (höchste IDs) werden entfernt:
-      - Max_t: nur Einträge für verbleibende Therapeuten
-      - T:     Liste ohne entfernte Therapeuten
-      - Alle anderen Felder (Req, Entry, P, D, D_Ext, D_Full, M_p, W_coeff, DRG)
-        bleiben identisch — die Patientenlisten ändern sich NICHT.
+    The last n therapists (highest IDs) are removed:
+      - Max_t: only entries for remaining therapists
+      - T:     List without removed therapists
+      - All other fields (Req, Entry, P, D, D_Ext, D_Full, M_p, W_coeff, DRG)
+        remain identical - the patient lists do NOT change.
 
-    Pre-Patienten des entfernten Therapeuten werden bei der Initialisierung
-    vernachlässigt, da pre_processing_schedule() nur die verfügbaren
-    Therapeuten aus Max_t nutzt.
+    Pre-patients of the removed therapist are ignored during initialization
+    since pre_processing_schedule() only uses the available
+    therapists from Max_t.
 
     Args:
-        base_data:  pre_generated_data des Baseline-Modells (T Therapeuten)
-        n_remove:   Anzahl zu entfernender Therapeuten (Standard: 1)
+        base_data:  pre_generated_data of the baseline model (T therapists)
+        n_remove:   Number of therapists to remove (Default: 1)
 
     Returns:
-        Neues pre_generated_data-Dict mit T-n Therapeuten
+        New pre_generated_data dict with T-n therapists
     """
     full_T = base_data['T']                       # z.B. [1, 2, ..., 10]
     removed_T = set(full_T[-n_remove:])           # letzte n entfernen
     reduced_T = [t for t in full_T if t not in removed_T]
 
-    # Max_t: nur Einträge für verbleibende Therapeuten behalten
+    # Max_t: only entries for remaining therapists behalten
     reduced_Max_t = {
         (t, d): v
         for (t, d), v in base_data['Max_t'].items()
@@ -90,7 +90,7 @@ def build_reduced_pre_generated_data(base_data: dict, n_remove: int = 1) -> dict
 
 
 # ============================================================
-# Hauptfunktion
+# Main function
 # ============================================================
 
 def run_crossover_analysis(
@@ -108,21 +108,21 @@ def run_crossover_analysis(
     k_learn_list: list = None
 ):
     """
-    Führt die Crossover-Analyse durch.
+    Executes the crossover analysis.
 
     Args:
-        seed:         Zufallsseed
-        D_focus:      Anzahl Fokustage
+        seed:         Random seed
+        D_focus:      Number of focus days
         pttr:         Patient-to-Therapist-Ratio Szenario
-        T:            Anzahl Therapeuten (Baseline)
-        reduction:    Anzahl zu entfernender Therapeuten
-        steps:        Anzahl theta-Schritte (0..1 in 1/steps Schritten)
-        learn_type:   Lernkurventyp für Challenger ('sigmoid', 'exp', 'lin')
-        k_learn:      k_learn Parameter für Challenger
-        infl_point:   infl_point Parameter für Challenger
-        lin_increase: lin_increase Parameter für Challenger
-        enable_grid:  Wenn True, wird über eine Liste von k_learn Iteriert
-        k_learn_list: Liste von k_learn Werten für Grid-Search
+        T:            Number of therapists (Baseline)
+        reduction:    Number of therapists to remove
+        steps:        Number of theta steps (0..1 in 1/steps increments)
+        learn_type:   Learning curve type for Challenger ('sigmoid', 'exp', 'lin')
+        k_learn:      k_learn parameter for Challenger
+        infl_point:   infl_point parameter for Challenger
+        lin_increase: lin_increase parameter for Challenger
+        enable_grid:  If True, iterates over a list of k_learn
+        k_learn_list: List of k_learn values for Grid-Search
     """
     if enable_grid and not k_learn_list:
         k_learn_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2]
@@ -134,18 +134,18 @@ def run_crossover_analysis(
     print("\n" + "=" * 100)
     print(" THETA-BASE CROSSOVER ANALYSIS ".center(100, "="))
     print("=" * 100)
-    print(f"  Baseline:   T={T}, learn_type=0 (kein App)")
+    print(f"  Baseline:   T={T}, learn_type=0 (no App)")
     print(f"  Challenger: T={T_challenger}, learn_type={learn_type}")
     print(f"  Seed={seed}, D_focus={D_focus}, pttr={pttr}")
     if enable_grid:
-        print(f"  Grid-Search : Active für k_learn={k_learn_list}")
+        print(f"  Grid-Search : Active for k_learn={k_learn_list}")
     print(f"  Theta-Search: Binary search with 0.5% (0.005) granularity")
     print("=" * 100 + "\n")
 
     # ----------------------------------------------------------
     # 1. Instanzdaten einmalig generieren (T Therapeuten)
     # ----------------------------------------------------------
-    print("[1/3] Generiere Instanzdaten (T Therapeuten)...")
+    print("[1/3] Generating instance data (T Therapeuten)...")
     Req, Entry, Max_t, P, D, D_planning, D_full, T_list, M_p, W_coeff, DRG = \
         generate_patient_data_log(
             T=T,
@@ -553,7 +553,7 @@ def run_crossover_analysis(
     
     print("=" * 100 + "\n")
 
-    # Speichern
+    # Save
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Results go into crossover/results/ (relative to script location)
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -603,20 +603,20 @@ def main():
     setup_multi_level_logging(base_log_dir='logs', enable_console=True, print_all_logs=False)
 
     parser = argparse.ArgumentParser(
-        description="Theta-Base Crossover Analysis: Bestimmt den Schwellenwert von theta_base, "
-                    "ab dem T-1 Therapeuten + App besser ist als T Therapeuten ohne App."
+        description="Theta-Base Crossover Analysis: Determines the threshold of theta_base, "
+                    "ab dem T-1 Therapeuten + App is better than T therapists without App."
     )
 
     # Instanzparameter
     parser.add_argument('--seed', type=int, default=None,
-                        help='Seed (überschreibt Excel-Wert)')
+                        help='Seed (overrides Excel value)')
     parser.add_argument('--D_focus', type=int, default=None,
-                        help='Anzahl Fokustage (überschreibt Excel-Wert)')
+                        help='Number of focus days (overrides Excel value)')
     parser.add_argument('--pttr', type=str, default=None,
                         choices=['light', 'medium', 'heavy'],
-                        help='PTTR-Szenario (überschreibt Excel-Wert)')
+                        help='PTTR-Szenario (overrides Excel value)')
     parser.add_argument('--T', type=int, default=None,
-                        help='Anzahl Therapeuten Baseline (überschreibt Excel-Wert)')
+                        help='Number of baseline therapists (overrides Excel value)')
 
     # Sweep parameters
     parser.add_argument('--reduction', type=int, default=1,
