@@ -3065,7 +3065,7 @@ class BranchAndPrice:
         else:
             next_col_id = 1
 
-        # Create subproblem mit echten Duals
+        # Create subproblem with real duals
         sp = Subproblem(
             self.cg_solver.data,
             duals_gamma,
